@@ -130,6 +130,7 @@ class VerdictMarketComparison:
     settlement_offset_c: float | None  # measured settlement-vs-backtest station offset (°C)
     settlement_high_c: float | None    # verdict transferred onto the settlement station scale
     settlement_offset_note: str | None # provenance of the station-offset transfer
+    settlement_offset_modern: bool | None  # offset measured on recent (not decades-stale) overlap
     buckets: tuple[BucketComparison, ...]
     model_modal: str | None          # most-likely bucket by the model
     market_modal: str | None         # most-likely bucket by the market
@@ -233,6 +234,7 @@ def compare_high(
         settlement_offset_c=(round(offset_c, 3) if station_offset is not None else None),
         settlement_high_c=(round(settle_c, 2) if station_offset is not None else None),
         settlement_offset_note=(station_offset.note() if station_offset is not None else None),
+        settlement_offset_modern=(station_offset.is_modern if station_offset is not None else None),
         buckets=rows,
         model_modal=model_modal,
         market_modal=market_modal,
@@ -333,6 +335,7 @@ def comparison_to_dict(c: VerdictMarketComparison) -> dict:
         "settlement_offset_c": c.settlement_offset_c,
         "settlement_high_c": c.settlement_high_c,
         "settlement_offset_note": c.settlement_offset_note,
+        "settlement_offset_modern": c.settlement_offset_modern,
         "model_modal": c.model_modal,
         "market_modal": c.market_modal,
         "market_overround": c.market_overround,

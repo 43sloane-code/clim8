@@ -99,6 +99,14 @@ def _market_lines(c: VerdictMarketComparison) -> list[str]:
     # verdict is transferred onto the settlement station's scale by a *measured*
     # offset, and the transfer's provenance (which stations, season, vintage) is
     # stated so the comparison is earned, not fabricated.
+    # A sub-degree market is bridged by a measured station offset. CRUCIAL: that
+    # offset is only trustworthy if measured on *recent* overlap. When it is
+    # decades-stale (settlement_offset_modern is False) the two stations may have
+    # diverged (e.g. HK's airport moved from urban Kai Tak to open-water Chek Lap
+    # Kok in 1998, long after the 1992 overlap), so the transfer cannot be trusted
+    # and we must NOT assert a model edge over the market — the market is pricing
+    # the live settlement sensor we have no current data for.
+    stale_transfer = c.settles_sub_degree and c.settlement_offset_modern is False
     if c.settles_sub_degree and c.settlement_offset_c is not None:
         L.append(f"    transfer : settles sub-degree on a different station than the backtest; "
                  f"verdict moved onto that scale by a measured offset.")
@@ -106,6 +114,11 @@ def _market_lines(c: VerdictMarketComparison) -> list[str]:
             L.append(f"               {c.settlement_offset_note}")
         L.append(f"               settlement-scale high {c.settlement_high_c:.2f} °C "
                  f"(verdict {c.verdict_high_c:.1f} {c.settlement_offset_c:+.2f} offset)")
+        if stale_transfer:
+            L.append(f"               ⚠ STALE TRANSFER: this offset is climatological, not live — "
+                     f"the settlement and backtest stations may have diverged since the overlap "
+                     f"ended, so the settlement-scale number above is unreliable and no model "
+                     f"edge over the market is asserted (see below).")
     # The settlement reading is a whole-degree ROUNDING of the real-valued verdict.
     # Make that explicit so an integer like "18" shown next to a market "19" can't
     # be misread as a one-degree disagreement when the verdict was e.g. 18.4 °C.
@@ -120,14 +133,25 @@ def _market_lines(c: VerdictMarketComparison) -> list[str]:
         L.append(f"    edge dist: {c.edge_distance_c:.2f} °C to the nearest bucket boundary "
                  f"(small = fragile assignment){flip}")
     L.append(f"    modal    : model says {c.model_modal}  |  market says {c.market_modal}")
-    # State the disagreement assertively when it is earned. The model's reading on
-    # the settlement scale vs the market's favourite bucket is a fact; pair it
-    # with the backtested bias so a divergence reads as signal, not a hedge.
     if c.model_modal and c.market_modal and c.model_modal != c.market_modal:
         scale_c = c.settlement_high_c if c.settlement_high_c is not None else c.verdict_high_c
-        L.append(f"    DISAGREE : model {scale_c:.1f} °C favours {c.model_modal}, the market "
-                 f"favours {c.market_modal}. The model is the backtested side "
-                 f"(beat naive/persistence/climatology on {c.n_residuals} held-out days).")
+        if stale_transfer:
+            # No edge: the model is accurate on its *own* (backtest) station, but
+            # the bridge to the settlement sensor is stale. The market prices the
+            # live settlement sensor, so treat ITS bucket as the better
+            # settlement-scale estimate rather than asserting the model is right.
+            L.append(f"    DEFER    : model favours {c.model_modal} on the backtest station, but the "
+                     f"transfer to the settlement sensor is stale (above), so this is NOT a model "
+                     f"edge. The market favours {c.market_modal}; with no live settlement-sensor "
+                     f"data, treat the market's {c.market_modal} as the better settlement-scale "
+                     f"estimate. The model's value is the backtest-station forecast, not the "
+                     f"settlement number.")
+        else:
+            # Earned disagreement: the model's settlement-scale reading vs the
+            # market's favourite bucket is a fact, paired with the backtested bias.
+            L.append(f"    DISAGREE : model {scale_c:.1f} °C favours {c.model_modal}, the market "
+                     f"favours {c.market_modal}. The model is the backtested side "
+                     f"(beat naive/persistence/climatology on {c.n_residuals} held-out days).")
     # State the backtested bias correction baked into the verdict as a fact, so a
     # divergence from the market reads as earned signal rather than a hedge. The
     # 0.05 °C floor is only a display threshold (below it the figure rounds to
@@ -135,10 +159,14 @@ def _market_lines(c: VerdictMarketComparison) -> list[str]:
     if c.bias_correction_c is not None:
         if abs(c.bias_correction_c) >= 0.05:
             dirn = "down" if c.bias_correction_c < 0 else "up"
+            tail = ("an earned reason to diverge from the market, not noise."
+                    if not stale_transfer else
+                    "this corrects the verdict on the BACKTEST station; it does not "
+                    "justify diverging from the market, which prices the settlement "
+                    "sensor the stale transfer can't reach.")
             L.append(f"    correction: the verdict bakes in a backtested bias correction of "
                      f"{c.bias_correction_c:+.2f} °C (raw multi-model blend pulled {dirn}), "
-                     f"learned over {c.n_residuals} held-out days — an earned reason to "
-                     f"diverge from the market, not noise.")
+                     f"learned over {c.n_residuals} held-out days — {tail}")
         else:
             L.append(f"    correction: negligible bias correction ({c.bias_correction_c:+.2f} °C "
                      f"over {c.n_residuals} held-out days); any divergence here is the raw "
