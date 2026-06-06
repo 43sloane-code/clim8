@@ -31,6 +31,107 @@ from weather_council.sources import Sources
 from weather_council.station_offset import measure_settlement_offset
 from weather_council.storage import log_verdict, verify
 
+# User-declared settlement-reference stations: cities the user has explicitly
+# pinned to a specific airport record to "compare and contrast" every verdict
+# against. This is NOT the system guessing a station (which it deliberately never
+# does) — each entry is a user-supplied directive. The record is pulled from
+# the IEM ASOS METAR archive (already allowlisted), which is the SAME raw feed
+# Wunderground's airport-history pages are built from, so the comparison is
+# faithful to the cited URL without scraping it or widening the sandbox.
+SETTLEMENT_REFERENCE: dict[str, dict[str, str]] = {
+    "london": {
+        "icao": "EGLC",
+        "name": "London City Airport",
+        "url": "https://www.wunderground.com/history/daily/gb/london/EGLC",
+    },
+}
+
+
+def _settlement_reference_for(place) -> dict[str, str] | None:
+    """The user-declared settlement reference for this city, or None. Matched on
+    case-insensitive city-name containment so 'London' / 'London, GB' both hit."""
+    name = (getattr(place, "name", "") or "").strip().lower()
+    for key, ref in SETTLEMENT_REFERENCE.items():
+        if key in name or name in key:
+            return ref
+    return None
+
+
+def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict | None:
+    """Build the 'compare & contrast vs the cited Wunderground airport record'
+    block for a user-pinned city (e.g. London -> EGLC). Pulls the EGLC daily
+    record from the IEM METAR archive (the feed WU displays) and contrasts it
+    with (a) the verdict for the target day, when that day has settled, and
+    (b) the council's own anchor station over the backtest window, so any
+    settlement-vs-backtest divergence is visible — the lesson from the HK miss.
+
+    Returns None when the city isn't pinned or the record can't be fetched; the
+    caller simply omits the section."""
+    ref = _settlement_reference_for(place)
+    if ref is None:
+        return None
+    icao = ref["icao"]
+    ts = v.truth_source or {}
+    try:
+        w_start = dt.date.fromisoformat(ts.get("window_start"))
+        w_end = dt.date.fromisoformat(ts.get("window_end"))
+    except (TypeError, ValueError):
+        w_end = dt.date.today() - dt.timedelta(days=1)
+        w_start = w_end - dt.timedelta(days=60)
+    # Extend the fetch through the target day so a finished target is captured.
+    fetch_end = max(w_end, min(target, dt.date.today() - dt.timedelta(days=1)))
+    base = {"icao": icao, "name": ref["name"], "url": ref["url"],
+            "target_date": target.isoformat(),
+            "verdict_high": v.high, "verdict_low": v.low}
+    try:
+        md = sources.fetch_metar_daily(icao, w_start, fetch_end, place.timezone)
+    except Exception as exc:
+        # The city IS pinned — don't vanish silently. Surface that the reference
+        # is temporarily unavailable (e.g. the IEM archive rate-limited us) so the
+        # "always compare" guarantee is visible even when the fetch fails.
+        return {**base, "error": str(exc)}
+    daily = md.get("daily") or {}
+    if not daily:
+        return {**base, "error": "no daily records returned for the window"}
+
+    target_record = daily.get(target.isoformat())   # (high, low) or None
+    # Contrast EGLC with the council's anchor station (if it's a *different*
+    # airport) over the overlapping window: mean(EGLC − anchor) high.
+    anchor_icao = (ts.get("station") or {}).get("icao")
+    offset = None
+    if anchor_icao and anchor_icao != icao:
+        try:
+            amd = sources.fetch_metar_daily(anchor_icao, w_start, fetch_end, place.timezone)
+            adaily = amd.get("daily") or {}
+            common = sorted(set(daily) & set(adaily))
+            dh = [daily[d][0] - adaily[d][0] for d in common]
+            if len(dh) >= 10:
+                import statistics as _st
+                offset = {
+                    "anchor_icao": anchor_icao,
+                    "high_mean": round(_st.mean(dh), 2),
+                    "high_median": round(_st.median(dh), 2),
+                    "n": len(common),
+                }
+        except Exception:
+            offset = None
+
+    recent = sorted(daily)[-7:]
+    return {
+        "icao": icao,
+        "name": ref["name"],
+        "url": ref["url"],
+        "grain": md.get("grain"),
+        "target_date": target.isoformat(),
+        "target_status": v.target_status,
+        "target_record": target_record,
+        "verdict_high": v.high,
+        "verdict_low": v.low,
+        "anchor_offset": offset,
+        "anchor_is_same": bool(anchor_icao and anchor_icao == icao),
+        "recent": [{"date": d, "high": daily[d][0], "low": daily[d][1]} for d in recent],
+    }
+
 
 def _num(x, width=6, prec=1):
     return f"{x:{width}.{prec}f}" if isinstance(x, (int, float)) else " " * (width - 1) + "-"
@@ -210,7 +311,57 @@ def _market_lines(c: VerdictMarketComparison) -> list[str]:
     return L
 
 
-def render(v: Verdict, comparison: VerdictMarketComparison | None = None) -> str:
+def _settlement_reference_lines(ref: dict) -> list[str]:
+    """Render the user-pinned 'compare & contrast vs Wunderground airport' block."""
+    L = [f"  SETTLEMENT RECORD — Wunderground {ref['icao']} ({ref['name']}) [user-pinned]"]
+    L.append(f"    source   : {ref['url']}")
+    if ref.get("error"):
+        vh, vl = ref.get("verdict_high"), ref.get("verdict_low")
+        L.append(f"    status   : reference temporarily unavailable ({ref['error']}); the "
+                 f"{ref['icao']} record (same feed as the page above) couldn't be fetched this "
+                 f"run. Verdict {vh:.1f}/{vl:.1f} °C still stands to be checked against it.")
+        L.append("")
+        return L
+    L.append(f"               (pulled from the IEM ASOS METAR archive — the same raw "
+             f"feed this page shows; native grain whole °{ref['grain']})")
+    tr = ref.get("target_record")
+    vh, vl = ref.get("verdict_high"), ref.get("verdict_low")
+    if tr is not None:
+        rh, rl = tr
+        eh = vh - rh if vh is not None else None
+        el = vl - rl if vl is not None else None
+        settled = ref.get("target_status") != "forecast"
+        word = "RECORDED" if settled else "so far (day not finished)"
+        L.append(f"    {ref['target_date']} {ref['icao']} {word}: high {rh:.0f}°  low {rl:.0f}°")
+        if eh is not None and el is not None:
+            L.append(f"    verdict vs record: verdict {vh:.1f}/{vl:.1f} °C — "
+                     f"high {eh:+.1f} °C, low {el:+.1f} °C vs the {ref['icao']} record"
+                     + ("" if settled else " (provisional)"))
+    else:
+        L.append(f"    {ref['target_date']}: no {ref['icao']} record yet (target not "
+                 f"finished or not in the archive) — verdict {vh:.1f}/{vl:.1f} °C stands "
+                 f"to be checked against it once the day settles.")
+    off = ref.get("anchor_offset")
+    if ref.get("anchor_is_same"):
+        L.append(f"    anchor   : the council already backtests on {ref['icao']} — the "
+                 f"settlement record and the verdict's truth source are the same station.")
+    elif off is not None:
+        L.append(f"    contrast : {ref['icao']} runs {off['high_mean']:+.2f} °C vs the "
+                 f"council's anchor station {off['anchor_icao']} on the daily high "
+                 f"(median {off['high_median']:+.2f}, n={off['n']} overlapping days) — "
+                 f"the settlement and backtest stations differ; read the verdict against "
+                 f"{ref['icao']} accordingly.")
+    rec = ref.get("recent") or []
+    if rec:
+        L.append(f"    recent {ref['icao']} daily record (most recent {len(rec)} days):")
+        for r in rec:
+            L.append(f"      {r['date']}  high {r['high']:.0f}°  low {r['low']:.0f}°")
+    L.append("")
+    return L
+
+
+def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
+           settlement_ref: dict | None = None) -> str:
     L = []
     L.append(f"COUNCIL VERDICT  —  {v.place.label()}  ({v.target})")
     L.append("=" * 64)
@@ -317,6 +468,9 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None) -> str
 
     if comparison is not None:
         L.extend(_market_lines(comparison))
+
+    if settlement_ref is not None:
+        L.extend(_settlement_reference_lines(settlement_ref))
 
     en = v.ensemble
     if en.mean_high is not None:
@@ -425,6 +579,7 @@ def verdict_to_dict(
     v: Verdict,
     comparison: VerdictMarketComparison | None = None,
     market_note: str | None = None,
+    settlement_ref: dict | None = None,
 ) -> dict:
     val = v.validation
     d = {
@@ -537,6 +692,8 @@ def verdict_to_dict(
         d["market_comparison"] = comparison_to_dict(comparison)
     elif market_note is not None:
         d["market_note"] = market_note
+    if settlement_ref is not None:
+        d["settlement_reference"] = settlement_ref
     return d
 
 
@@ -544,8 +701,10 @@ def to_json(
     v: Verdict,
     comparison: VerdictMarketComparison | None = None,
     market_note: str | None = None,
+    settlement_ref: dict | None = None,
 ) -> str:
-    return json.dumps(verdict_to_dict(v, comparison, market_note), indent=2)
+    return json.dumps(
+        verdict_to_dict(v, comparison, market_note, settlement_ref), indent=2)
 
 
 def _build_comparison(
@@ -625,10 +784,14 @@ def main(argv=None) -> int:
         if args.market:
             comparison, market_note = _build_comparison(sources, verdict, place, target)
 
+        # User-pinned settlement reference (e.g. London -> Wunderground EGLC):
+        # always compare & contrast the verdict against that airport's record.
+        settlement_ref = _settlement_reference(sources, place, target, verdict)
+
         if args.json:
-            print(to_json(verdict, comparison, market_note))
+            print(to_json(verdict, comparison, market_note, settlement_ref))
         else:
-            print(render(verdict, comparison))
+            print(render(verdict, comparison, settlement_ref))
             if args.market and comparison is None:
                 if market_note:
                     print("\n  MARKET COMPARISON (withheld)\n    " + market_note)
