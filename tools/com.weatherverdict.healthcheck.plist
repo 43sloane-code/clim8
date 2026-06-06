@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Daily launchd job for the weather-council health check.
+
+  This is a TEMPLATE. To install (runs on YOUR machine, where the code and
+  network access live):
+
+    cp "tools/com.weatherverdict.healthcheck.plist" ~/Library/LaunchAgents/
+    launchctl load  ~/Library/LaunchAgents/com.weatherverdict.healthcheck.plist
+
+  To run it immediately as a test:
+    launchctl start com.weatherverdict.healthcheck
+
+  To stop/remove:
+    launchctl unload ~/Library/LaunchAgents/com.weatherverdict.healthcheck.plist
+
+  It runs tools/daily_healthcheck.py at 06:00 local time daily, writing reports
+  to reports/ and logs to reports/launchd.{out,err}.log. It only reads weather
+  archives and writes a text report — it never edits source, trades, or moves
+  funds.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.weatherverdict.healthcheck</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Frameworks/Python.framework/Versions/3.14/bin/python3</string>
+        <string>/Users/43slauson/Desktop/mock projects/weather-verdict/tools/daily_healthcheck.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/43slauson/Desktop/mock projects/weather-verdict</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/43slauson/Desktop/mock projects/weather-verdict/reports/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/43slauson/Desktop/mock projects/weather-verdict/reports/launchd.err.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

@@ -1,0 +1,620 @@
+#!/usr/bin/env python3
+"""Council-of-5 backtested weather verdict — command line entrypoint.
+
+Examples:
+  python3 run.py "Tokyo"                  # tomorrow's high/low, full report
+  python3 run.py "Chicago" --lead 0       # today
+  python3 run.py "Paris" --lead 3 --window 90
+  python3 run.py "Berlin" --json          # machine-readable
+  python3 run.py --verify                 # score past verdicts vs observed
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import sys
+
+from weather_council.agents import MIN_SAMPLES
+from weather_council.compare import (
+    VerdictMarketComparison,
+    comparison_to_dict,
+    compare_high,
+    grain_support_note,
+    match_market,
+)
+from weather_council.council import Council, Verdict, applied_bias_correction
+from weather_council.market import MarketData
+from weather_council.security import SecurityError
+from weather_council.sources import Sources
+from weather_council.station_offset import measure_settlement_offset
+from weather_council.storage import log_verdict, verify
+
+
+def _num(x, width=6, prec=1):
+    return f"{x:{width}.{prec}f}" if isinstance(x, (int, float)) else " " * (width - 1) + "-"
+
+
+def _pillars(v: Verdict) -> list[str]:
+    L = ["  THREE-PILLAR PROCESS CHECK (observation -> computation -> interpretation)"]
+    obs, ens, itp = v.observation, v.ensemble, v.interpretation
+
+    cur = obs.current or {}
+    t = cur.get("temperature_2m")
+    if t is not None:
+        L.append(f"    [x] 1. OBSERVATION   now {t:.1f} °C, "
+                 f"{cur.get('relative_humidity_2m','?')}% RH, "
+                 f"wind {cur.get('wind_speed_10m','?')} km/h, "
+                 f"{cur.get('surface_pressure','?')} hPa")
+    else:
+        L.append("    [x] 1. OBSERVATION   current conditions unavailable")
+    pc = cur.get("pressure_change_24h")
+    if pc is not None:
+        trend = ("falling — unsettled / storm risk" if pc <= -3
+                 else "rising — clearing / stabilizing" if pc >= 3
+                 else "steady")
+        L.append(f"           barometric tendency: {pc:+.1f} hPa/24h ({trend})")
+    L.append(f"           truth backbone: {obs.backbone}")
+    if obs.recent:
+        rec = ", ".join(f"{d} {h:.0f}/{lo:.0f}" for d, h, lo in obs.recent)
+        L.append(f"           recent observed H/L: {rec}")
+
+    qc = v.qc or {}
+    L.append(f"    [x] 1b. QUALITY CONTROL {qc.get('screened',0)} values screened, "
+             f"{qc.get('rejected',0)} rejected as out-of-band anomalies")
+
+    if ens.member_count:
+        members = " + ".join(f"{lab}({n})" for lab, n in ens.models.items())
+        agree = ens.agreement_high
+        agree_s = f"{agree*100:.0f}% of members within ±2 °C of mean" if agree is not None else ""
+        L.append(f"    [x] 2. COMPUTATION   {len(v.votes)} NWP centers (deterministic) + "
+                 f"{ens.member_count}-member perturbed ensemble")
+        L.append(f"           ensemble: {members}")
+        L.append(f"           ensemble mean H/L {ens.mean_high:.1f}/{ens.mean_low:.1f}, "
+                 f"1σ spread {ens.spread_high:.1f}/{ens.spread_low:.1f}, "
+                 f"P10–P90 high {ens.p10_high:.1f}–{ens.p90_high:.1f} °C")
+        L.append(f"           ensemble agreement: {agree_s} "
+                 f"(more agreement -> higher confidence)")
+        L.append("           physics: Navier-Stokes, continuity, thermodynamics, "
+                 "ideal-gas & moisture eqns solved inside each NWP model")
+    else:
+        L.append(f"    [x] 2. COMPUTATION   {len(v.votes)} NWP centers (ensemble unavailable here)")
+
+    bh = f"{itp.mean_bias_removed_high:.2f}" if itp.mean_bias_removed_high is not None else "-"
+    bl = f"{itp.mean_bias_removed_low:.2f}" if itp.mean_bias_removed_low is not None else "-"
+    L.append(f"    [x] 3. INTERPRETATION {itp.members_used} centers used, "
+             f"{itp.outliers_set_aside} outlier(s) set aside")
+    L.append(f"           backtested adjustments: mean bias removed H/L {bh}/{bl} °C "
+             f"over {itp.history_days}-day pattern history")
+    L.append("           (per-location bias correction absorbs persistent terrain/microclimate error)")
+    L.append("")
+    return L
+
+
+def _market_lines(c: VerdictMarketComparison) -> list[str]:
+    L = ["  MARKET COMPARISON (model vs Polymarket implied — read-only, NOT an edge)"]
+    L.append(f"    market   : {c.market_title}")
+    # Sub-degree market (e.g. HK on the Observatory): we no longer withhold. The
+    # verdict is transferred onto the settlement station's scale by a *measured*
+    # offset, and the transfer's provenance (which stations, season, vintage) is
+    # stated so the comparison is earned, not fabricated.
+    if c.settles_sub_degree and c.settlement_offset_c is not None:
+        L.append(f"    transfer : settles sub-degree on a different station than the backtest; "
+                 f"verdict moved onto that scale by a measured offset.")
+        if c.settlement_offset_note:
+            L.append(f"               {c.settlement_offset_note}")
+        L.append(f"               settlement-scale high {c.settlement_high_c:.2f} °C "
+                 f"(verdict {c.verdict_high_c:.1f} {c.settlement_offset_c:+.2f} offset)")
+    # The settlement reading is a whole-degree ROUNDING of the real-valued verdict.
+    # Make that explicit so an integer like "18" shown next to a market "19" can't
+    # be misread as a one-degree disagreement when the verdict was e.g. 18.4 °C.
+    rounded = abs(c.verdict_high_c - c.verdict_reading) > 1e-9
+    snap = "rounds to" if rounded else "settles as"
+    tag = " (ROUNDED)" if rounded else ""
+    L.append(f"    settles  : whole °{c.grain} | verdict {c.verdict_high_c:.1f} °C "
+             f"{snap} {c.verdict_reading}°{tag} -> bucket {c.verdict_bucket}")
+    fragile = c.edge_distance_c is not None and c.edge_distance_c <= 0.5
+    if c.edge_distance_c is not None:
+        flip = " — a shift this small flips the bucket" if fragile else ""
+        L.append(f"    edge dist: {c.edge_distance_c:.2f} °C to the nearest bucket boundary "
+                 f"(small = fragile assignment){flip}")
+    L.append(f"    modal    : model says {c.model_modal}  |  market says {c.market_modal}")
+    # State the disagreement assertively when it is earned. The model's reading on
+    # the settlement scale vs the market's favourite bucket is a fact; pair it
+    # with the backtested bias so a divergence reads as signal, not a hedge.
+    if c.model_modal and c.market_modal and c.model_modal != c.market_modal:
+        scale_c = c.settlement_high_c if c.settlement_high_c is not None else c.verdict_high_c
+        L.append(f"    DISAGREE : model {scale_c:.1f} °C favours {c.model_modal}, the market "
+                 f"favours {c.market_modal}. The model is the backtested side "
+                 f"(beat naive/persistence/climatology on {c.n_residuals} held-out days).")
+    # State the backtested bias correction baked into the verdict as a fact, so a
+    # divergence from the market reads as earned signal rather than a hedge. The
+    # 0.05 °C floor is only a display threshold (below it the figure rounds to
+    # ~0.0), not a performance knob. n_residuals is the held-out backtest count.
+    if c.bias_correction_c is not None:
+        if abs(c.bias_correction_c) >= 0.05:
+            dirn = "down" if c.bias_correction_c < 0 else "up"
+            L.append(f"    correction: the verdict bakes in a backtested bias correction of "
+                     f"{c.bias_correction_c:+.2f} °C (raw multi-model blend pulled {dirn}), "
+                     f"learned over {c.n_residuals} held-out days — an earned reason to "
+                     f"diverge from the market, not noise.")
+        else:
+            L.append(f"    correction: negligible bias correction ({c.bias_correction_c:+.2f} °C "
+                     f"over {c.n_residuals} held-out days); any divergence here is the raw "
+                     f"multi-model consensus itself, not a learned shift.")
+    # When the verdict's bucket label is fragile, separate two layers so we don't
+    # bury earned signal: the integer *label* is fragile (18.4 is a hair from the
+    # edge), but the continuous verdict is the real, bias-corrected position
+    # (quantified on the 'correction' line above).
+    if rounded and fragile and c.model_modal == c.verdict_bucket \
+            and c.market_modal != c.model_modal:
+        L.append(f"             ^ the integer label {c.verdict_reading}° is fragile: "
+                 f"{c.verdict_high_c:.1f} °C is only {c.edge_distance_c:.2f} °C from the "
+                 f"{c.verdict_bucket}/{c.market_modal} edge, so don't over-read the bucket.")
+        L.append(f"               The continuous verdict ({c.verdict_high_c:.1f} °C) is the "
+                 f"real signal — see 'correction' above and the model-vs-market column below.")
+    if c.market_overround is not None:
+        L.append(f"    overround: {c.market_overround*100:+.1f}% vig still in the raw Yes prices "
+                 f"(removed in 'mkt P' below)")
+    L.append(f"    {'bucket':>14}{'model P':>10}{'mkt P':>9}{'Δ pts':>9}")
+    for b in c.buckets:
+        mp = f"{b.model_prob*100:.1f}%"
+        kp = f"{b.market_prob*100:.1f}%" if b.market_prob is not None else "-"
+        d = f"{(b.model_prob - b.market_prob)*100:+.1f}" if b.market_prob is not None else "-"
+        L.append(f"    {b.label:>14}{mp:>10}{kp:>9}{d:>9}")
+    if c.largest_gap is not None:
+        L.append(f"    largest model-vs-market gap: {c.largest_gap*100:.1f} pts")
+    if c.unmatched_fraction:
+        L.append(f"    note: {c.unmatched_fraction*100:.0f}% of resampled draws fell outside the ladder")
+    cal = c.calibration
+    if cal:
+        cov = (f", {cal.coverage_80*100:.0f}% out-of-sample coverage of the 80% band "
+               f"(n={cal.coverage_n})" if cal.coverage_80 is not None else "")
+        skew = f", warm-skewed {cal.skew:+.2f}" if abs(cal.skew) >= 0.3 else ""
+        L.append(f"    calibration: {cal.n} held-out errors — bias {cal.bias:+.2f} °C, "
+                 f"spread {cal.spread:.2f} °C{skew}{cov}")
+    if c.settlement_bias_note:
+        L.append(f"    caveat   : {c.settlement_bias_note}")
+    L.append("    -> NOT a validated edge: model probs are on the backtest-truth scale "
+             "and no realized-outcome calibration exists yet (C7).")
+    L.append("")
+    return L
+
+
+def render(v: Verdict, comparison: VerdictMarketComparison | None = None) -> str:
+    L = []
+    L.append(f"COUNCIL VERDICT  —  {v.place.label()}  ({v.target})")
+    L.append("=" * 64)
+    L.extend(_pillars(v))
+    L.append(f"  HIGH : {v.high:6.1f} °C        LOW : {v.low:6.1f} °C")
+    ts = v.truth_source or {}
+    finished_truth = ("the station's own reading" if ts.get("kind") == "station"
+                      else "ERA5 reanalysis of a finished day")
+    status_s = ("FORECAST (day not yet finished — not a confirmed reading)"
+                if v.target_status == "forecast"
+                else f"RECORDED ({finished_truth})")
+    L.append(f"    these are: {status_s}")
+    if ts.get("kind") == "station":
+        L.append(f"    anchored on: {ts.get('label','')}")
+    L.append(f"    of: {v.target_basis}")
+    cd = v.confidence_detail
+    hr = cd.get("hit_rate_within_2c")
+    hr_s = f"{hr*100:.0f}% held-out hits -> {cd.get('backtest_tier','?')}" if hr is not None \
+        else "no held-out history -> low"
+    wsig = cd.get("within_system_sigma")
+    xsig = cd.get("cross_system_disagreement")
+    rsig = cd.get("representativeness_sigma")
+    eff = cd.get("effective_uncertainty")
+    pen = cd.get("tiers_downgraded", 0)
+    parts = []
+    if wsig is not None:
+        parts.append(f"within-model σ {wsig:.1f}")
+    if xsig is not None:
+        parts.append(f"panel-vs-ensemble {xsig:.1f}")
+    if rsig is not None:
+        parts.append(f"grid-vs-station σ {rsig:.1f}")
+    eff_s = (f"effective σ {eff:.1f} °C [{', '.join(parts)}] "
+             f"({'routine, no downgrade' if pen == 0 else f'elevated, -{pen} tier'})"
+             ) if eff is not None else "no dispersion data"
+    L.append(f"  Confidence: {v.confidence.upper()}")
+    L.append(f"    earned base : {hr_s}")
+    L.append(f"    today's risk: {eff_s}")
+    if cd.get("seasonal_downgrade"):
+        sg = cd.get("season_gap_days")
+        L.append(f"    seasonal    : backtest truth is ~{sg} days (day-of-year) off the "
+                 f"target — out-of-season (Meteostat bulk archive lag); the hit-rate above "
+                 f"is from a different regime, so confidence is cut one extra tier.")
+        sa = (v.truth_source or {}).get("seasonal_analog") or {}
+        if sa.get("applied"):
+            L.append(f"    analog bias : re-learned each member's bias from same-day-of-year "
+                     f"analog days ({sa['analog_start']}..{sa['analog_end']}, "
+                     f"±{sa['window_days']}d, {sa['analog_obs_days']} obs days) for "
+                     f"{sa['members_corrected']} member(s) — the trailing window is the wrong "
+                     f"season to learn a bias on, so the correction is trained on the right one.")
+    L.append(f"    (range across panel: high {v.high_spread} / low {v.low_spread} °C, shown for reference)")
+    if v.naive_high is not None:
+        L.append(f"  Naive equal-weight avg would say: {v.naive_high:.1f} / {v.naive_low:.1f} °C")
+    L.append("")
+
+    rp = v.representativeness
+    if rp.sigma is not None:
+        on_station = (v.truth_source or {}).get("kind") == "station"
+        if on_station:
+            header = "  SPATIAL REPRESENTATIVENESS (how steep the field is at the station)"
+            gap = ("the field is flat here — the model resolves this point cleanly"
+                   if rp.sigma <= 0.75
+                   else "a moderate local gradient — the model's value at the station "
+                        "carries some spatial uncertainty"
+                   if rp.sigma <= 1.5
+                   else "a steep local gradient (coast/terrain/urban edge) — even "
+                        "anchored at the station, the model's gridded field is "
+                        "uncertain at this exact point; folded into confidence")
+        else:
+            header = "  SPATIAL REPRESENTATIVENESS (grid cell vs. a point station inside it)"
+            gap = ("the grid cell stands in well for any point inside it"
+                   if rp.sigma <= 0.75
+                   else "a specific station may differ moderately from this grid value"
+                   if rp.sigma <= 1.5
+                   else "a specific station (e.g. an official observatory) can differ "
+                        "substantially — treat the headline number as the grid cell, not the station")
+        L.append(header)
+        L.append(f"    across-cell σ : {rp.sigma:.1f} °C "
+                 f"(±{rp.offset_deg:.2f}° neighbours, {rp.sample_days} days)")
+        L.append(f"    -> {gap}")
+        L.append("")
+
+    s = v.settlement
+    if s:
+        unit = "whole °F" if s["grain"] == "F" else "whole °C"
+        L.append("  SETTLEMENT ALIGNMENT (how this resolves against the market's record)")
+        L.append(f"    native grain : {unit} "
+                 f"(detected: {s['grain_evidence'].get(s['grain'])*100:.0f}% of "
+                 f"raw METAR obs are integral in {s['grain']})")
+        L.append(f"    settles as   : high {s['high_native']}  low {s['low_native']}  "
+                 f"(verdict {v.high:.1f}/{v.low:.1f} °C snapped to the integer record)")
+        chk = s.get("source_check")
+        if chk:
+            L.append(f"    source check : raw METAR vs the Meteostat truth we backtest on, "
+                     f"{chk['n']} overlapping days")
+            L.append(f"      high  mean {chk['high_mean']:+.2f} °C  median "
+                     f"{chk['high_median']:+.2f} °C  largest {chk['high_max']:+.2f} °C  "
+                     f"({chk['tail_days_ge3']} day(s) ≥3 °C apart)")
+            L.append(f"      low   mean {chk['low_mean']:+.2f} °C  median "
+                     f"{chk['low_median']:+.2f} °C")
+            if chk["tail_days_ge3"]:
+                L.append("      -> Meteostat clips the daily high on hot days vs the raw "
+                         "METAR the record settles on; bias-correcting on it under-reads peaks.")
+        L.append("")
+
+    if comparison is not None:
+        L.extend(_market_lines(comparison))
+
+    en = v.ensemble
+    if en.mean_high is not None:
+        gap = en.mean_high - v.high
+        if abs(gap) >= 0.5:
+            L.append("  WHY THE VERDICT ISN'T HIGHER/LOWER (deterministic blend vs. ensemble)")
+            L.append(f"    verdict (deterministic, backtested) : {v.high:.1f} °C")
+            L.append(f"    perturbed-ensemble mean (raw)       : {en.mean_high:.1f} °C "
+                     f"({gap:+.1f} °C vs verdict)")
+            if en.blend_eligible and en.corrected_mean_high is not None:
+                L.append(f"    -> ensemble has {en.backtest_days} backtest days "
+                         f"(≥{MIN_SAMPLES}); bias-corrected to "
+                         f"{en.corrected_mean_high:.1f} °C and folded into the blend")
+            else:
+                L.append(f"    -> ensemble NOT blended: only {en.backtest_days} backtestable "
+                         f"day(s) here (need ≥{MIN_SAMPLES}). On the free archive its history is")
+                L.append(f"       too sparse to prove skill, so it lowers confidence but cannot")
+                L.append(f"       move the number. --verify will score which was right once the day ends.")
+            L.append("")
+
+    d = v.diurnal
+    if d.peak_time or d.obs_peak_hour is not None:
+        L.append("  DIURNAL PEAK / TROUGH (when within the day it lands)")
+        if d.peak_time:
+            ok = "✓ matches" if d.peak_in_band else "⚠ off"
+            ob = (f" — historically peaks ~{d.obs_peak_hour:02.0f}:00 ±{d.obs_peak_sd:.1f}h ({ok})"
+                  if d.obs_peak_hour is not None else "")
+            L.append(f"    hottest : {d.peak_temp:.1f} °C around {d.peak_time} local{ob}")
+        if d.trough_time:
+            ok = "✓ matches" if d.trough_in_band else "⚠ off"
+            ob = (f" — historically bottoms ~{d.obs_trough_hour:02.0f}:00 ±{d.obs_trough_sd:.1f}h ({ok})"
+                  if d.obs_trough_hour is not None else "")
+            L.append(f"    coldest : {d.trough_temp:.1f} °C around {d.trough_time} local{ob}")
+        L.append(f"    (peak/trough times from multi-model hourly curve; observed bands "
+                 f"from {d.history_days}-day ERA5 hourly archive)")
+        L.append("")
+
+    r = v.records
+    if r.sample_days:
+        L.append(f"  CLIMATOLOGY & RECORDS  (this date ±{r.window_days}d, "
+                 f"observed since {r.since_year}, {r.sample_days} sample days)")
+        if r.record_high is not None:
+            L.append(f"    record high : {r.record_high:5.1f} °C ({r.record_high_year})"
+                     f"        normal high: {r.normal_high:.1f} °C")
+        if r.record_low is not None:
+            L.append(f"    record low  : {r.record_low:5.1f} °C ({r.record_low_year})"
+                     f"        normal low : {r.normal_low:.1f} °C")
+        if r.peak_percentile is not None:
+            warm = ("well above normal" if r.peak_percentile >= 0.9
+                    else "above normal" if r.peak_percentile >= 0.66
+                    else "near normal" if r.peak_percentile >= 0.33
+                    else "below normal" if r.peak_percentile >= 0.1
+                    else "well below normal")
+            L.append(f"    -> forecast peak {v.high:.1f} °C ranks {r.peak_percentile*100:.0f}th "
+                     f"percentile of recorded highs ({warm})")
+        L.append("")
+
+    L.append("  COUNCIL MEMBERS (top-band independent NWP centers)")
+    L.append(f"    {'center':22}{'raw H/L':>13}{'adj H/L':>13}"
+             f"{'MAE H/L':>13}{'wt%H':>6}  n")
+    for vote in v.votes:
+        sk_h, sk_l = vote.skill_high, vote.skill_low
+        raw = f"{_num(vote.raw_high,5)}/{_num(vote.raw_low,5)}"
+        adj = f"{_num(vote.corrected_high,5)}/{_num(vote.corrected_low,5)}"
+        mae = (f"{sk_h.mae_corrected:4.2f}/{sk_l.mae_corrected:4.2f}"
+               if sk_h and sk_l else "   -/-   ")
+        wt = v.weights_high.get(vote.spec.member_id)
+        wt_s = f"{wt*100:4.0f}" if wt is not None else "   -"
+        n = min(sk_h.n if sk_h else 0, sk_l.n if sk_l else 0)
+        flag = "" if vote.eligible and vote.spec.member_id in v.weights_high else "  (set aside)"
+        L.append(f"    {vote.spec.institution:22}{raw:>13}{adj:>13}{mae:>13}{wt_s:>6}  {n}{flag}")
+    L.append("    raw = center's forecast | adj = after backtested bias removal | "
+             "wt% = blend weight for HIGH")
+    L.append("")
+
+    val = v.validation
+    L.append("  BACKTEST VALIDATION (weights trained on older history, tested on held-out days)")
+    if val.test_days and val.council_mae_high is not None:
+        council = val.council_mae_high + val.council_mae_low
+        L.append(f"    held-out days tested : {val.test_days}")
+        L.append(f"    {'forecast':12}{'MAE high':>11}{'MAE low':>10}{'sum H+L':>10}  vs council")
+        rows = [("council", val.council_mae_high, val.council_mae_low, None),
+                ("naive avg", val.naive_mae_high, val.naive_mae_low, "the equal-weight mean of all centers"),
+                ("persistence", val.persistence_mae_high, val.persistence_mae_low, "yesterday's observed value"),
+                ("climatology", val.climatology_mae_high, val.climatology_mae_low, "the seasonal normal")]
+        for name, hh, ll, _desc in rows:
+            if hh is None or ll is None:
+                continue
+            delta = (hh + ll) - council
+            tag = "" if name == "council" else (f"  {delta:+.2f} °C ({'better' if delta > 0 else 'worse'})")
+            L.append(f"    {name:12}{hh:8.2f} °C{ll:7.2f} °C{hh+ll:8.2f} °C{tag}")
+        L.append("    (council must beat all three reference forecasts to justify itself)")
+        if val.council_win_rate is not None:
+            L.append(f"    council closer than naive on {val.council_win_rate*100:.0f}% of held-out predictions")
+        if val.hit_rate_2c is not None:
+            L.append(f"    within ±2 °C on {val.hit_rate_2c*100:.0f}% of held-out predictions")
+    else:
+        L.append("    insufficient history in window for split-sample validation")
+    L.append("")
+    L.append(f"  Provenance: every figure above came from a live API call "
+             f"({v.requests_made} sandboxed requests). No values are model-generated.")
+    return "\n".join(L)
+
+
+def verdict_to_dict(
+    v: Verdict,
+    comparison: VerdictMarketComparison | None = None,
+    market_note: str | None = None,
+) -> dict:
+    val = v.validation
+    d = {
+        "place": v.place.label(),
+        "target": v.target,
+        "verdict": {"high": v.high, "low": v.low, "confidence": v.confidence},
+        "target_status": v.target_status,
+        "target_basis": v.target_basis,
+        "truth_source": v.truth_source,
+        "settlement": v.settlement,
+        "representativeness": {
+            "offset_deg": v.representativeness.offset_deg,
+            "neighbor_points": v.representativeness.neighbor_points,
+            "sample_days": v.representativeness.sample_days,
+            "spatial_sigma": {
+                "high": v.representativeness.spatial_sigma_high,
+                "low": v.representativeness.spatial_sigma_low,
+            },
+            "sigma": v.representativeness.sigma,
+        },
+        "confidence_detail": v.confidence_detail,
+        "live_spread": {"high": v.high_spread, "low": v.low_spread},
+        "naive_baseline": {"high": v.naive_high, "low": v.naive_low},
+        "members": [
+            {
+                "id": vote.spec.member_id,
+                "institution": vote.spec.institution,
+                "raw": {"high": vote.raw_high, "low": vote.raw_low},
+                "bias_corrected": {"high": vote.corrected_high, "low": vote.corrected_low},
+                "mae_corrected": {
+                    "high": vote.skill_high.mae_corrected if vote.skill_high else None,
+                    "low": vote.skill_low.mae_corrected if vote.skill_low else None,
+                },
+                "bias": {
+                    "high": vote.skill_high.bias if vote.skill_high else None,
+                    "low": vote.skill_low.bias if vote.skill_low else None,
+                },
+                "samples": min(vote.skill_high.n if vote.skill_high else 0,
+                               vote.skill_low.n if vote.skill_low else 0),
+                "weight_high": v.weights_high.get(vote.spec.member_id),
+                "weight_low": v.weights_low.get(vote.spec.member_id),
+                "eligible": vote.eligible,
+                "notes": vote.notes,
+            }
+            for vote in v.votes
+        ],
+        "validation": {
+            "test_days": val.test_days,
+            "council_mae": {"high": val.council_mae_high, "low": val.council_mae_low},
+            "naive_mae": {"high": val.naive_mae_high, "low": val.naive_mae_low},
+            "persistence_mae": {"high": val.persistence_mae_high, "low": val.persistence_mae_low},
+            "climatology_mae": {"high": val.climatology_mae_high, "low": val.climatology_mae_low},
+            "council_win_rate_vs_naive": val.council_win_rate,
+            "hit_rate_within_2c": val.hit_rate_2c,
+        },
+        "observation": {
+            "current": v.observation.current,
+            "recent_observed": [
+                {"date": d, "high": h, "low": lo} for d, h, lo in v.observation.recent
+            ],
+            "backbone": v.observation.backbone,
+        },
+        "quality_control": v.qc,
+        "computation_ensemble": {
+            "member_count": v.ensemble.member_count,
+            "models": v.ensemble.models,
+            "mean": {"high": v.ensemble.mean_high, "low": v.ensemble.mean_low},
+            "spread_1sigma": {"high": v.ensemble.spread_high, "low": v.ensemble.spread_low},
+            "p10_p90_high": [v.ensemble.p10_high, v.ensemble.p90_high],
+            "p10_p90_low": [v.ensemble.p10_low, v.ensemble.p90_low],
+            "agreement_within_2c": {
+                "high": v.ensemble.agreement_high, "low": v.ensemble.agreement_low,
+            },
+            "backtest_days": v.ensemble.backtest_days,
+            "blend_eligible": v.ensemble.blend_eligible,
+            "corrected_mean_high": v.ensemble.corrected_mean_high,
+            "corrected_mean_low": v.ensemble.corrected_mean_low,
+        },
+        "records": {
+            "since_year": v.records.since_year,
+            "window_days": v.records.window_days,
+            "sample_days": v.records.sample_days,
+            "record_high": {"temp": v.records.record_high, "year": v.records.record_high_year},
+            "record_low": {"temp": v.records.record_low, "year": v.records.record_low_year},
+            "normal": {"high": v.records.normal_high, "low": v.records.normal_low},
+            "peak_percentile": v.records.peak_percentile,
+        },
+        "diurnal": {
+            "peak": {"temp": v.diurnal.peak_temp, "time": v.diurnal.peak_time},
+            "trough": {"temp": v.diurnal.trough_temp, "time": v.diurnal.trough_time},
+            "curve": [{"time": t, "temp": c} for t, c in v.diurnal.curve],
+            "observed_peak_hour": {"mean": v.diurnal.obs_peak_hour, "sd": v.diurnal.obs_peak_sd},
+            "observed_trough_hour": {"mean": v.diurnal.obs_trough_hour, "sd": v.diurnal.obs_trough_sd},
+            "peak_time_consistent": v.diurnal.peak_in_band,
+            "trough_time_consistent": v.diurnal.trough_in_band,
+            "history_days": v.diurnal.history_days,
+        },
+        "interpretation": {
+            "members_used": v.interpretation.members_used,
+            "outliers_set_aside": v.interpretation.outliers_set_aside,
+            "mean_bias_removed": {
+                "high": v.interpretation.mean_bias_removed_high,
+                "low": v.interpretation.mean_bias_removed_low,
+            },
+            "history_days": v.interpretation.history_days,
+        },
+        "requests_made": v.requests_made,
+    }
+    if comparison is not None:
+        d["market_comparison"] = comparison_to_dict(comparison)
+    elif market_note is not None:
+        d["market_note"] = market_note
+    return d
+
+
+def to_json(
+    v: Verdict,
+    comparison: VerdictMarketComparison | None = None,
+    market_note: str | None = None,
+) -> str:
+    return json.dumps(verdict_to_dict(v, comparison, market_note), indent=2)
+
+
+def _build_comparison(
+    sources: Sources, v: Verdict, place, target
+) -> tuple[VerdictMarketComparison | None, str | None]:
+    """Fetch the matching read-only Polymarket market and place the model's
+    bucket distribution beside it. Shares the run's SafeHTTPClient so the fetch
+    counts against the same request budget the core pipeline uses.
+
+    Returns (comparison, note). `comparison` is None when no market matches, the
+    council kept too few held-out errors, or the market settles finer than its
+    whole-degree bucket labels (HK); in that last case `note` explains why the
+    comparison is withheld rather than fabricated."""
+    residuals = v.validation.residuals_high
+    if not residuals:
+        return None, None
+    markets = MarketData(http=sources.http).fetch_temperature_markets()
+    market = match_market(markets, place.name, target)
+    if market is None:
+        return None, None
+    source_check = (v.settlement or {}).get("source_check")
+    bias_corr = applied_bias_correction(v, "high")
+    # A sub-degree market (e.g. HK on the Observatory) settles on a different
+    # station and finer than its labels. Rather than withhold outright, try to
+    # measure the settlement-vs-backtest station offset from Meteostat and
+    # transfer the verdict onto the settlement scale. Only if that offset cannot
+    # be earned do we fall back to the explanatory withhold note.
+    station_offset = None
+    if market.settles_sub_degree():
+        ts = (v.truth_source or {})
+        if ts.get("kind") == "station" and (ts.get("station") or {}).get("id"):
+            station_offset = measure_settlement_offset(
+                sources, place, str(ts["station"]["id"]),
+                market.station or "", target)
+        if station_offset is None:
+            return None, grain_support_note(market, v.high)
+    return compare_high(market, v.high, residuals, source_check, bias_corr,
+                        station_offset=station_offset), None
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Council-of-5 backtested weather verdict.")
+    ap.add_argument("city", nargs="?", help="city name, e.g. 'Tokyo'")
+    ap.add_argument("--lead", type=int, default=1,
+                    help="days ahead (0=today, 1=tomorrow). default 1")
+    ap.add_argument("--window", type=int, default=60,
+                    help="backtest history window in days. default 60")
+    ap.add_argument("--json", action="store_true", help="emit JSON")
+    ap.add_argument("--market", action="store_true",
+                    help="also fetch the matching Polymarket market (read-only) and "
+                         "compare the model's per-bucket probabilities to the market's")
+    ap.add_argument("--verify", action="store_true",
+                    help="score past logged verdicts against observed temps")
+    args = ap.parse_args(argv)
+
+    try:
+        if args.verify:
+            lines = verify()
+            print("\n".join(lines) if lines else "no past verdicts ready to verify yet")
+            return 0
+
+        if not args.city:
+            ap.error("a city is required (or use --verify)")
+        if not (0 <= args.lead <= 15):
+            ap.error("--lead must be between 0 and 15")
+        if not (15 <= args.window <= 365):
+            ap.error("--window must be between 15 and 365")
+
+        sources = Sources()
+        place = sources.geocode(args.city)
+        target = dt.date.today() + dt.timedelta(days=args.lead)
+        verdict = Council(sources).deliberate(place, target, args.window)
+        log_verdict(verdict)
+
+        comparison = None
+        market_note = None
+        if args.market:
+            comparison, market_note = _build_comparison(sources, verdict, place, target)
+
+        if args.json:
+            print(to_json(verdict, comparison, market_note))
+        else:
+            print(render(verdict, comparison))
+            if args.market and comparison is None:
+                if market_note:
+                    print("\n  MARKET COMPARISON (withheld)\n    " + market_note)
+                else:
+                    print("\n  (no open Polymarket market matched this city/day — "
+                          "nothing to compare)")
+        return 0
+    except SecurityError as exc:
+        print(f"blocked by sandbox / validation: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

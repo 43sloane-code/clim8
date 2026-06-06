@@ -1,0 +1,9 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Generated SQLite verdict store (runtime state, not source)
+*.db
+
+# Local agent/editor config
+.claude/

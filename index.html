@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weather Council — backtested verdict</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#171b22; --panel2:#1e242d; --line:#2a313c;
+    --txt:#e6edf3; --muted:#9aa7b4; --accent:#58a6ff;
+    --green:#3fb950; --amber:#d29922; --red:#f85149;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:920px;margin:0 auto;padding:28px 18px 80px}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:22px}
+  form{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .field{display:flex;flex-direction:column;gap:5px}
+  .field label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+  input{background:var(--panel2);border:1px solid var(--line);color:var(--txt);
+    border-radius:8px;padding:9px 11px;font-size:14px}
+  input#city{min-width:220px}
+  button{background:var(--accent);color:#05122b;border:0;border-radius:8px;
+    padding:10px 18px;font-size:14px;font-weight:600;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+  .hint{color:var(--muted);font-size:12px;margin-top:8px}
+  #status{margin:22px 0;color:var(--muted)}
+  #status.err{color:var(--red)}
+  .hero{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:22px;margin:22px 0}
+  .hero h2{margin:0 0 2px;font-size:17px}
+  .hero .when{color:var(--muted);font-size:13px;margin-bottom:16px}
+  .temps{display:flex;gap:30px;flex-wrap:wrap;align-items:baseline}
+  .temp .v{font-size:40px;font-weight:700;letter-spacing:-1px}
+  .temp .k{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+  .badge{display:inline-block;padding:4px 12px;border-radius:999px;font-size:12px;
+    font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+  .badge.high{background:rgba(63,185,80,.16);color:var(--green)}
+  .badge.medium{background:rgba(210,153,34,.16);color:var(--amber)}
+  .badge.low{background:rgba(248,81,73,.16);color:var(--red)}
+  .summary{margin-top:16px;padding-top:16px;border-top:1px solid var(--line);
+    color:#cdd7e1;font-size:14.5px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:16px 18px;margin:14px 0}
+  .card h3{margin:0 0 12px;font-size:13px;text-transform:uppercase;
+    letter-spacing:.07em;color:var(--accent)}
+  .kv{display:flex;flex-wrap:wrap;gap:6px 26px;color:#cdd7e1;font-size:14px}
+  .kv span b{color:#fff;font-weight:600}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:4px}
+  th,td{text-align:right;padding:7px 8px;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+  td.set-aside{color:var(--muted)}
+  .pill{font-size:11px;color:var(--muted)}
+  .bar{height:8px;background:var(--panel2);border-radius:6px;overflow:hidden;min-width:60px}
+  .bar > i{display:block;height:100%;background:var(--accent)}
+  .good{color:var(--green)} .meh{color:var(--amber)} .bad{color:var(--red)}
+  footer{margin-top:26px;color:var(--muted);font-size:12px;text-align:center}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .chk{display:flex;align-items:center;gap:7px;font-size:13px;color:#cdd7e1;
+    padding:8px 0;text-transform:none;letter-spacing:0}
+  .chk input{width:16px;height:16px;accent-color:var(--accent)}
+  .dbar{position:relative;height:10px;background:var(--panel2);border-radius:6px;overflow:hidden;min-width:90px}
+  .dbar > i{position:absolute;top:0;height:100%;display:block}
+  .dbar > i.m{background:var(--accent)}
+  .dbar > i.k{background:#6e7681}
+  .legend{display:flex;gap:16px;align-items:center;font-size:12px;color:var(--muted);margin-top:4px}
+  .legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+  td.hit{color:var(--green)} td.miss{color:var(--amber)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Weather Council</h1>
+  <div class="sub">A panel of 8 independent national weather services + a perturbed ensemble,
+    blended by backtested skill into one verdict. Every figure is fetched and validated — none is model-generated.</div>
+
+  <form id="f">
+    <div class="field">
+      <label for="city">City</label>
+      <input id="city" placeholder="e.g. Tokyo" autocomplete="off" required>
+    </div>
+    <div class="field">
+      <label for="date">Date</label>
+      <input id="date" type="date">
+    </div>
+    <div class="field">
+      <label for="window">Backtest days</label>
+      <input id="window" type="number" value="60" min="15" max="365" style="width:110px">
+    </div>
+    <div class="field">
+      <label for="market">Market</label>
+      <label class="chk"><input id="market" type="checkbox"> Compare to Polymarket</label>
+    </div>
+    <button id="go" type="submit">Get verdict</button>
+    <div class="hint">Ask e.g. “Tokyo highest temperature” for a date up to 15 days out.
+      “Compare to Polymarket” adds a read-only price comparison when an open market matches.</div>
+  </form>
+
+  <div id="status"></div>
+  <div id="out"></div>
+
+  <footer id="foot"></footer>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const f1 = x => (x===null||x===undefined||Number.isNaN(x)) ? "–" : (Math.round(x*10)/10).toFixed(1);
+const f2 = x => (x===null||x===undefined||Number.isNaN(x)) ? "–" : (Math.round(x*100)/100).toFixed(2);
+const f0 = x => (x===null||x===undefined) ? "–" : Math.round(x);
+const pct = x => (x===null||x===undefined) ? "–" : Math.round(x*100)+"%";
+const pad2 = x => String(x).padStart(2,"0");
+
+function sparkline(curve){
+  if(!curve || curve.length<2) return "";
+  const W=560, H=90, pad=22;
+  const temps=curve.map(p=>p.temp), times=curve.map(p=>p.time);
+  const lo=Math.min(...temps), hi=Math.max(...temps), span=(hi-lo)||1;
+  const x=i=> pad + i*(W-2*pad)/(curve.length-1);
+  const y=t=> pad + (H-2*pad)*(1-(t-lo)/span);
+  const pts=curve.map((p,i)=>`${x(i).toFixed(1)},${y(p.temp).toFixed(1)}`).join(" ");
+  const iMax=temps.indexOf(hi), iMin=temps.indexOf(lo);
+  const dot=(i,c)=>`<circle cx="${x(i).toFixed(1)}" cy="${y(temps[i]).toFixed(1)}" r="3.5" fill="${c}"/>`;
+  const lbl=(i,txt,c)=>`<text x="${x(i).toFixed(1)}" y="${(y(temps[i])-8).toFixed(1)}" fill="${c}" font-size="11" text-anchor="middle">${txt}</text>`;
+  const ticks=[0, Math.floor(curve.length/2), curve.length-1]
+    .map(i=>`<text x="${x(i).toFixed(1)}" y="${H-4}" fill="#8b949e" font-size="10" text-anchor="middle">${times[i]}</text>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="display:block">
+    <polyline points="${pts}" fill="none" stroke="#58a6ff" stroke-width="2"/>
+    ${dot(iMax,'#3fb950')}${lbl(iMax,f1(hi)+'°','#3fb950')}
+    ${dot(iMin,'#58a6ff')}${lbl(iMin,f1(lo)+'°','#58a6ff')}
+    ${ticks}
+  </svg>`;
+}
+
+// default date = tomorrow; clamp to [today, today+15]
+(function(){
+  const d = new Date(); d.setDate(d.getDate()+1);
+  const iso = d.toISOString().slice(0,10);
+  const min = new Date().toISOString().slice(0,10);
+  const max = new Date(); max.setDate(max.getDate()+15);
+  $("#date").value = iso; $("#date").min = min; $("#date").max = max.toISOString().slice(0,10);
+})();
+
+$("#f").addEventListener("submit", async (e)=>{
+  e.preventDefault();
+  const city = $("#city").value.trim();
+  if(!city) return;
+  const date = $("#date").value, window_ = $("#window").value;
+  const market = $("#market").checked;
+  $("#go").disabled = true;
+  $("#status").className = "";
+  $("#status").textContent = market
+    ? "Consulting the council… (fetching, backtesting, blending, comparing to market)"
+    : "Consulting the council… (fetching, backtesting, blending)";
+  $("#out").innerHTML = ""; $("#foot").textContent = "";
+  try{
+    const url = `/api/verdict?city=${encodeURIComponent(city)}&date=${date}&window=${window_}${market?"&market=1":""}`;
+    const r = await fetch(url);
+    const d = await r.json();
+    if(!r.ok){ throw new Error(d.error || ("request failed ("+r.status+")")); }
+    $("#status").textContent = "";
+    render(d);
+  }catch(err){
+    $("#status").className = "err";
+    $("#status").textContent = "Error: " + err.message;
+  }finally{
+    $("#go").disabled = false;
+  }
+});
+
+function summarySentence(d){
+  const v=d.verdict, val=d.validation, ens=d.computation_ensemble;
+  const beat = (val.naive_mae.high+val.naive_mae.low) - (val.council_mae.high+val.council_mae.low);
+  const agree = ens.agreement_within_2c.high;
+  let s = `Across ${d.members.length} independent national weather services`;
+  if(ens.member_count) s += ` and a ${ens.member_count}-member ensemble`;
+  s += `, the skill-weighted verdict for ${d.place} on ${d.target} is a high of `;
+  s += `<b>${f1(v.high)} °C</b> and a low of <b>${f1(v.low)} °C</b>. `;
+  s += `Confidence is <b>${v.confidence.toUpperCase()}</b>`;
+  const bits=[];
+  if(agree!==null&&agree!==undefined) bits.push(`${pct(agree)} of ensemble members agree within ±2 °C`);
+  if(val.hit_rate_within_2c!==null&&val.hit_rate_within_2c!==undefined)
+    bits.push(`on held-out history this method hit within ±2 °C ${pct(val.hit_rate_within_2c)} of the time`);
+  if(beat>0) bits.push(`beating a naive average by ${f1(beat)} °C`);
+  if(bits.length) s += " — " + bits.join(", ") + ".";
+  else s += ".";
+  return s;
+}
+
+function confidenceWhy(d){
+  const cd=d.confidence_detail||{};
+  if(!Object.keys(cd).length) return "";
+  const hr=cd.hit_rate_within_2c;
+  const base = hr!==null&&hr!==undefined
+    ? `Earned from backtest: this method landed within ±2 °C on <b>${pct(hr)}</b> of held-out days (base tier <b>${(cd.backtest_tier||'').toUpperCase()}</b>).`
+    : `No held-out history to test here, so the base tier floors at LOW.`;
+  let risk;
+  const eff=cd.effective_uncertainty, pen=cd.tiers_downgraded||0;
+  const parts=[];
+  if(cd.within_system_sigma!=null) parts.push(`within-model σ ${f1(cd.within_system_sigma)}`);
+  if(cd.cross_system_disagreement!=null) parts.push(`panel-vs-ensemble ${f1(cd.cross_system_disagreement)}`);
+  if(cd.representativeness_sigma!=null){
+    const onStation = (d.truth_source||{}).kind==="station";
+    parts.push(`${onStation?"local-gradient":"grid-vs-station"} σ ${f1(cd.representativeness_sigma)}`);
+  }
+  const breakdown = parts.length?` [${parts.join(", ")}]`:"";
+  if(eff===null||eff===undefined) risk = "";
+  else if(pen===0) risk = ` Today's effective uncertainty (σ ${f1(eff)} °C${breakdown}) is routine for this lead — no downgrade.`;
+  else risk = ` Today's effective uncertainty (σ ${f1(eff)} °C${breakdown}) is elevated, so confidence is lowered ${pen} tier${pen>1?'s':''}.`;
+  let season = "";
+  if(cd.seasonal_downgrade) season = ` ⚠ The backtest truth is ~${cd.season_gap_days} days (day-of-year) off the target — out-of-season (Meteostat bulk-archive lag), so the earned hit-rate is from a different regime and confidence is cut one extra tier.`;
+  return base + risk + season;
+}
+
+function render(d){
+  const v=d.verdict, obs=d.observation, ens=d.computation_ensemble,
+        val=d.validation, itp=d.interpretation, qc=d.quality_control, cur=obs.current||{},
+        dn=d.diurnal||{}, rec=d.records||{}, rp=d.representativeness||{};
+  let h = "";
+
+  const ts = d.truth_source||{};
+  const onStation = ts.kind==="station";
+  const statusLabel = d.target_status==="forecast"
+    ? "The day isn't finished, so this is a prediction, not a confirmed reading"
+    : (onStation ? "the station's own recorded reading for the finished day"
+                 : "ERA5 reanalysis of a day that has finished");
+
+  // hero
+  h += `<div class="hero">
+    <h2>${d.place}</h2>
+    <div class="when">${d.target} &nbsp;·&nbsp; verdict from ${itp.members_used} weather services</div>
+    <div class="temps">
+      <div class="temp"><div class="v">${f1(v.high)}°</div><div class="k">High</div></div>
+      <div class="temp"><div class="v">${f1(v.low)}°</div><div class="k">Low</div></div>
+      <div class="temp"><span class="badge ${v.confidence}">${v.confidence} confidence</span></div>
+    </div>
+    <div class="summary">${summarySentence(d)}</div>
+    <div class="summary" style="opacity:.8;font-size:13px">${confidenceWhy(d)}</div>
+    <div class="summary" style="opacity:.7;font-size:12px;margin-top:6px">
+      <b>${d.target_status==="forecast"?"Forecast":"Recorded"}.</b> ${statusLabel}.
+      ${onStation&&ts.label?`<br>Anchored on <b>${ts.label}</b>.`:""}
+      ${d.target_basis?`<br>These numbers describe the ${d.target_basis}`:""}
+    </div>
+  </div>`;
+
+  // observation
+  let tend = "";
+  if(cur.pressure_change_24h!==null && cur.pressure_change_24h!==undefined){
+    const p=cur.pressure_change_24h;
+    const t = p<=-3 ? "falling — unsettled / storm risk" : p>=3 ? "rising — clearing" : "steady";
+    tend = `<span>Pressure trend: <b>${p>0?'+':''}${f1(p)} hPa/24h</b> (${t})</span>`;
+  }
+  const recent = (obs.recent_observed||[]).map(r=>`${r.date} ${f0(r.high)}/${f0(r.low)}`).join(" · ");
+  h += `<div class="card"><h3>1 · Observation</h3>
+    <div class="kv">
+      <span>Now: <b>${f1(cur.temperature_2m)} °C</b></span>
+      <span>Humidity: <b>${f0(cur.relative_humidity_2m)}%</b></span>
+      <span>Wind: <b>${f1(cur.wind_speed_10m)} km/h</b></span>
+      <span>Pressure: <b>${f1(cur.surface_pressure)} hPa</b></span>
+      ${tend}
+    </div>
+    <div class="kv" style="margin-top:8px"><span>Recent observed H/L: <b>${recent||"–"}</b></span></div>
+    <div class="kv" style="margin-top:8px"><span class="pill">Truth backbone: ${obs.backbone}</span></div>
+    <div class="kv" style="margin-top:6px"><span class="pill">Quality control: ${qc.screened} values screened, ${qc.rejected} rejected as out-of-band anomalies</span></div>
+  </div>`;
+
+  // diurnal peak / trough
+  if(dn.peak && (dn.peak.time || (dn.observed_peak_hour&&dn.observed_peak_hour.mean!=null))){
+    const op=dn.observed_peak_hour||{}, ot=dn.observed_trough_hour||{};
+    const band=(o)=> o.mean!=null ? `historically ~${pad2(Math.round(o.mean))}:00 ±${f1(o.sd)}h` : "";
+    const chk=(ok)=> ok===true?`<b class="good">✓ consistent</b>`:ok===false?`<b class="bad">⚠ unusual</b>`:"";
+    h += `<div class="card"><h3>Daily peak &amp; trough — when it lands</h3>
+      ${sparkline(dn.curve||[])}
+      <div class="kv" style="margin-top:10px">
+        <span>Hottest: <b>${f1(dn.peak.temp)} °C</b> around <b>${dn.peak.time||'–'}</b> local
+          &nbsp;${band(op)} ${chk(dn.peak_time_consistent)}</span>
+      </div>
+      <div class="kv" style="margin-top:6px">
+        <span>Coldest: <b>${f1(dn.trough.temp)} °C</b> around <b>${dn.trough.time||'–'}</b> local
+          &nbsp;${band(ot)} ${chk(dn.trough_time_consistent)}</span>
+      </div>
+      <div class="kv" style="margin-top:8px"><span class="pill">Peak/trough times from the multi-model hourly curve; observed bands from the ${dn.history_days}-day ERA5 hourly archive (circular statistics).</span></div>
+    </div>`;
+  }
+
+  // climatology & records
+  if(rec.sample_days){
+    const p=rec.peak_percentile;
+    const warm = p==null?"" : p>=.9?"well above normal":p>=.66?"above normal":p>=.33?"near normal":p>=.1?"below normal":"well below normal";
+    const cls = p==null?"":p>=.66?"bad":p<=.33?"good":"meh";
+    const rh=rec.record_high||{}, rl=rec.record_low||{}, nm=rec.normal||{};
+    h += `<div class="card"><h3>Climatology &amp; records — this date in history</h3>
+      <div class="kv">
+        <span>Record high: <b class="good">${f1(rh.temp)} °C</b>${rh.year?` (${rh.year})`:""}</span>
+        <span>Normal high: <b>${f1(nm.high)} °C</b></span>
+      </div>
+      <div class="kv" style="margin-top:6px">
+        <span>Record low: <b>${f1(rl.temp)} °C</b>${rl.year?` (${rl.year})`:""}</span>
+        <span>Normal low: <b>${f1(nm.low)} °C</b></span>
+      </div>
+      ${p==null?"":`<div class="kv" style="margin-top:8px"><span>Forecast peak <b>${f1(v.high)} °C</b> ranks <b class="${cls}">${pct(p)}</b> of recorded highs — <b>${warm}</b>.</span></div>`}
+      <div class="kv" style="margin-top:8px"><span class="pill">From the ERA5 archive since ${rec.since_year}, this calendar date ±${rec.window_days} days (${rec.sample_days} observed days).</span></div>
+    </div>`;
+  }
+
+  // spatial representativeness — how steep the model field is around the point
+  if(rp.sigma!=null){
+    const s=rp.sigma;
+    const gap = onStation
+      ? (s<=.75 ? "the field is flat here — the model resolves this point cleanly"
+        : s<=1.5 ? "a moderate local gradient — the model's value at the station carries some spatial uncertainty"
+        : "a steep local gradient (coast/terrain/urban edge) — even anchored at the station, the model's gridded field is uncertain at this exact point")
+      : (s<=.75 ? "the grid cell stands in well for any point inside it"
+        : s<=1.5 ? "a specific station may differ moderately from this grid value"
+        : "a specific station (e.g. an official observatory) can differ substantially — read the headline as the grid cell, not the station");
+    const cls = s<=.75?"good":s<=1.5?"meh":"bad";
+    const title = onStation ? "Spatial representativeness — how steep the field is at the station"
+                            : "Spatial representativeness — grid cell vs. a station inside it";
+    const note = onStation
+      ? "Forecasts are queried at the station's own coordinates, but each model still computes on a grid. The spread across neighbouring grid cells measures how steep the temperature field is right here, i.e. the residual spatial uncertainty in the model's value at this point — folded into confidence."
+      : "The verdict is the temperature of the ERA5 grid cell — also what the method is backtested against. We can't fetch a point observatory directly, but the spread across neighbouring grid cells bounds how far a station inside the cell can sit from this value, and it is folded into confidence.";
+    h += `<div class="card"><h3>${title}</h3>
+      <div class="kv">
+        <span>Across-cell spread: <b class="${cls}">${f1(s)} °C</b> (1σ)</span>
+        <span>Sampled: <b>±${rp.offset_deg}° neighbours, ${rp.sample_days} days</b></span>
+      </div>
+      <div class="kv" style="margin-top:8px"><span>→ ${gap}.</span></div>
+      <div class="kv" style="margin-top:8px"><span class="pill">${note}</span></div>
+    </div>`;
+  }
+
+  // settlement alignment — native-grain quantization + Meteostat-vs-METAR check
+  const st = d.settlement;
+  if(st){
+    const unit = st.grain==="F" ? "whole °F" : "whole °C";
+    const ev = st.grain_evidence ? Math.round((st.grain_evidence[st.grain]||0)*100) : null;
+    const chk = st.source_check;
+    let checkHtml = "";
+    if(chk){
+      const tail = chk.tail_days_ge3;
+      const tailCls = tail>0 ? "bad" : "good";
+      checkHtml = `
+        <div class="kv" style="margin-top:10px">
+          <span>vs the Meteostat truth we backtest on, <b>${chk.n}</b> overlapping days:</span>
+        </div>
+        <div class="kv">
+          <span>High Δ: mean <b>${chk.high_mean>0?'+':''}${f1(chk.high_mean)}</b>, median <b>${chk.high_median>0?'+':''}${f1(chk.high_median)}</b>, largest <b class="${tailCls}">${chk.high_max>0?'+':''}${f1(chk.high_max)} °C</b> (<b class="${tailCls}">${tail}</b> day(s) ≥3 °C apart)</span>
+          <span>Low Δ: mean <b>${chk.low_mean>0?'+':''}${f1(chk.low_mean)}</b>, median <b>${chk.low_median>0?'+':''}${f1(chk.low_median)}</b></span>
+        </div>` +
+        (tail>0 ? `<div class="kv" style="margin-top:8px"><span class="pill">Meteostat clips the daily high on hot days vs the raw METAR the record settles on — bias-correcting on it under-reads peaks. The settlement source above is what a market actually pays out on.</span></div>` : "");
+    }
+    h += `<div class="card"><h3>Settlement alignment — how this resolves against the market's record</h3>
+      <div class="kv">
+        <span>Settles as: high <b class="good">${st.high_native}</b>  low <b class="good">${st.low_native}</b></span>
+        <span>Native grain: <b>${unit}</b>${ev!=null?` (${ev}% of raw METAR obs integral in ${st.grain})`:""}</span>
+      </div>
+      <div class="kv" style="margin-top:8px"><span>The continuous verdict <b>${f1(v.high)}/${f1(v.low)} °C</b> snapped onto the airport sensor's integer record — the value a whole-degree contract reads. Source: ${st.source||"raw airport METAR"}.</span></div>
+      ${checkHtml}
+    </div>`;
+  }
+
+  // market comparison — model bucket probabilities vs Polymarket implied (read-only)
+  const mc = d.market_comparison;
+  if(mc){
+    // The settlement reading is a whole-degree ROUNDING of the real verdict; flag
+    // it (and a fragile near-boundary assignment) so "18 vs 19" isn't misread as a
+    // one-degree disagreement when the verdict was e.g. 18.4 °C.
+    const mcRounded = Math.abs(mc.verdict_high_c - mc.verdict_reading) > 1e-9;
+    const mcFragile = mc.edge_distance_c!=null && mc.edge_distance_c <= 0.5;
+    const maxP = Math.max(0.0001, ...mc.buckets.map(b=>Math.max(b.model_prob||0, b.market_prob||0)));
+    const brows = mc.buckets.map(b=>{
+      const mp = b.model_prob||0, kp = (b.market_prob==null?null:b.market_prob);
+      const d2 = (kp==null)? null : (mp-kp);
+      const mW = Math.round(100*mp/maxP/2), kW = (kp==null?0:Math.round(100*kp/maxP/2));
+      const dCls = d2==null?"":Math.abs(d2)>=.1?(d2>0?"good":"bad"):"";
+      return `<tr>
+        <td>${b.label}</td>
+        <td>${pct(mp)}</td>
+        <td>${kp==null?'–':pct(kp)}</td>
+        <td><div class="dbar"><i class="k" style="left:0;width:${kW}%"></i><i class="m" style="left:0;width:${mW}%;opacity:.85"></i></div></td>
+        <td class="${dCls}">${d2==null?'–':(d2>0?'+':'')+Math.round(d2*100)+' pts'}</td>
+      </tr>`;
+    }).join("");
+    const cal = mc.calibration;
+    const ov = mc.market_overround;
+    h += `<div class="card"><h3>Market comparison — model vs Polymarket (read-only)</h3>
+      <div class="kv">
+        <span>Market: <b>${mc.market_title}</b></span>
+      </div>
+      ${(mc.settles_sub_degree && mc.settlement_offset_c!=null)?`<div class="kv" style="margin-top:6px"><span class="pill">Station transfer: this market settles sub-degree on a <b>different station</b> than the council backtests. Rather than withhold, the verdict is moved onto the settlement scale by a <b>measured</b> offset — ${mc.settlement_offset_note}. Settlement-scale high <b>${f2(mc.settlement_high_c)} °C</b> (verdict ${f1(mc.verdict_high_c)} ${mc.settlement_offset_c>0?'+':''}${f2(mc.settlement_offset_c)} offset).</span></div>`:""}
+      <div class="kv" style="margin-top:6px">
+        <span>Settles: <b>whole °${mc.grain}</b></span>
+        <span>Verdict <b>${f1(mc.verdict_high_c)} °C</b> → ${mcRounded?`<b class="bad">rounds to ${mc.verdict_reading}°</b> <span class="pill">ROUNDED</span>`:`reads <b>${mc.verdict_reading}°</b>`} → bucket <b>${mc.verdict_bucket||'–'}</b></span>
+        ${mc.edge_distance_c!=null?`<span>Edge distance: <b class="${mcFragile?'bad':'meh'}">${f1(mc.edge_distance_c)} °C</b>${mcFragile?` <span class="pill">a shift this small flips the bucket</span>`:""}</span>`:""}
+      </div>
+      <div class="kv" style="margin-top:6px">
+        <span>Modal bucket: model <b>${mc.model_modal||'–'}</b> · market <b>${mc.market_modal||'–'}</b></span>
+        ${ov!=null?`<span>Overround (vig): <b>${ov>0?'+':''}${Math.round(ov*1000)/10}%</b> — removed in “mkt”</span>`:""}
+      </div>
+      ${(mc.model_modal && mc.market_modal && mc.model_modal!==mc.market_modal)?`<div class="kv" style="margin-top:6px"><span class="pill"><b>Model disagrees with the market.</b> Model ${f1(mc.settlement_high_c!=null?mc.settlement_high_c:mc.verdict_high_c)} °C favours <b>${mc.model_modal}</b>; the market favours <b>${mc.market_modal}</b>. The model is the <b>backtested</b> side — it beat naive, persistence and climatology on <b>${mc.n_residuals}</b> held-out days. This divergence is earned signal, not noise.</span></div>`:""}
+      ${mc.bias_correction_c!=null?(Math.abs(mc.bias_correction_c)>=0.05?`<div class="kv" style="margin-top:6px"><span class="pill">Backtested correction: the verdict bakes in a bias correction of <b>${mc.bias_correction_c>0?'+':''}${f2(mc.bias_correction_c)} °C</b> (raw multi-model blend pulled ${mc.bias_correction_c<0?'down':'up'}), learned over <b>${mc.n_residuals}</b> held-out days — an <b>earned</b> reason to diverge from the market, not noise.</span></div>`:`<div class="kv" style="margin-top:6px"><span class="pill">Negligible bias correction (${mc.bias_correction_c>0?'+':''}${f2(mc.bias_correction_c)} °C over ${mc.n_residuals} held-out days); any divergence here is the raw multi-model consensus itself.</span></div>`):""}
+      ${(mcRounded && mcFragile && mc.model_modal===mc.verdict_bucket && mc.market_modal!==mc.model_modal)?`<div class="kv" style="margin-top:6px"><span class="pill">The integer label <b>${mc.verdict_reading}°</b> is fragile: ${f1(mc.verdict_high_c)} °C is only ${f1(mc.edge_distance_c)} °C from the ${mc.verdict_bucket}/${mc.market_modal} edge, so don't over-read the bucket. The continuous verdict (<b>${f1(mc.verdict_high_c)} °C</b>) is the real signal — see the backtested-correction note and the model-vs-market column.</span></div>`:""}
+      <table style="margin-top:10px">
+        <tr><th>Bucket</th><th>model</th><th>mkt</th><th>distribution</th><th>Δ</th></tr>
+        ${brows}
+      </table>
+      <div class="legend"><span><i class="m"></i>model</span><span><i class="k"></i>market (de-vigged)</span></div>
+      ${cal?`<div class="kv" style="margin-top:10px"><span class="pill">Calibration: ${cal.n} held-out errors — bias ${cal.bias>0?'+':''}${f1(cal.bias)} °C, spread ${f1(cal.spread)} °C${Math.abs(cal.skew)>=.3?`, warm-skewed ${cal.skew>0?'+':''}${f1(cal.skew)}`:""}${cal.coverage_80!=null?`, ${pct(cal.coverage_80)} out-of-sample coverage of the 80% band (n=${cal.coverage_n})`:""}.</span></div>`:""}
+      ${mc.settlement_bias_note?`<div class="kv" style="margin-top:6px"><span class="pill">${mc.settlement_bias_note}</span></div>`:""}
+      <div class="kv" style="margin-top:8px"><span class="bad">⚠ NOT a validated edge.</span> <span class="pill">Model probabilities are resampled from the council's held-out backtest errors and live on the backtest-truth scale; no realized-outcome calibration exists yet. This is a comparison, not a trading signal — the project never places trades.</span></div>
+    </div>`;
+  } else if(d.market_note){
+    h += `<div class="card"><h3>Market comparison — withheld</h3>
+      <div class="kv"><span class="bad">⚠ Comparison withheld for this market.</span></div>
+      <div class="kv" style="margin-top:8px"><span class="pill">${d.market_note}</span></div>
+    </div>`;
+  }
+
+  // why the verdict isn't higher/lower — deterministic blend vs ensemble
+  if(ens.mean && ens.mean.high!=null){
+    const gap = ens.mean.high - v.high;
+    if(Math.abs(gap) >= 0.5){
+      const eligible = ens.blend_eligible;
+      const note = eligible && ens.corrected_mean_high!=null
+        ? `The ensemble has <b>${ens.backtest_days}</b> backtest days (≥10), so its mean was bias-corrected to <b>${f1(ens.corrected_mean_high)} °C</b> and folded into the blend.`
+        : `The ensemble is <b>not</b> blended into the number: only <b>${ens.backtest_days}</b> backtestable day(s) are available here (10 required). On the free archive its history is too sparse to prove skill, so it lowers confidence but cannot move the verdict. The <i>verify</i> pass will score which was right once the day ends.`;
+      h += `<div class="card"><h3>Why the verdict isn't ${gap>0?'higher':'lower'} — deterministic blend vs. ensemble</h3>
+        <div class="kv">
+          <span>Verdict (deterministic, backtested): <b>${f1(v.high)} °C</b></span>
+          <span>Perturbed-ensemble mean (raw): <b class="${gap>0?'bad':'meh'}">${f1(ens.mean.high)} °C</b> (${gap>0?'+':''}${f1(gap)} °C)</span>
+        </div>
+        <div class="kv" style="margin-top:8px"><span>${note}</span></div>
+      </div>`;
+    }
+  }
+
+  // computation — members table
+  let rows = d.members.map(m=>{
+    const aside = !(m.eligible);
+    const wt = m.weight_high;
+    return `<tr>
+      <td class="${aside?'set-aside':''}">${m.institution}${aside?' <span class="pill">(set aside)</span>':''}</td>
+      <td>${f1(m.raw.high)}/${f1(m.raw.low)}</td>
+      <td>${f1(m.bias_corrected.high)}/${f1(m.bias_corrected.low)}</td>
+      <td>${m.mae_corrected.high!=null?f1(m.mae_corrected.high):'–'}/${m.mae_corrected.low!=null?f1(m.mae_corrected.low):'–'}</td>
+      <td>${wt!=null?Math.round(wt*100)+'%':'–'}</td>
+      <td>${m.samples}</td>
+    </tr>`;
+  }).join("");
+  h += `<div class="card"><h3>2 · Computation — deterministic panel</h3>
+    <table>
+      <tr><th>Weather service</th><th>raw H/L</th><th>adj H/L</th><th>MAE H/L</th><th>weight</th><th>n</th></tr>
+      ${rows}
+    </table>
+    <div class="kv" style="margin-top:10px"><span class="pill">raw = the service's forecast · adj = after backtested bias removal · weight = share of the HIGH blend · n = backtest samples</span></div>
+  </div>`;
+
+  // computation — ensemble
+  if(ens.member_count){
+    const models = Object.entries(ens.models).map(([k,n])=>`${k} (${n})`).join(" + ");
+    const ah = ens.agreement_within_2c.high;
+    const cls = ah>=.8?'good':ah>=.5?'meh':'bad';
+    h += `<div class="card"><h3>2 · Computation — ${ens.member_count}-member ensemble</h3>
+      <div class="kv">
+        <span>Members: <b>${models}</b></span>
+      </div>
+      <div class="kv" style="margin-top:8px">
+        <span>Mean H/L: <b>${f1(ens.mean.high)}/${f1(ens.mean.low)} °C</b></span>
+        <span>Spread (1σ): <b>${f1(ens.spread_1sigma.high)}/${f1(ens.spread_1sigma.low)} °C</b></span>
+        <span>P10–P90 high: <b>${f1(ens.p10_p90_high[0])}–${f1(ens.p10_p90_high[1])} °C</b></span>
+      </div>
+      <div class="kv" style="margin-top:8px">
+        <span>Agreement: <b class="${cls}">${pct(ah)}</b> of members within ±2 °C of mean — more agreement, higher confidence</span>
+      </div>
+      <div class="kv" style="margin-top:6px"><span class="pill">Physics (Navier-Stokes, continuity, thermodynamics, ideal-gas, moisture) is solved inside each model.</span></div>
+    </div>`;
+  }
+
+  // interpretation
+  h += `<div class="card"><h3>3 · Interpretation</h3>
+    <div class="kv">
+      <span>Services used: <b>${itp.members_used}</b></span>
+      <span>Outliers set aside: <b>${itp.outliers_set_aside}</b></span>
+      <span>Mean bias removed H/L: <b>${itp.mean_bias_removed.high!=null?f1(itp.mean_bias_removed.high):'–'}/${itp.mean_bias_removed.low!=null?f1(itp.mean_bias_removed.low):'–'} °C</b></span>
+      <span>Pattern history: <b>${itp.history_days} days</b></span>
+    </div>
+    <div class="kv" style="margin-top:6px"><span class="pill">Per-location bias correction absorbs persistent terrain / microclimate error.</span></div>
+  </div>`;
+
+  // validation
+  if(val.test_days && val.council_mae.high!=null){
+    const hr = val.hit_rate_within_2c;
+    const council = val.council_mae.high + val.council_mae.low;
+    const refs = [
+      ["Council (skill-weighted)", val.council_mae, true],
+      ["Naive average", val.naive_mae, false],
+      ["Persistence (yesterday)", val.persistence_mae, false],
+      ["Climatology (the normal)", val.climatology_mae, false],
+    ];
+    const rows = refs.map(([name, m, isC])=>{
+      if(!m || m.high==null || m.low==null) return "";
+      const sum = m.high + m.low;
+      const delta = sum - council;
+      const tag = isC ? "" : `<span class="${delta>0?'good':'bad'}">${delta>0?'+':''}${f1(delta)} °C ${delta>0?'better':'worse'}</span>`;
+      return `<tr><td>${name}</td><td>${f1(m.high)}/${f1(m.low)}</td><td>${f1(sum)}</td><td>${tag}</td></tr>`;
+    }).join("");
+    const beatsAll = refs.slice(1).every(([_,m])=> !m||m.high==null || (m.high+m.low) >= council);
+    h += `<div class="card"><h3>Backtest validation — earned vs reference forecasts</h3>
+      <table>
+        <tr><th>Forecast</th><th>MAE H/L</th><th>sum</th><th>vs council</th></tr>
+        ${rows}
+      </table>
+      <div class="kv" style="margin-top:10px">
+        <span>Held-out days tested: <b>${val.test_days}</b></span>
+        <span>Within ±2 °C on <b class="${hr>=.8?'good':hr>=.6?'meh':'bad'}">${pct(hr)}</b> of predictions</span>
+        ${val.council_win_rate!=null?`<span>Closer than naive on <b>${pct(val.council_win_rate)}</b> of predictions</span>`:""}
+      </div>
+      <div class="kv" style="margin-top:8px"><span class="${beatsAll?'good':'bad'}">${beatsAll?'✓ Council beats every reference forecast — the apparatus earns its verdict.':'⚠ Council does not beat every reference here.'}</span></div>
+      <div class="kv" style="margin-top:6px"><span class="pill">Weights trained on older history, then tested on held-out days against the standard reference forecasts (naive, persistence, climatology). Earned, not asserted.</span></div>
+    </div>`;
+  }
+
+  $("#out").innerHTML = h;
+  $("#foot").innerHTML = `Provenance: every figure came from a live API call (${d.requests_made} sandboxed requests). No values are model-generated.`;
+}
+</script>
+</body>
+</html>
