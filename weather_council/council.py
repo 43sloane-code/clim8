@@ -1070,12 +1070,13 @@ class Council:
             current = self.sources.fetch_current(place)
         except Exception:
             current = {}
-        # Hong Kong anchors on the HKO settlement record, so its live "now"
-        # reading must come from the HKO instrument too — not an Open-Meteo grid
-        # cell that can sit ~2 °C off the Observatory. Temperature (and humidity,
-        # which HKO also reports at the HQ) are overridden from the live rhrread
-        # feed; wind/pressure stay from the grid and the temperature's source is
-        # surfaced so the provenance is never silently mixed.
+        # A settlement-anchored city's live "now" must come from the settlement
+        # instrument itself, not an Open-Meteo grid cell that can sit ~2 °C away.
+        # Hong Kong overrides temperature (and humidity, which HKO reports at the
+        # HQ) from the live HKO feed; London overrides temperature from the live
+        # EGLC METAR (the airport gauge the market resolves on). Wind/pressure
+        # stay from the grid and the temperature's source is surfaced so the
+        # provenance is never silently mixed.
         if truth_source.get("data_source") == "hko_opendata":
             try:
                 live = self.sources.hko_current()
@@ -1086,7 +1087,20 @@ class Council:
                 current["temperature_2m"] = live["temperature_2m"]
                 if live.get("relative_humidity_2m") is not None:
                     current["relative_humidity_2m"] = live["relative_humidity_2m"]
-                current["temperature_source"] = "Hong Kong Observatory (live rhrread)"
+                current["temperature_source"] = (
+                    live.get("temperature_source")
+                    or "Hong Kong Observatory (live rhrread)")
+                current["temperature_record_time"] = live.get("record_time")
+        elif truth_source.get("data_source") == "iem_metar":
+            try:
+                live = self.sources.eglc_current()
+            except Exception:
+                live = None
+            if live and live.get("temperature_2m") is not None:
+                current = dict(current)
+                current["temperature_2m"] = live["temperature_2m"]
+                current["temperature_source"] = (
+                    "London City Airport EGLC (live IEM METAR, whole-degree)")
                 current["temperature_record_time"] = live.get("record_time")
         recent = [(d, observed[d][0], observed[d][1])
                   for d in sorted(observed)[-RECENT_OBS_DAYS:]]

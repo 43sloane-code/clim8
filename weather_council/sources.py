@@ -54,6 +54,15 @@ HKO_MATCH_RADIUS_KM = 15.0       # how close a station must sit to count as HKO
 # Open-Meteo grid-cell proxy that can sit ~2 °C away. Keyless JSON, whole-degree.
 HKO_RHRREAD_URL = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php"
 HKO_RHRREAD_PLACE = "Hong Kong Observatory"   # the station label inside rhrread
+# Finer live feed: HKO's 1-minute mean air-temperature CSV reports the SAME
+# Observatory instrument to 0.1 °C at a ~1-minute cadence (rhrread above only
+# publishes whole degrees, so it reads e.g. 28 where the gauge is 28.4). Used to
+# give the live "now" reading tenths precision and minute-level freshness; falls
+# back to the whole-degree rhrread value when the CSV is unavailable. Same
+# already-allowlisted host. Header row, then "YYYYMMDDHHMM,<station>,<tempC>".
+HKO_1MIN_TEMP_URL = ("https://data.weather.gov.hk/weatherAPI/hko_data/"
+                     "regional-weather/latest_1min_temperature.csv")
+HKO_1MIN_PLACE = "HK Observatory"   # the Observatory's label inside the 1-min CSV
 
 # Plausibility band: any temperature outside this is treated as corrupt and
 # dropped, so a bad upstream value can never enter a verdict.
@@ -217,6 +226,29 @@ def _parse_hko_rhrread(data: dict) -> dict | None:
             break
     return {"temperature_2m": temp_c, "relative_humidity_2m": rh,
             "record_time": temp_block.get("recordTime")}
+
+
+def _parse_hko_1min_temp(text: str) -> dict | None:
+    """Pull the HK Observatory HQ row from HKO's 1-minute mean temperature CSV
+    (header: 'Date time,Automatic Weather Station,Air Temperature(degree Celsius)';
+    e.g. '202606072330,HK Observatory,28.4'). Returns {temperature_2m,
+    record_time} at 0.1 °C, or None when the Observatory row is absent or its
+    value is implausible — the caller then keeps the whole-degree rhrread value
+    rather than inventing one. record_time is the CSV's own YYYYMMDDHHMM stamp as
+    a +08:00 ISO string (HKO local time)."""
+    for line in (text or "").splitlines()[1:]:        # skip the header row
+        p = [c.strip() for c in line.split(",")]
+        if len(p) < 3 or p[1] != HKO_1MIN_PLACE:
+            continue
+        temp = _clean_temp_cell(p[2])
+        if temp is None:
+            return None
+        ts, record_time = p[0], None
+        if len(ts) == 12 and ts.isdigit():
+            record_time = (f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]}T"
+                           f"{ts[8:10]}:{ts[10:12]}:00+08:00")
+        return {"temperature_2m": temp, "record_time": record_time}
+    return None
 
 
 def _round_half_up(x: float) -> int:
@@ -599,7 +631,25 @@ class Sources:
                 HKO_RHRREAD_URL, {"dataType": "rhrread", "lang": "en"})
         except Exception:
             return None
-        return _parse_hko_rhrread(data)
+        parsed = _parse_hko_rhrread(data)
+        if parsed is None:
+            return None
+        parsed["temperature_source"] = (
+            "Hong Kong Observatory (live rhrread, whole-degree)")
+        # Prefer the finer 1-minute 0.1 °C reading from the SAME Observatory gauge
+        # (rhrread rounds to whole degrees). Humidity stays from rhrread — the
+        # 1-minute feed is temperature-only. One extra request to the same
+        # allowlisted host; on any failure we silently keep the whole-degree value.
+        try:
+            fine = _parse_hko_1min_temp(self.http.get_text(HKO_1MIN_TEMP_URL))
+        except Exception:
+            fine = None
+        if fine is not None:
+            parsed["temperature_2m"] = fine["temperature_2m"]
+            parsed["record_time"] = fine.get("record_time") or parsed.get("record_time")
+            parsed["temperature_source"] = (
+                "Hong Kong Observatory (live 1-minute mean, 0.1°C)")
+        return parsed
 
     def is_london_eglc(self, station: Station) -> bool:
         """True iff this station is London City Airport (EGLC) — the airport the
@@ -661,6 +711,32 @@ class Sources:
             obs.append((ts, c))
         obs.sort()
         return obs
+
+    def eglc_current(self) -> dict | None:
+        """Live current air temperature at London City Airport (EGLC) — the most
+        recent raw IEM ASOS METAR, i.e. the settlement sensor's own latest
+        reading, so a London verdict's 'now' is the airport gauge the market
+        resolves on rather than an Open-Meteo grid-cell proxy. Returns
+        {temperature_2m, record_time} or None on any failure (caller then keeps
+        the grid 'current'). METAR air temperature is whole-degree °C and the
+        routine cadence is ~30 min (plus SPECIs), so this updates each time EGLC
+        reports. The window end is a day ahead because the IEM archive treats the
+        end date as exclusive — without it the feed cuts off before today."""
+        today = dt.date.today()
+        try:
+            obs = self.fetch_metar_observations(
+                "EGLC", today - dt.timedelta(days=1),
+                today + dt.timedelta(days=1), "Europe/London")
+        except Exception:
+            return None
+        if not obs:
+            return None
+        ts, c = obs[-1]                              # most recent observation
+        temp = _clean_temp(c)
+        if temp is None:
+            return None
+        record_time = ts.replace(" ", "T", 1) if " " in ts else ts
+        return {"temperature_2m": temp, "record_time": record_time}
 
     def fetch_metar_daily(self, icao: str, start: dt.date, end: dt.date,
                           timezone: str) -> dict:
