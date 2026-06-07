@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Pre-commit regression gate: refuse the commit if the network-free unit suite
+# or any module known-answer self-test fails. Local and stdlib-only — no remote
+# and no CI service required. The suite makes zero network calls, so the hook is
+# deterministic and offline-safe.
+#
+# Bypass deliberately (e.g. a docs-only WIP commit) with: git commit --no-verify
+#
+# Tracked at hooks/pre-commit; activated by copying into .git/hooks via
+# `make install-hooks` (tools/install_hooks.sh). Re-run that after cloning.
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+echo "pre-commit: running test gate…"
+if command -v make >/dev/null 2>&1; then
+	make --no-print-directory check
+else
+	# Fallback if make is unavailable: run the same gate by hand.
+	PYTHONPATH=. python3 -m unittest discover -s tests
+	for m in scoring timescale loop quantum_kernel calibration; do
+		echo "--- self-test: weather_council.$m ---"
+		python3 -m weather_council."$m"
+	done
+fi
+echo "pre-commit: all green — proceeding with commit."
