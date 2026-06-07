@@ -39,6 +39,7 @@ import json
 import statistics
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -51,7 +52,11 @@ from weather_council.edge import report_lines as edge_report_lines  # noqa: E402
 from weather_council.edge import score_snapshots  # noqa: E402
 from weather_council.scoring import crps_sample, interval_coverage  # noqa: E402
 from weather_council.storage import (fetch_settled_snapshots,  # noqa: E402
-                                     settle_market_snapshots)
+                                     log_market_snapshot, settle_market_snapshots)
+# The REAL live model-vs-market comparison path. Reused verbatim (not
+# reimplemented) so the bucket probabilities the health check logs are byte-for-byte
+# what a live verdict would log — the only way C7's settled grading stays honest.
+from run import _build_comparison                       # noqa: E402
 
 CRPS_MIN = 10               # residuals needed before a predictive CRPS is trusted
 
@@ -248,6 +253,47 @@ def _city_convergence(council, fp, target, votes, observed, c7_validated):
     }
 
 
+def _city_market_snapshot(council, place, fp, target, votes, observed, truth):
+    """Recommend-only model-vs-market: place the council's bucket distribution
+    beside the live Polymarket market for this city/day via the SAME
+    run._build_comparison path a live verdict uses, then persist the snapshot so
+    the C7 realized-outcome scorer can grade it once the day settles. This is the
+    only thing that GROWS C7's settled set day over day — without it the edge
+    verdict reads "accumulating forward" forever.
+
+    Budget-safe by construction: it reuses the votes/observed already fetched and
+    derives high/included/weights/validation from the council's OWN pure
+    _blend/_validate (no extra council fetch). The only new requests are the
+    read-only Polymarket fetch (+ a Meteostat offset probe for a sub-degree
+    market). Measured cost on the tightest city (HK) is ~2 requests, far under the
+    per-city budget.
+
+    The minimal Verdict-shim carries exactly the fields _build_comparison,
+    applied_bias_correction and log_market_snapshot read — and crucially the
+    LOGGED bucket probabilities are computed from residuals+market alone, so they
+    are identical to a live verdict's (settlement is left None only because it
+    feeds a provenance *annotation*, never the probabilities). Returns
+    (comparison, note): a VerdictMarketComparison when a market matched and the
+    grain is supported (and the snapshot was logged), else `note` explains why it
+    was withheld — e.g. HK's sub-degree Observatory settlement — or None when no
+    market matched. NEVER sizes a position, prices an order, or moves funds."""
+    high, inc_h, _sh, wts_h = council._blend(votes, "high")
+    low, inc_l, _sl, wts_l = council._blend(votes, "low")
+    validation = council._validate(votes, observed)
+    shim = SimpleNamespace(
+        high=round(high, 1), low=round(low, 1),
+        included_high=inc_h, included_low=inc_l,
+        weights_high=wts_h, weights_low=wts_l,
+        votes=votes, validation=validation,
+        settlement=None, truth_source=truth,
+        place=fp, target=target.isoformat(),
+    )
+    comparison, note = _build_comparison(council.sources, shim, place, target)
+    if comparison is not None:
+        log_market_snapshot(shim, comparison)          # recommend-only ledger
+    return comparison, note
+
+
 def _diagnose_no_holdout(votes, observed):
     """When a city scores n=0 held-out days, say WHY — from data already fetched,
     so an opaque blank line becomes an actionable signal. Distinguishes a
@@ -312,11 +358,16 @@ def _city_votes(city, target):
     """Resolve truth + collect each member's votes for one city. Uses a FRESH
     Council (and thus a fresh sandbox request budget) per city, since one client
     across the whole basket would exceed MAX_REQUESTS_PER_RUN. Returns
-    (council, fp, observed, votes, freshness_dict, requests_made) or raises.
+    (council, place, fp, observed, votes, freshness_dict, truth_source) or raises.
 
-    `council` and `fp` are returned so the convergence layer can call the
-    council's OWN blend/naive/validate/records/_convergence methods on the same
-    fetched data — guaranteeing the health-check tally matches a live verdict."""
+    `council`, `place`, `fp` and the full `truth_source` are returned so two
+    recommend-only layers can run on this SAME fetched data with no extra council
+    fetch: (1) the convergence layer calls the council's OWN
+    blend/naive/validate/records/_convergence methods; (2) the model-vs-market
+    snapshot builds a minimal Verdict-shim and drives run._build_comparison. Both
+    therefore match exactly what a live verdict reports. `place` is the geocoded
+    city (what match_market / measure_settlement_offset key on); `fp` is the
+    forecast/anchor point (what the verdict's own `.place` is)."""
     council = Council()
     place = council.sources.geocode(city)
     fp, observed, w_start, w_end, truth = council._resolve_truth(
@@ -329,7 +380,7 @@ def _city_votes(city, target):
         "season_gap_days": truth.get("season_gap_days"),
         "sample_days": truth.get("sample_days"),
     }
-    return council, fp, observed, votes, fresh, council.sources.http.requests_made
+    return council, place, fp, observed, votes, fresh, truth
 
 
 VARIANTS = [("mean", 1), ("median", 1), ("mean", 2), ("median", 2)]
@@ -349,6 +400,9 @@ def main() -> int:
     disp_pairs_all: list[tuple[float, float]] = []   # (|error|, dispersion), current config
     freshness = {}
     convergence_by_city = {}                          # city -> {"high":Conv,"low":Conv}
+    market_div = {}                                    # city -> VerdictMarketComparison
+    market_withheld = {}                              # city -> reason a comparison was withheld
+    snapshots_logged = 0                              # C7 ledger rows written this run
     total_requests = 0
 
     # Whether C7 realized-outcome calibration has earned a validated edge yet
@@ -361,8 +415,8 @@ def main() -> int:
 
     for city in BASKET:
         try:
-            council, fp, observed, votes, fresh, reqs = _city_votes(city, target)
-            total_requests += reqs
+            (council, place, fp, observed, votes,
+             fresh, truth) = _city_votes(city, target)
         except Exception as exc:                       # one city must not kill the run
             per_city[city] = {"error": str(exc)}
             continue
@@ -402,6 +456,23 @@ def main() -> int:
                 convergence_by_city[city] = conv
         except Exception:
             pass                                        # never let it abort the run
+
+        # Recommend-only model-vs-market: log today's council-vs-Polymarket
+        # snapshot (so C7's settled set grows) and capture the live divergence.
+        try:
+            comparison, note = _city_market_snapshot(
+                council, place, fp, target, votes, observed, truth)
+            if comparison is not None:
+                market_div[city] = comparison
+                snapshots_logged += 1
+            elif note:
+                market_withheld[city] = note
+        except Exception:
+            pass                                        # never let it abort the run
+
+        # Per-city request total AFTER both recommend-only layers, so the budget
+        # line reflects the real sandbox usage (must stay < MAX_REQUESTS_PER_RUN).
+        total_requests += council.sources.http.requests_made
 
     # Basket means per variant.
     basket = {}
@@ -656,6 +727,45 @@ def main() -> int:
         if not contested and not nudges:
             lines.append("  all evaluated headlines are affirmed within the convergence band; "
                          "no nudges or contests today.")
+    lines.append("")
+
+    # Model vs market (recommend-only): where does the council's bucket
+    # distribution disagree with the LIVE Polymarket implied probabilities today?
+    # This is NOT an edge claim — disagreement only becomes a validated edge once
+    # C7 (below) grades enough SETTLED days and the council beats the market on
+    # both proper scores with a CI excluding zero. Each comparison here is also
+    # LOGGED so that settled set can grow. Withheld cities (e.g. HK's sub-degree
+    # Observatory settlement) are named with the reason rather than fabricated.
+    lines.append("MODEL vs MARKET (live Polymarket implied probabilities — recommend-only, NOT an edge)")
+    lines.append(f"  logged {snapshots_logged} snapshot(s) to the C7 ledger this run "
+                 f"(they settle & are graded below once their day passes).")
+    if market_div:
+        disagreements = []
+        for city, cmp in sorted(market_div.items()):
+            mm, km = cmp.model_modal, cmp.market_modal
+            gap = cmp.largest_gap
+            gap_s = f"{gap*100:.0f}pp" if gap is not None else " - "
+            flag = "  ⚠ modal disagreement" if (mm and km and mm != km) else ""
+            bc = cmp.bias_correction_c
+            bc_s = f", bias-corr {bc:+.2f}°C" if bc is not None else ""
+            lines.append(f"  {city:12} model modal {str(mm):>5} vs market modal "
+                         f"{str(km):>5}  largest-gap {gap_s:>5}{bc_s}{flag}")
+            if flag:
+                disagreements.append(city)
+        if disagreements:
+            lines.append("  NOTE (human review): the council and the market disagree on the "
+                         "MOST-LIKELY bucket for " + ", ".join(disagreements) + ". This is a "
+                         "candidate signal, not a verified edge — see C7. Do NOT trade on it.")
+        else:
+            lines.append("  council and market agree on the modal bucket for every matched city "
+                         "today; divergences are within a bucket.")
+    else:
+        lines.append("  no city produced a supported model-vs-market comparison today.")
+    if market_withheld:
+        lines.append("  withheld (comparison would require fabricating an unverified bucket mapping):")
+        for city, reason in sorted(market_withheld.items()):
+            short = reason.split(". ")[0]
+            lines.append(f"    - {city}: {short}.")
     lines.append("")
 
     # C7 — realized-outcome edge (council vs market, settled days). Read-only and
