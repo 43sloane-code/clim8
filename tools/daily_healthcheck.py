@@ -14,8 +14,9 @@ Each run:
      no future leakage), exactly the evaluation the live verdict uses.
   2. Compares the four weighting/bias variants (bias mean|median × 1/MAE^1|^2)
      so the committed choice (mean bias, 1/MAE^2) is re-justified — or challenged
-     — on today's data. A variant only "wins" if it beats current on the basket
-     by MIN_IMPROVEMENT °C, so noise is not mistaken for signal.
+     — on today's data. A challenger is surfaced only if it beats current on the
+     basket by ≥ MIN_IMPROVEMENT °C AND a seeded paired bootstrap over the
+     per-city deltas puts the 90% CI above 0 — so noise is not mistaken for signal.
   3. Sweeps OUTLIER_FLOOR_C (the member-rejection floor) on the outlier-screened
      blend, re-justifying the committed 4.0 °C against fresh data under the same
      MIN_IMPROVEMENT noise floor.
@@ -41,6 +42,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import random
 import statistics
 import sys
 from pathlib import Path
@@ -76,6 +78,16 @@ WINDOW = 120                 # days of history per city (bounded by archive lag)
 WARMUP = MIN_SAMPLES         # walk-forward warmup = the live validation warmup
 MIN_IMPROVEMENT = 0.03       # °C a challenger must beat current by on the basket
 REGRESSION_TOL = 0.05        # °C of basket-MAE drift vs baseline worth flagging
+
+# A challenger must clear TWO bars before it is ever surfaced as CONSIDER:
+#  (1) practical: beat current by ≥ MIN_IMPROVEMENT °C basket MAE, AND
+#  (2) statistical: a seeded paired bootstrap over the per-city MAE deltas must
+#      put the 90% CI entirely above 0 — i.e. the win is not an artefact of which
+#      cities happened to be in season. This replaces the old bare fixed-threshold
+#      rule, where "beats by 0.03 °C" was asserted, never tested.
+BOOT_ITERS = 2000            # bootstrap resamples (seeded → reproducible verdict)
+BOOT_CI = 0.90               # central CI width on the mean per-city MAE delta
+BOOT_SEED = 20260607         # fixed seed: same data → same recommendation
 
 # The committed live configuration, re-derived here so the report names what it
 # is actually checking rather than hard-coding a guess.
@@ -122,12 +134,19 @@ def _walk_forward(votes, observed, bias_method, power):
     *distribution* (the bucket probabilities it sells), not just its point, still
     beats the naive baseline and stays calibrated.
 
-    Returns (mae, hit_rate, n, crps_skill_vs_climatology, coverage_80)."""
+    Also returns the ACCURACY/PRECISION decomposition of the point error: the
+    mean SIGNED error (bias — are the darts centred on the bullseye?) and the
+    spread σ of those signed errors (precision — are the darts tightly grouped?).
+    These are the two axes MAE conflates; RMSE² = bias² + σ². A city can be
+    off-centre, scattered, or both, and you fix each differently.
+
+    Returns (mae, hit_rate, n, crps_skill_vs_climatology, coverage_80, bias, σ)."""
     dates = sorted(observed)
     test = dates[WARMUP:]
     if len(test) < 5:
-        return None, None, 0, None, None
+        return None, None, 0, None, None, None, None
     errs, hits, n = [], 0, 0
+    signed: list[float] = []                 # signed errors (obs − pred): accuracy + precision
     resid = {"high": [], "low": []}          # signed council residuals, in order
     clim_resid = {"high": [], "low": []}     # signed climatology residuals, in order
     crps_c_sum = crps_clim_sum = 0.0
@@ -148,6 +167,7 @@ def _walk_forward(votes, observed, bias_method, power):
             hits += 1 if e <= 2.0 else 0
             n += 1
             r = obs[idx] - pred
+            signed.append(r)                 # accuracy=mean(signed); precision=pstdev(signed)
             rc = obs[idx] - clim[attr]
             pr, pc = resid[attr], clim_resid[attr]
             if len(pr) >= CRPS_MIN and len(pc) >= CRPS_MIN:
@@ -162,8 +182,10 @@ def _walk_forward(votes, observed, bias_method, power):
     skill = (1.0 - crps_c_sum / crps_clim_sum
              if crps_count and crps_clim_sum > 0 else None)
     cover = (cover_hits / cover_count) if cover_count else None
+    bias = statistics.mean(signed) if signed else None
+    spread = statistics.pstdev(signed) if len(signed) >= 2 else None
     return (statistics.mean(errs) if errs else None,
-            (hits / n) if n else None, n, skill, cover)
+            (hits / n) if n else None, n, skill, cover, bias, spread)
 
 
 def _screened_blend_on_date(votes, attr, day, train, bias_method, power, floor):
@@ -393,6 +415,56 @@ def _city_votes(city, target):
 VARIANTS = [("mean", 1), ("median", 1), ("mean", 2), ("median", 2)]
 
 
+def _accuracy_precision(bias, spread):
+    """Decompose a city's point error into its two dartboard axes — accuracy
+    (bias: are the darts centred?) and precision (σ: are they tightly grouped?).
+    Returns (rmse, bias_fraction, diagnosis), where bias_fraction = bias²/RMSE²
+    is the share of squared error that is systematic. The accuracy/precision call
+    is made on which axis DOMINATES (bias_fraction ≷ 0.5), a relative split — no
+    arbitrary °C threshold, so it doesn't reintroduce a magic number."""
+    rmse = (bias * bias + spread * spread) ** 0.5
+    bfrac = (bias * bias) / (rmse * rmse) if rmse > 0 else 0.0
+    if bfrac >= 0.5:
+        diag = (f"accuracy-limited — {bfrac*100:.0f}% of the error is systematic "
+                f"bias (reach for the bias term, not the spread)")
+    else:
+        diag = (f"precision-limited — {(1-bfrac)*100:.0f}% of the error is scatter "
+                f"(reach for the dispersion model, not the bias)")
+    return rmse, bfrac, diag
+
+
+def _paired_city_deltas(cur_by_city, chal_by_city):
+    """Per-city MAE deltas (current − challenger; >0 ⇒ challenger better) over the
+    cities present for BOTH configs, so the comparison is apples-to-apples on the
+    same basket and never credits a challenger for an easier city set."""
+    return [cur_by_city[c] - chal_by_city[c]
+            for c in cur_by_city if c in chal_by_city]
+
+
+def _paired_bootstrap_ci(deltas, iters=BOOT_ITERS, ci=BOOT_CI, seed=BOOT_SEED):
+    """Seeded paired bootstrap CI for the MEAN of per-city MAE deltas. Resamples
+    cities with replacement so the interval reflects how much a basket-mean
+    'improvement' rides on which cities happened to be in season today. Returns
+    (point, lo, hi, n_pairs); lo/hi are None when a single pair can't be bounded.
+    Deterministic — identical deltas yield an identical CI (so the same data
+    always produces the same recommendation)."""
+    n = len(deltas)
+    if n == 0:
+        return None, None, None, 0
+    point = statistics.mean(deltas)
+    if n == 1:
+        return point, None, None, 1
+    rng = random.Random(seed)
+    means = []
+    for _ in range(iters):
+        means.append(statistics.mean(deltas[rng.randrange(n)] for _ in range(n)))
+    means.sort()
+    lo_q = (1.0 - ci) / 2.0
+    lo = means[int(lo_q * (iters - 1))]
+    hi = means[int((1.0 - lo_q) * (iters - 1))]
+    return point, lo, hi, n
+
+
 def main() -> int:
     today = dt.date.today()
     target = today
@@ -403,7 +475,7 @@ def main() -> int:
     basket_hit = {v: [] for v in VARIANTS}
     basket_skill = {v: [] for v in VARIANTS}
     basket_cover = {v: [] for v in VARIANTS}
-    basket_floor = {f: [] for f in OUTLIER_FLOORS}   # outlier-floor -> [per-city MAE]
+    basket_floor = {f: {} for f in OUTLIER_FLOORS}   # outlier-floor -> {city: per-city MAE}
     disp_pairs_all: list[tuple[float, float]] = []   # (|error|, dispersion), current config
     freshness = {}
     convergence_by_city = {}                          # city -> {"high":Conv,"low":Conv}
@@ -431,8 +503,9 @@ def main() -> int:
         freshness[city] = fresh
         res = {}
         for variant in VARIANTS:
-            mae, hit, n, skill, cover = _walk_forward(votes, observed, *variant)
-            res[variant] = (mae, hit, n, skill, cover)
+            mae, hit, n, skill, cover, bias, spread = _walk_forward(
+                votes, observed, *variant)
+            res[variant] = (mae, hit, n, skill, cover, bias, spread)
             if mae is not None:
                 basket_acc[variant].append(mae)
             if hit is not None:
@@ -451,7 +524,7 @@ def main() -> int:
             fmae, _fhit, _fn, dpairs = _walk_forward_screened(
                 votes, observed, CURRENT_BIAS, CURRENT_POWER, fl)
             if fmae is not None:
-                basket_floor[fl].append(fmae)
+                basket_floor[fl][city] = fmae
             if fl == CURRENT_FLOOR:
                 disp_pairs_all.extend(dpairs)
 
@@ -499,6 +572,20 @@ def main() -> int:
         # line reflects the real sandbox usage (must stay < MAX_REQUESTS_PER_RUN).
         total_requests += council.sources.http.requests_made
 
+    # Per-city MAE keyed by city for each variant, so a challenger can be tested
+    # against current on the SAME cities with a paired bootstrap — not a bare
+    # difference of basket means. Cities absent for either config are dropped from
+    # the pairing, never imputed.
+    variant_mae_by_city = {v: {} for v in VARIANTS}
+    for city in BASKET:
+        r = per_city.get(city, {})
+        if "error" in r:
+            continue
+        for v in VARIANTS:
+            tup = r.get(v)
+            if tup and tup[0] is not None:
+                variant_mae_by_city[v][city] = tup[0]
+
     # Basket means per variant.
     basket = {}
     for variant in VARIANTS:
@@ -535,18 +622,25 @@ def main() -> int:
     lines.append("")
 
     lines.append("PER-CITY held-out MAE (current variant) + truth freshness")
+    lines.append("  decomposition: accuracy(bias)=mean signed error (obs−pred; + ⇒ obs warmer, "
+                 "model runs cold); precision(σ)=spread of those errors. RMSE²=bias²+σ².")
     for city in BASKET:
         r = per_city.get(city, {})
         if "error" in r:
             lines.append(f"  {city:12} ERROR: {r['error']}")
             continue
-        mae, hit, n = r.get(cur, (None, None, 0, None, None))[:3]
+        tup = r.get(cur, (None, None, 0, None, None, None, None))
+        mae, hit, n, bias, spread = tup[0], tup[1], tup[2], tup[5], tup[6]
         f = freshness.get(city, {})
         mae_s = f"{mae:.3f}" if mae is not None else "  -  "
         hit_s = f"{hit*100:.0f}%" if hit is not None else " - "
         lines.append(f"  {city:12} MAE {mae_s}  hit {hit_s:>4}  n={n:3} | "
                      f"truth={f.get('kind','?')} end={f.get('window_end','?')} "
                      f"season_gap={f.get('season_gap_days','?')}d")
+        if bias is not None and spread is not None:
+            rmse, _bfrac, diag = _accuracy_precision(bias, spread)
+            lines.append(f"               └─ accuracy(bias) {bias:+.2f}°C · "
+                         f"precision(σ) {spread:.2f}°C · RMSE {rmse:.2f}°C → {diag}")
         if n == 0 and city in no_holdout_reason:
             lines.append(f"               └─ n=0 because: {no_holdout_reason[city]}")
     lines.append("")
@@ -587,7 +681,10 @@ def main() -> int:
                          "should consider widening the predictive spread (do NOT auto-apply).")
     lines.append("")
 
-    # Recommendation on the variant.
+    # Recommendation on the variant. A challenger must clear BOTH a practical
+    # floor (≥ MIN_IMPROVEMENT °C) AND a statistical bar (seeded paired bootstrap
+    # over the per-city deltas, 90% CI above 0) — the bare basket-mean difference
+    # alone is not a test and is biased downward by picking the best of four.
     lines.append("RECOMMENDATION (constants — human review required)")
     if best is None or cur_mae is None:
         lines.append("  insufficient data to evaluate variants today.")
@@ -595,20 +692,33 @@ def main() -> int:
         lines.append(f"  HOLD. Current (bias {cur[0]}, 1/MAE^{cur[1]}) is still best on "
                      f"the basket (MAE {cur_mae:.4f}). No change recommended.")
     else:
-        delta = cur_mae - basket[best][0]
-        if delta >= MIN_IMPROVEMENT:
-            lines.append(f"  CONSIDER: bias {best[0]}, 1/MAE^{best[1]} beats current by "
-                         f"{delta:.4f} °C basket MAE ({basket[best][0]:.4f} vs "
-                         f"{cur_mae:.4f}) — exceeds the {MIN_IMPROVEMENT} °C floor. "
-                         f"Worth a human re-evaluation; do NOT auto-apply.")
+        deltas = _paired_city_deltas(variant_mae_by_city[cur], variant_mae_by_city[best])
+        point, lo, hi, npair = _paired_bootstrap_ci(deltas)
+        if point is None:
+            lines.append("  HOLD. No city is comparable on both current and the best "
+                         "challenger today; cannot test. Keep current.")
         else:
-            lines.append(f"  HOLD. Best challenger (bias {best[0]}, 1/MAE^{best[1]}) "
-                         f"leads by only {delta:.4f} °C (< {MIN_IMPROVEMENT} floor) — "
-                         f"noise, not signal. Keep current.")
+            ci_s = (f"90% CI [{lo:+.4f}, {hi:+.4f}]" if lo is not None
+                    else "CI n/a (single paired city)")
+            significant = lo is not None and lo > 0
+            if point >= MIN_IMPROVEMENT and significant:
+                lines.append(f"  CONSIDER: bias {best[0]}, 1/MAE^{best[1]} beats current by "
+                             f"{point:.4f} °C basket MAE over {npair} paired cities "
+                             f"({ci_s}, excludes 0) — exceeds the {MIN_IMPROVEMENT} °C floor "
+                             f"AND is significant. Worth a human re-evaluation; do NOT "
+                             f"auto-apply.")
+            elif point >= MIN_IMPROVEMENT:
+                lines.append(f"  HOLD. Best challenger (bias {best[0]}, 1/MAE^{best[1]}) "
+                             f"leads by {point:.4f} °C but {ci_s} includes 0 over {npair} "
+                             f"paired cities — not distinguishable from noise. Keep current.")
+            else:
+                lines.append(f"  HOLD. Best challenger (bias {best[0]}, 1/MAE^{best[1]}) "
+                             f"leads by only {point:.4f} °C (< {MIN_IMPROVEMENT} floor) — "
+                             f"noise, not signal. Keep current.")
     lines.append("")
 
     # OUTLIER_FLOOR_C sweep — re-justify the member-rejection floor on fresh data.
-    floor_mae = {f: (statistics.mean(v) if v else None) for f, v in basket_floor.items()}
+    floor_mae = {f: (statistics.mean(v.values()) if v else None) for f, v in basket_floor.items()}
     lines.append("OUTLIER FLOOR SWEEP (basket-averaged held-out MAE, screened blend)")
     ranked_floors = sorted((f for f in OUTLIER_FLOORS if floor_mae[f] is not None),
                            key=lambda f: floor_mae[f])
@@ -626,16 +736,31 @@ def main() -> int:
         lines.append(f"  HOLD. Current floor {CURRENT_FLOOR:.1f} °C is still best on the "
                      f"basket (MAE {cur_floor_mae:.4f}). No change recommended.")
     else:
-        fdelta = cur_floor_mae - floor_mae[best_floor]
-        if fdelta >= MIN_IMPROVEMENT:
-            lines.append(f"  CONSIDER: floor {best_floor:.1f} °C beats current by "
-                         f"{fdelta:.4f} °C basket MAE ({floor_mae[best_floor]:.4f} vs "
-                         f"{cur_floor_mae:.4f}) — exceeds the {MIN_IMPROVEMENT} °C floor. "
-                         f"Worth a human re-evaluation of OUTLIER_FLOOR_C; do NOT auto-apply.")
+        fdeltas = _paired_city_deltas(basket_floor[CURRENT_FLOOR], basket_floor[best_floor])
+        fpoint, flo, fhi, fnp = _paired_bootstrap_ci(fdeltas)
+        if fpoint is None:
+            lines.append(f"  HOLD. No city is comparable on both the current floor and "
+                         f"floor {best_floor:.1f} °C today; cannot test. Keep "
+                         f"OUTLIER_FLOOR_C at {CURRENT_FLOOR:.1f} °C.")
         else:
-            lines.append(f"  HOLD. Best floor {best_floor:.1f} °C leads by only "
-                         f"{fdelta:.4f} °C (< {MIN_IMPROVEMENT} floor) — noise, not signal. "
-                         f"Keep OUTLIER_FLOOR_C at {CURRENT_FLOOR:.1f} °C.")
+            fci_s = (f"90% CI [{flo:+.4f}, {fhi:+.4f}]" if flo is not None
+                     else "CI n/a (single paired city)")
+            fsig = flo is not None and flo > 0
+            if fpoint >= MIN_IMPROVEMENT and fsig:
+                lines.append(f"  CONSIDER: floor {best_floor:.1f} °C beats current by "
+                             f"{fpoint:.4f} °C basket MAE over {fnp} paired cities "
+                             f"({fci_s}, excludes 0) — exceeds the {MIN_IMPROVEMENT} °C floor "
+                             f"AND is significant. Worth a human re-evaluation of "
+                             f"OUTLIER_FLOOR_C; do NOT auto-apply.")
+            elif fpoint >= MIN_IMPROVEMENT:
+                lines.append(f"  HOLD. Floor {best_floor:.1f} °C leads by {fpoint:.4f} °C but "
+                             f"{fci_s} includes 0 over {fnp} paired cities — not "
+                             f"distinguishable from noise. Keep OUTLIER_FLOOR_C at "
+                             f"{CURRENT_FLOOR:.1f} °C.")
+            else:
+                lines.append(f"  HOLD. Best floor {best_floor:.1f} °C leads by only "
+                             f"{fpoint:.4f} °C (< {MIN_IMPROVEMENT} floor) — noise, not "
+                             f"signal. Keep OUTLIER_FLOOR_C at {CURRENT_FLOOR:.1f} °C.")
     lines.append("")
 
     # DISP-threshold validation — do the confidence tiers still discriminate?
