@@ -504,6 +504,17 @@ class Sources:
             modern = self.hko_truth_series(dt.date.today())
             if modern:
                 out = {**out, **modern}
+        # London City Airport (EGLC): the Meteostat "EGLC0" file is the Abbey Wood
+        # gauge ~17 km away and weeks-to-months stale, yet it carries the EGLC ICAO
+        # and is what the London market settles on by *name*. Overlay the modern
+        # IEM ASOS METAR record reconstructed from the airport's own sensor — the
+        # identical settlement-grade record run.py uses for its reference — so the
+        # council backtests against the same instrument the market resolves on.
+        # Recent METAR days win; older days keep the Meteostat value.
+        elif self.is_london_eglc(station):
+            modern = self.london_eglc_truth_series(dt.date.today())
+            if modern:
+                out = {**out, **modern}
         return out
 
     def _fetch_hko_dataset(self, data_type: str, years: list[int]) -> dict[str, float]:
@@ -589,6 +600,31 @@ class Sources:
         except Exception:
             return None
         return _parse_hko_rhrread(data)
+
+    def is_london_eglc(self, station: Station) -> bool:
+        """True iff this station is London City Airport (EGLC) — the airport the
+        London temperature market settles on. Recognised by ICAO alone (the
+        Meteostat 'EGLC0' Abbey Wood file carries this code), never a hardcoded
+        city/station table. This is the gate for overlaying the modern IEM ASOS
+        METAR record in place of that stale, distant bulk file."""
+        return (station.icao or "").upper() == "EGLC"
+
+    def london_eglc_truth_series(self, target: dt.date,
+                                 back_years: int = 2) -> DailySeries:
+        """Modern daily (high, low) at London City Airport (EGLC) reconstructed
+        from raw IEM ASOS METAR over the local calendar day — the same
+        settlement-grade airport sensor the London market resolves on, and the
+        identical record run.py uses for its settlement reference. Spans the last
+        `back_years` calendar years up to `target`; days with too few obs are
+        dropped by fetch_metar_daily and simply fall back to the Meteostat value.
+        One cached request. Returns {} on any failure so truth resolution never
+        aborts — the council then keeps the Meteostat base."""
+        start = dt.date(target.year - back_years, 1, 1)
+        try:
+            res = self.fetch_metar_daily("EGLC", start, target, "Europe/London")
+        except Exception:
+            return {}
+        return dict(res.get("daily", {}))
 
     def fetch_metar_daily(self, icao: str, start: dt.date, end: dt.date,
                           timezone: str) -> dict:

@@ -506,6 +506,175 @@ class TestStrictHKOAnchor(unittest.TestCase):
         self.assertNotEqual((truth.get("station") or {}).get("id"), "45007")
 
 
+class TestStrictEGLCAnchor(unittest.TestCase):
+    """London is pinned to London City Airport (EGLC) as a STRICT anchor — the
+    same rule as the Hong Kong Observatory. It is tried first, and no other
+    physical station (e.g. the nearer "London / Abbey Wood", which reads
+    differently) may substitute. If EGLC's feed is down, the verdict falls back to
+    the ERA5 grid — it must NOT silently re-anchor on Abbey Wood, which is what
+    made a London resolve flip between two stations across runs."""
+
+    def _place(self):
+        from weather_council.sources import Place
+        return Place("London, United Kingdom", "GB", 51.505, -0.055, "Europe/London")
+
+    def _stations(self):
+        from weather_council.sources import Station
+        # Abbey Wood listed FIRST and NEARER on purpose, to prove the strict skip
+        # keeps it out even though the reorder/distance would otherwise pick it.
+        abbey = Station(id="EGLC0", name="London / Abbey Wood", wmo=None,
+                        icao=None, latitude=51.487, longitude=0.114,
+                        elevation=None, distance_km=11.4)
+        eglc = Station(id="03779", name="London City Airport", wmo=None,
+                       icao="EGLC", latitude=51.505, longitude=0.055,
+                       elevation=None, distance_km=16.8)
+        return abbey, eglc
+
+    def _recent_series(self, base):
+        out = {}
+        today = dt.date.today()
+        for k in range(1, 81):
+            d = (today - dt.timedelta(days=k)).isoformat()
+            out[d] = (base, base - 4.0)
+        return out
+
+    def _council(self, eglc_series):
+        from weather_council.sources import Sources
+        from weather_council.council import Council
+        s = Sources()
+        abbey, eglc = self._stations()
+        s.nearest_stations = lambda place: [abbey, eglc]
+        s.is_hko_observatory = lambda st: False
+        abbey_series = self._recent_series(18.0)      # Abbey Wood noticeably different
+        s.fetch_station_daily = (
+            lambda st: dict(eglc_series) if st.icao == "EGLC"
+            else dict(abbey_series))
+        s.fetch_archive_series = lambda place, ws, we: self._recent_series(20.0)
+        return Council(s)
+
+    def test_strict_anchor_icao_only_for_london(self):
+        from weather_council.council import _strict_anchor_icao
+        from types import SimpleNamespace as NS
+        self.assertEqual(_strict_anchor_icao(NS(name="London")), "EGLC")
+        self.assertEqual(_strict_anchor_icao(NS(name="London, GB")), "EGLC")
+        self.assertIsNone(_strict_anchor_icao(NS(name="Paris")))
+
+    def test_anchors_on_eglc_even_when_abbey_listed_first(self):
+        c = self._council(self._recent_series(21.0))
+        target = dt.date.today() + dt.timedelta(days=1)
+        _fp, _obs, _ws, _we, truth = c._resolve_truth(self._place(), target, 60)
+        self.assertEqual(truth["kind"], "station")
+        self.assertEqual(truth["station"]["icao"], "EGLC")
+
+    def test_eglc_feed_down_falls_to_era5_never_substitute_station(self):
+        # EGLC daily comes back empty (feed hiccup). Strict anchor must skip Abbey
+        # Wood entirely and drop to the ERA5 grid — never a different station.
+        c = self._council({})
+        target = dt.date.today() + dt.timedelta(days=1)
+        _fp, _obs, _ws, _we, truth = c._resolve_truth(self._place(), target, 60)
+        self.assertEqual(truth["kind"], "era5_grid")
+        self.assertIsNone(truth["station"])
+
+
+class TestLondonEGLCMetarOverlay(unittest.TestCase):
+    """London City Airport's Meteostat 'EGLC0' file is the Abbey Wood gauge ~17 km
+    away and weeks/months stale. fetch_station_daily must overlay the modern IEM
+    ASOS METAR record (the same settlement-grade sensor run.py references and the
+    market resolves on) on top of the stale Meteostat base — recent METAR days
+    winning, older days kept — and _resolve_truth must label the provenance
+    honestly as iem_metar. This is the EGLC analogue of the HKO open-data overlay."""
+
+    def _station(self, icao):
+        from weather_council.sources import Station
+        return Station(id="EGLC0", name="London / Abbey Wood", wmo=None,
+                       icao=icao, latitude=51.487, longitude=0.114,
+                       elevation=None, distance_km=16.8)
+
+    def test_is_london_eglc_matches_by_icao_only(self):
+        from weather_council.sources import Sources
+        s = Sources()
+        self.assertTrue(s.is_london_eglc(self._station("EGLC")))
+        self.assertTrue(s.is_london_eglc(self._station("eglc")))   # case-insensitive
+        self.assertFalse(s.is_london_eglc(self._station("EGLL")))  # Heathrow, not us
+        self.assertFalse(s.is_london_eglc(self._station(None)))
+
+    def test_overlay_replaces_recent_days_keeps_old(self):
+        from types import SimpleNamespace
+        from weather_council.sources import Sources
+        s = Sources()
+        old_day, recent_day = "2024-01-01", "2026-05-01"
+        # Real Meteostat bulk CSV: date,tavg,tmin,tmax. Recent day reads a
+        # deliberately wrong (but plausible) 30/20 so we can prove the METAR
+        # overlay wins; an implausible value would be screened out instead.
+        csv = f"{old_day},3,1,5\n{recent_day},25,20,30\n"
+        s.http = SimpleNamespace(get_gzip_text=lambda url: csv)
+        s.is_hko_observatory = lambda st: False
+        # Fresh METAR for the recent day only; older day stays Meteostat.
+        s.london_eglc_truth_series = lambda target, back_years=2: {
+            recent_day: (14.0, 8.0)}
+        out = s.fetch_station_daily(self._station("EGLC"))   # real method, real overlay
+        self.assertEqual(out[old_day], (5.0, 1.0))     # old Meteostat day untouched
+        self.assertEqual(out[recent_day], (14.0, 8.0)) # recent day = METAR, not 99
+        # A non-EGLC station gets no overlay — the wrong 30/20 survives.
+        out2 = s.fetch_station_daily(self._station("EGLL"))
+        self.assertEqual(out2[recent_day], (30.0, 20.0))
+
+    def test_truth_source_labels_iem_metar(self):
+        from weather_council.sources import Sources, Place
+        from weather_council.council import Council
+        eglc = self._station("EGLC")
+        s = Sources()
+        s.nearest_stations = lambda place: [eglc]
+        s.is_hko_observatory = lambda st: False
+        recent = {}
+        today = dt.date.today()
+        for k in range(1, 81):
+            recent[(today - dt.timedelta(days=k)).isoformat()] = (14.0, 8.0)
+        s.fetch_station_daily = lambda st: dict(recent)
+        place = Place("London, United Kingdom", "GB", 51.505, -0.055, "Europe/London")
+        c = Council(s)
+        target = dt.date.today() + dt.timedelta(days=1)
+        _fp, _obs, _ws, _we, truth = c._resolve_truth(place, target, 60)
+        self.assertEqual(truth["kind"], "station")
+        self.assertEqual(truth["data_source"], "iem_metar")
+        self.assertEqual((truth["station"] or {}).get("icao"), "EGLC")
+
+
+class TestQuantumKernel(unittest.TestCase):
+    """The quantum-inspired fidelity kernel must be a *genuine* quantum kernel
+    (the squared overlap of product states), classically exact and stdlib-only —
+    never a hand-wavy 'quantum-flavoured' function. Its backtested edge is
+    measured elsewhere (tools/quantum_backtest.py); here we guard correctness."""
+
+    def test_self_test_passes(self):
+        from weather_council import quantum_kernel as qk
+        qk._self_test()                      # raises on any failure
+
+    def test_fidelity_equals_product_state_overlap_squared(self):
+        import math
+        from weather_council import quantum_kernel as qk
+        rng = random.Random(7)
+        for _ in range(50):
+            x = [rng.uniform(-3, 3) for _ in range(4)]
+            y = [rng.uniform(-3, 3) for _ in range(4)]
+            amp = 1.0
+            for tx, ty in zip(x, y):
+                amp *= (math.cos(tx / 2) * math.cos(ty / 2)
+                        + math.sin(tx / 2) * math.sin(ty / 2))
+            self.assertAlmostEqual(qk.fidelity_kernel(x, y), amp * amp, places=10)
+        # bounded in [0,1] and symmetric
+        self.assertTrue(0.0 <= qk.fidelity_kernel([0.2], [1.3]) <= 1.0)
+        self.assertAlmostEqual(qk.fidelity_kernel([0.2, 0.9], [1.3, -0.4]),
+                               qk.fidelity_kernel([1.3, -0.4], [0.2, 0.9]), places=12)
+
+    def test_kernel_ridge_solves_spd_system(self):
+        from weather_council import quantum_kernel as qk
+        A = [[4.0, 1.0], [1.0, 3.0]]
+        sol = qk._chol_solve(qk._cholesky(A), [1.0, 2.0])
+        self.assertAlmostEqual(A[0][0] * sol[0] + A[0][1] * sol[1], 1.0, places=9)
+        self.assertAlmostEqual(A[1][0] * sol[0] + A[1][1] * sol[1], 2.0, places=9)
+
+
 class TestRegimeConsensus(unittest.TestCase):
     """regime_consensus is a pure post-hoc summary of a finished Verdict: it
     classifies the regime from already-computed signals and measures whether the

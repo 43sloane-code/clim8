@@ -86,9 +86,17 @@ SEASON_MATCH_DAYS = 31
 # nearest reporting one — a user-pinned directive: the record the market actually
 # settles on. Keyed by case-insensitive city-name substring -> the anchor's ICAO.
 # London weather markets settle on London City Airport (EGLC), ~17 km east of the
-# nearest station (the central London Weather Centre), so we prefer EGLC and let
-# the Weather Centre fall through to a cross-reference.
+# nearest station (the central London Weather Centre), so we prefer EGLC.
 PINNED_ANCHOR_ICAO = {"london": "EGLC"}
+
+# ICAO-pinned cities whose anchor is STRICT — the same rule as the HKO anchor:
+# when the pinned airport's feed is stale/unavailable, the verdict must NOT
+# silently fall through to a *different* nearby station. Measured directly: two
+# resolves minutes apart flipped London between EGLC and "London / Abbey Wood" —
+# two physical sensors that read differently, making the verdict jump between
+# stations and read as model imprecision. So for these cities it is EGLC-or-honest
+# -ERA5-grid, never a substitute station. (See _resolve_truth.)
+STRICT_ANCHOR_ICAO = {"london"}
 
 # Cities pinned to the Hong Kong Royal Observatory anchor. The Observatory has no
 # ICAO (it is not an airport), so it is identified structurally by
@@ -106,6 +114,17 @@ def _pinned_anchor_icao(place) -> str | None:
     for key, icao in PINNED_ANCHOR_ICAO.items():
         if key in name or name in key:
             return icao
+    return None
+
+
+def _strict_anchor_icao(place) -> str | None:
+    """The pinned settlement ICAO when that pin is STRICT (no other station may
+    substitute for it — mirrors the HKO strict anchor). Upper-cased for the
+    case-insensitive station-ICAO comparison in _resolve_truth, else None."""
+    name = (getattr(place, "name", "") or "").strip().lower()
+    for key, icao in PINNED_ANCHOR_ICAO.items():
+        if key in STRICT_ANCHOR_ICAO and (key in name or name in key):
+            return icao.upper()
     return None
 
 
@@ -709,13 +728,17 @@ class Council:
 
         # User-pinned anchor: for cities that settle on a specific station (e.g.
         # London -> London City Airport, EGLC), try that station first regardless
-        # of distance. Stable sort keeps the others in distance order, and the
-        # usual freshness/sample gates still apply — if the pinned station is
-        # stale or thin we fall through to the nearest reporting one.
+        # of distance. Stable sort keeps the others in distance order.
         pinned = _pinned_anchor_icao(place)
         if pinned:
             candidates = sorted(
                 candidates, key=lambda s: (s.icao or "").upper() != pinned)
+        # STRICT ICAO anchor (e.g. London -> EGLC): like the HKO anchor below, no
+        # other physical station may substitute. If EGLC's feed is stale/thin we
+        # must NOT fall through to a different station (which reads differently and
+        # makes the verdict jump between sensors); we let the loop exhaust and drop
+        # to the honest ERA5 grid instead. Enforced in the candidate loop.
+        strict_icao = _strict_anchor_icao(place)
 
         # Hong Kong is pinned to the Royal Observatory (no ICAO; matched
         # structurally). This anchor is STRICT: the Observatory is tried first,
@@ -733,6 +756,8 @@ class Council:
         for st in candidates:
             if wants_hko and not self.sources.is_hko_observatory(st):
                 continue                          # strict anchor: never the airport
+            if strict_icao and (st.icao or "").upper() != strict_icao:
+                continue                          # strict ICAO anchor: EGLC only, else grid
             try:
                 series = self.sources.fetch_station_daily(st)
             except Exception:
@@ -755,9 +780,17 @@ class Council:
             # Honest provenance: the Hong Kong Observatory anchor is served from the
             # HKO open-data API (its Meteostat file ends 1992), not Meteostat.
             is_hko = self.sources.is_hko_observatory(st)
-            data_source = "hko_opendata" if is_hko else "meteostat"
-            feed = ("Hong Kong Observatory open-data daily observations"
-                    if is_hko else "Meteostat daily observations")
+            is_eglc = self.sources.is_london_eglc(st)
+            if is_hko:
+                data_source = "hko_opendata"
+                feed = "Hong Kong Observatory open-data daily observations"
+            elif is_eglc:
+                data_source = "iem_metar"
+                feed = ("IEM ASOS METAR daily extremes at the EGLC sensor "
+                        "(overlaid on Meteostat for older days)")
+            else:
+                data_source = "meteostat"
+                feed = "Meteostat daily observations"
             truth_source = {
                 "kind": "station",
                 "data_source": data_source,
@@ -1064,6 +1097,10 @@ class Council:
                             f"Observatory open data (the Observatory's own gauge — "
                             f"the point the HK temperature record settles on; live "
                             f"'now' reading from the HKO rhrread feed)")
+            elif truth_source.get("data_source") == "iem_metar":
+                backbone = (f"{st['name']} daily extremes reconstructed from raw "
+                            f"IEM ASOS METAR (London City Airport's own EGLC sensor "
+                            f"— the point the London market settles on)")
             else:
                 backbone = (f"{st['name']} surface observations via Meteostat "
                             f"(aggregated METAR/SYNOP gauge readings — the point a "
