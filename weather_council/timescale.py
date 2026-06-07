@@ -142,93 +142,22 @@ def evaluate(series: list[float], timescale: str = "",
 
 
 # --------------------------------------------------------------------------- #
-#  Horizon-specialized cascade forecaster (literature-derived improvement)      #
+#  RETIRED: horizon-specialized AR(1) shrinkage cascade (negative result)       #
 # --------------------------------------------------------------------------- #
-#  FuXi (Chen 2023) cascades lead-time-specialized models; Rasp (2021, via FuXi)
-#  finds direct lead-time forecasts beat naive iteration; Aardvark (Allen 2025)
-#  tunes end-to-end to the local station target. The single-station, stdlib
-#  analogue of "specialize by horizon" is the optimal AR(1) shrinkage predictor
+#  We tested the literature-derived "specialize by horizon" idea (FuXi cascade /
+#  Rasp direct-forecast / Aardvark station-target tuning). The single-station,
+#  stdlib analogue is the optimal AR(1) shrinkage predictor
 #     yhat_t = mu + rho * (y_{t-1} - mu),
-#  where mu is the causal climatological mean and rho the causal lag-1
-#  autocorrelation AT THAT TIMESCALE. rho->1 at short lead recovers persistence;
-#  rho->0 at long lead recovers climatology. It is DERIVED (from the data's own
-#  autocorrelation), not tuned, so it adds no free parameter to fit.
-@dataclass
-class CascadeVerdict:
-    timescale: str
-    n: int
-    mae_persist: float
-    mae_clim: float
-    mae_cascade: float
-    skill_vs_persist: float
-    rho: float
-    dm: float
-    p: float
-    observability: float
-    verdict: str
-
-    def line(self) -> str:
-        return (f"  {self.timescale:<9}{self.n:>7}{self.mae_persist:>10.3f}"
-                f"{self.mae_clim:>10.3f}{self.mae_cascade:>10.3f}"
-                f"{self.skill_vs_persist:>+9.3f}{self.rho:>7.2f}"
-                f"{self.p:>8.3f}   {self.verdict}")
-
-
-def _autocorr1(xs: list[float]) -> float:
-    n = len(xs)
-    if n < 3:
-        return 0.0
-    mu = sum(xs) / n
-    dev = [x - mu for x in xs]
-    denom = sum(d * d for d in dev)
-    if denom <= 1e-12:
-        return 0.0
-    num = sum(dev[t] * dev[t - 1] for t in range(1, n))
-    rho = num / denom
-    return max(-0.999, min(0.999, rho))
-
-
-def evaluate_cascade(series: list[float], timescale: str = "",
-                     observability: float = 1.0) -> CascadeVerdict:
-    """Walk-forward backtest of the AR(1) shrinkage cascade vs pure persistence
-    (and climatology), all CAUSAL: at each t, mu and rho are estimated only from
-    the prefix y[0:t]. Verdict tests whether the cascade significantly improves on
-    persistence (DM, HAC). This is the literature-derived 'specialize by horizon'
-    improvement, measured the same honest way every mechanism is."""
-    n = len(series)
-    if observability < 0.5:
-        return CascadeVerdict(timescale, n, *([float("nan")] * 7),
-                              observability, "UNOBSERVABLE")
-    warmup = MIN_PERIODS
-    if n < warmup + MIN_PERIODS:
-        return CascadeVerdict(timescale, n, *([float("nan")] * 7),
-                              observability, "INSUFFICIENT")
-    e_p: list[float] = []
-    e_c: list[float] = []
-    e_cas: list[float] = []
-    rho_last = 0.0
-    for t in range(warmup, n):
-        prefix = series[:t]
-        mu = sum(prefix) / t
-        rho_last = _autocorr1(prefix)
-        prev = series[t - 1]
-        y = series[t]
-        e_p.append(abs(y - prev))
-        e_c.append(abs(y - mu))
-        e_cas.append(abs(y - (mu + rho_last * (prev - mu))))
-    m_p = sum(e_p) / len(e_p)
-    m_c = sum(e_c) / len(e_c)
-    m_cas = sum(e_cas) / len(e_cas)
-    skill = 1.0 - m_cas / m_p if m_p > 0 else 0.0
-    dm, p = diebold_mariano(e_cas, e_p)
-    if skill > 0 and dm < 0 and p < ALPHA:
-        v = "CASCADE BETTER"
-    elif skill < 0 and p < ALPHA:
-        v = "CASCADE WORSE"
-    else:
-        v = "TIE (no significant gain)"
-    return CascadeVerdict(timescale, n - warmup, m_p, m_c, m_cas, skill,
-                          rho_last, dm, p, observability, v)
+#  with mu the causal climatological mean and rho the causal lag-1 autocorrelation
+#  at that timescale (derived, not tuned). Measured head-to-head against pure
+#  persistence via the same DM/HAC test, walk-forward, on the real settlement
+#  sensors it earned NOTHING: TIE at every observable scale (London & HK day/week/
+#  month) and CASCADE WORSE at London-hour, because settlement-series lag-1
+#  autocorrelation is 0.81-0.98 — so close to 1 that the shrinkage predictor
+#  collapses to persistence, which is already near-optimal. It is removed rather
+#  than carried as dead weight; this note prevents it being re-proposed as an
+#  "improvement" without first beating persistence at these timescales.
+# --------------------------------------------------------------------------- #
 
 
 # --------------------------------------------------------------------------- #
@@ -257,20 +186,9 @@ def _self_test() -> None:
     dm, p = diebold_mariano([1.0, 2.0, 3.0], [1.0, 2.0, 3.0])
     assert abs(dm) < 1e-9 and p > 0.99
 
-    # Cascade: on white noise the shrinkage predictor (rho~0 -> climatology) must
-    # BEAT persistence; on a near-unit-root series (rho~1) it must not be WORSE
-    # than persistence (it collapses to persistence).
-    c_noise = evaluate_cascade(noise, "noise")
-    assert c_noise.verdict == "CASCADE BETTER", c_noise
-    unit = [0.0]
-    for _ in range(600):
-        unit.append(0.97 * unit[-1] + rng.gauss(0, 1))
-    c_unit = evaluate_cascade(unit, "unit")
-    assert c_unit.verdict != "CASCADE WORSE", c_unit
-
     print("timescale self-test PASSED "
           "(AR(1)=SKILL CONFIRMED; noise!=confirmed; sub-cadence=UNOBSERVABLE; "
-          "DM symmetric; cascade beats persistence on noise, ties at unit-root)")
+          "DM symmetric)")
 
 
 if __name__ == "__main__":

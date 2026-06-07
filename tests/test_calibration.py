@@ -768,30 +768,6 @@ class TestTimescaleVerdict(unittest.TestCase):
         self.assertAlmostEqual(dm, 0.0, places=9)
         self.assertGreater(p, 0.99)
 
-    def test_cascade_beats_persistence_on_noise(self):
-        # rho~0 -> shrinkage collapses to climatology, which beats persistence.
-        from weather_council import timescale as tk
-        rng = random.Random(11)
-        noise = [rng.gauss(0, 1) for _ in range(500)]
-        self.assertEqual(tk.evaluate_cascade(noise, "noise").verdict, "CASCADE BETTER")
-
-    def test_cascade_ties_persistence_at_unit_root(self):
-        # rho~1 -> shrinkage collapses to persistence; never significantly worse.
-        from weather_council import timescale as tk
-        rng = random.Random(12)
-        unit = [0.0]
-        for _ in range(500):
-            unit.append(0.97 * unit[-1] + rng.gauss(0, 1))
-        self.assertNotEqual(tk.evaluate_cascade(unit, "unit").verdict, "CASCADE WORSE")
-
-    def test_autocorr1_recovers_ar_coefficient(self):
-        from weather_council import timescale as tk
-        rng = random.Random(5)
-        x = [0.0]
-        for _ in range(4000):
-            x.append(0.6 * x[-1] + rng.gauss(0, 1))
-        self.assertAlmostEqual(tk._autocorr1(x), 0.6, delta=0.05)
-
 
 class TestRegimeConsensus(unittest.TestCase):
     """regime_consensus is a pure post-hoc summary of a finished Verdict: it

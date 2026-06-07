@@ -82,17 +82,6 @@ def _sweep(name: str, raw_pts: list, median_gap: float,
         v = ts.evaluate(series, label, obsv)
         print(v.line())
 
-    # Literature-derived improvement: horizon-specialized AR(1) shrinkage cascade
-    # (FuXi cascade / Rasp direct-forecast / Aardvark station-target tuning), tested
-    # head-to-head against pure persistence at each scale.
-    print(f"\n  cascade vs persistence (FuXi/Aardvark-inspired, derived not tuned):")
-    print(f"  {'scale':<9}{'n':>7}{'persist':>10}{'clim':>10}{'cascade':>10}"
-          f"{'skill':>9}{'rho':>7}{'p':>8}   verdict")
-    for label, period in TIMESCALES:
-        pts = raw_pts if period < 86400.0 else daily_pts
-        series, obsv = ts.resample(pts, period)
-        print(ts.evaluate_cascade(series, label, obsv).line())
-
 
 def main() -> None:
     ts._self_test()
