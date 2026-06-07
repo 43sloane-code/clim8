@@ -16,7 +16,7 @@ reports/launchd.out.log
 reports/launchd.err.log
 reports/server.log
 
-# Daily-generated health-check reports (reproducible output, not source).
-# reports/baseline.json is the committed reference and stays tracked.
-reports/healthcheck_*.txt
-reports/latest.txt
+# Generated text reports under reports/ (health checks, live probes, latest.txt)
+# are reproducible output, not source. reports/baseline.json is the committed
+# reference the health check grades against and stays tracked (it is .json).
+reports/*.txt
