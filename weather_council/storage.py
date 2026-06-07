@@ -78,6 +78,32 @@ def _connect() -> sqlite3.Connection:
                settled_at     TEXT,
                PRIMARY KEY (place, target_date, issued_at))"""
     )
+    # Tracked-forecaster ledger: one row per (source, place, target_date) logging
+    # a NON-council forecaster's predicted high/low ALONGSIDE the council's own
+    # forecast for the identical day, so the two can be graded head-to-head once
+    # the day settles against the SAME anchored truth. This is how a forecaster
+    # with no backtestable forecast archive (e.g. Weatherbit) earns a measured
+    # track record PROSPECTIVELY before it is ever considered for the live blend.
+    # Recommend-only: nothing here ever feeds a vote, a verdict, or a trade.
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS tracked_forecasts (
+               source        TEXT NOT NULL,
+               issued_at     TEXT NOT NULL,
+               place         TEXT NOT NULL,
+               target_date   TEXT NOT NULL,
+               fc_high       REAL NOT NULL,
+               fc_low        REAL NOT NULL,
+               council_high  REAL,
+               council_low   REAL,
+               truth_kind    TEXT,
+               station_id    TEXT,
+               fc_lat        REAL,
+               fc_lon        REAL,
+               actual_high   REAL,
+               actual_low    REAL,
+               settled_at    TEXT,
+               PRIMARY KEY (source, place, target_date))"""
+    )
     conn.commit()
     return conn
 
@@ -315,3 +341,124 @@ def fetch_settled_snapshots() -> list[dict]:
             "buckets": json.loads(buckets_json),
         })
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Tracked-forecaster ledger — prospective, head-to-head, recommend-only.       #
+# --------------------------------------------------------------------------- #
+
+def _anchored_actual(sources: Sources, truth_kind, station_id, fc_lat, fc_lon,
+                     place_label: str, target: str,
+                     station_cache: dict[str, dict]):
+    """Realized (high, low) for `target` from the SAME anchored truth a verdict
+    uses: the station's own daily record where the verdict was station-anchored,
+    else ERA5 at the exact forecast coordinates. None until the truth is in.
+    Mirrors the resolution `verify`/`settle_market_snapshots` already use."""
+    if truth_kind == "station" and station_id:
+        series = station_cache.get(station_id)
+        if series is None:
+            try:
+                series = sources.fetch_station_daily(
+                    Station(id=station_id, name="", wmo=None, icao=None,
+                            latitude=fc_lat or 0.0, longitude=fc_lon or 0.0,
+                            elevation=None, distance_km=0.0))
+            except Exception:
+                series = {}
+            station_cache[station_id] = series
+        return series.get(target)
+    place = _coord_place(place_label, fc_lat, fc_lon, sources)
+    if place is None:
+        return None
+    day = dt.date.fromisoformat(target)
+    return sources.fetch_archive_series(place, day, day).get(target)
+
+
+def log_tracked_forecast(source: str, place: Place, target: str,
+                         fc_high: float, fc_low: float,
+                         council_high: float | None, council_low: float | None,
+                         truth_source: dict | None) -> None:
+    """Persist one tracked (non-council) forecaster's high/low for `target`
+    alongside the council's own forecast for the same day, for later head-to-head
+    grading against anchored truth.
+
+    INSERT OR IGNORE keeps the FIRST forecast seen for a (source, place, target),
+    so the comparison is pinned to one lead rather than silently re-based on every
+    later run. Recommend-only: this ledger never feeds the live blend, a verdict,
+    or a trade — it exists solely to let a forecaster with no backtestable archive
+    earn a measured record before a human ever considers promoting it."""
+    ts = truth_source or {}
+    station = ts.get("station") or {}
+    conn = _connect()
+    with conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO tracked_forecasts "
+            "(source, issued_at, place, target_date, fc_high, fc_low, "
+            " council_high, council_low, truth_kind, station_id, fc_lat, fc_lon) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (source, dt.datetime.now().isoformat(timespec="seconds"),
+             place.label(), target, fc_high, fc_low,
+             council_high, council_low, ts.get("kind"),
+             station.get("id") or None, place.latitude, place.longitude),
+        )
+    conn.close()
+
+
+def settle_tracked_forecasts(sources: Sources | None = None) -> list[str]:
+    """Fill realized high/low for tracked forecasts whose day has passed (>2 days,
+    matching the station-lag cutoff used elsewhere), scored against the SAME
+    anchored truth the council verdict uses. Leak-free and truth-matched: a row
+    is only graded once its anchored record is available. Returns a settlement
+    note per newly graded row."""
+    sources = sources or Sources()
+    cutoff = (dt.date.today() - dt.timedelta(days=2)).isoformat()
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT source, place, target_date, truth_kind, station_id, fc_lat, fc_lon "
+        "FROM tracked_forecasts WHERE actual_high IS NULL AND target_date <= ?",
+        (cutoff,),
+    ).fetchall()
+    station_cache: dict[str, dict] = {}
+    report: list[str] = []
+    for (source, place_label, target, truth_kind, station_id, fc_lat, fc_lon) in rows:
+        actual = _anchored_actual(sources, truth_kind, station_id, fc_lat, fc_lon,
+                                  place_label, target, station_cache)
+        if not actual:
+            continue                       # anchored truth not yet available
+        a_high, a_low = actual
+        with conn:
+            conn.execute(
+                "UPDATE tracked_forecasts SET actual_high=?, actual_low=?, settled_at=? "
+                "WHERE source=? AND place=? AND target_date=?",
+                (a_high, a_low, dt.datetime.now().isoformat(timespec="seconds"),
+                 source, place_label, target),
+            )
+        report.append(f"{source}/{place_label} {target}: "
+                      f"actual {a_high:.1f}/{a_low:.1f}")
+    conn.close()
+    return report
+
+
+def tracked_forecast_scores(source: str) -> dict:
+    """Head-to-head summary for one tracked forecaster over its SETTLED days where
+    the council also recorded a forecast — both scored on the identical day set so
+    the comparison is apples-to-apples. Each settled day contributes its high and
+    low error. Returns {'n', 'source_mae', 'council_mae'}; n is settled days, and
+    the MAEs are None until at least one day settles. Read-only."""
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT fc_high, fc_low, council_high, council_low, actual_high, actual_low "
+        "FROM tracked_forecasts "
+        "WHERE source=? AND actual_high IS NOT NULL AND council_high IS NOT NULL",
+        (source,),
+    ).fetchall()
+    conn.close()
+    src_errs: list[float] = []
+    cou_errs: list[float] = []
+    for fc_h, fc_l, co_h, co_l, a_h, a_l in rows:
+        src_errs += [abs(fc_h - a_h), abs(fc_l - a_l)]
+        cou_errs += [abs(co_h - a_h), abs(co_l - a_l)]
+    return {
+        "n": len(rows),
+        "source_mae": (sum(src_errs) / len(src_errs)) if src_errs else None,
+        "council_mae": (sum(cou_errs) / len(cou_errs)) if cou_errs else None,
+    }

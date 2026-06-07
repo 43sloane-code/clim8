@@ -28,6 +28,11 @@ Each run:
      out-of-season confidence downgrade) and flags changes.
   7. Settles logged council-vs-market snapshots against the anchor station and
      prints the C7 realized-outcome edge verdict (read-only).
+  8. Logs a TRACKED, non-council forecaster (Weatherbit) alongside the council
+     for each city and settles past entries against the same anchored truth, so a
+     forecaster with no backtestable archive earns a measured head-to-head record
+     PROSPECTIVELY. It is never voted into the blend; a sustained win only ever
+     surfaces as a promotion *candidate* for a human. No-ops without an API key.
 
 Recommendations are printed for human review. Applying them is a human decision.
 """
@@ -52,7 +57,9 @@ from weather_council.edge import report_lines as edge_report_lines  # noqa: E402
 from weather_council.edge import score_snapshots  # noqa: E402
 from weather_council.scoring import crps_sample, interval_coverage  # noqa: E402
 from weather_council.storage import (fetch_settled_snapshots,  # noqa: E402
-                                     log_market_snapshot, settle_market_snapshots)
+                                     log_market_snapshot, settle_market_snapshots,
+                                     log_tracked_forecast, settle_tracked_forecasts,
+                                     tracked_forecast_scores)
 # The REAL live model-vs-market comparison path. Reused verbatim (not
 # reimplemented) so the bucket probabilities the health check logs are byte-for-byte
 # what a live verdict would log — the only way C7's settled grading stays honest.
@@ -403,6 +410,7 @@ def main() -> int:
     market_div = {}                                    # city -> VerdictMarketComparison
     market_withheld = {}                              # city -> reason a comparison was withheld
     snapshots_logged = 0                              # C7 ledger rows written this run
+    tracked_logged = 0                                # weatherbit forecasts logged this run
     total_requests = 0
 
     # Whether C7 realized-outcome calibration has earned a validated edge yet
@@ -467,6 +475,23 @@ def main() -> int:
                 snapshots_logged += 1
             elif note:
                 market_withheld[city] = note
+        except Exception:
+            pass                                        # never let it abort the run
+
+        # Recommend-only TRACKED FORECASTER (Weatherbit): log its forecast for
+        # today's target ALONGSIDE the council's own, so a forecaster with no
+        # backtestable archive earns a measured, head-to-head record forward.
+        # Silently no-ops when WEATHERBIT_API_KEY is unset; never votes.
+        try:
+            wb = council.sources.fetch_weatherbit_forecast(place, target)
+            if wb is not None:
+                c_high, *_ = council._blend(votes, "high")
+                c_low, *_ = council._blend(votes, "low")
+                ch = round(c_high, 1) if c_high is not None else None
+                cl = round(c_low, 1) if c_low is not None else None
+                log_tracked_forecast("weatherbit", place, target.isoformat(),
+                                     wb[0], wb[1], ch, cl, truth)
+                tracked_logged += 1
         except Exception:
             pass                                        # never let it abort the run
 
@@ -787,6 +812,52 @@ def main() -> int:
             lines.append("  " + el.strip() if el.strip() else el)
     except Exception as exc:                       # never let C7 abort the health check
         lines.append(f"  C7 unavailable this run ({exc}); calibration unchanged.")
+    lines.append("")
+
+    # Tracked forecaster (recommend-only): settle any Weatherbit forecasts whose
+    # day has passed against the SAME anchored truth the council uses, then report
+    # the head-to-head MAE. Weatherbit has no backtestable forecast archive, so it
+    # can ONLY earn a record forward — and it is NEVER voted into the live blend,
+    # whatever it scores. Promotion (to a properly backtested member) is a human
+    # decision, surfaced here only as a candidate once it has earned enough days.
+    try:
+        settle_tracked_forecasts()
+        wb = tracked_forecast_scores("weatherbit")
+    except Exception as exc:
+        wb = {"n": 0, "source_mae": None, "council_mae": None}
+        wb_err = str(exc)
+    else:
+        wb_err = None
+    lines.append("TRACKED FORECASTER — WEATHERBIT (recommend-only, prospective; NEVER voted)")
+    if wb_err:
+        lines.append(f"  tracker unavailable this run ({wb_err}); ledger unchanged.")
+    else:
+        lines.append(f"  logged {tracked_logged} forecast(s) this run; "
+                     f"{wb['n']} day(s) settled head-to-head against anchored truth.")
+        if wb["n"] == 0:
+            lines.append("  no settled days yet — Weatherbit exposes no backtestable forecast "
+                         "archive, so it earns its record forward. Accumulating "
+                         "(set WEATHERBIT_API_KEY to start logging).")
+        elif wb["source_mae"] is None or wb["council_mae"] is None:
+            lines.append("  settled days present but a side lacks a forecast; cannot compare yet.")
+        else:
+            wb_mae, co_mae = wb["source_mae"], wb["council_mae"]
+            delta = co_mae - wb_mae          # > 0 ⇒ Weatherbit beats the council
+            lines.append(f"  Weatherbit MAE {wb_mae:.3f} °C  vs council MAE {co_mae:.3f} °C "
+                         f"(over {wb['n']} settled day(s)).")
+            if wb["n"] < MIN_SAMPLES:
+                lines.append(f"  TOO FEW settled days (< {MIN_SAMPLES}) to judge — keep "
+                             "accumulating. Weatherbit remains tracked-only, NOT a council vote.")
+            elif delta >= MIN_IMPROVEMENT:
+                lines.append(f"  CANDIDATE (human review): Weatherbit beats the council by "
+                             f"{delta:.3f} °C over {wb['n']} settled days (exceeds the "
+                             f"{MIN_IMPROVEMENT} °C floor). Worth evaluating it as a properly "
+                             "backtested member — a human decision; still NOT voted, do NOT "
+                             "auto-apply.")
+            else:
+                lines.append(f"  No promotion case: Weatherbit does not beat the council beyond "
+                             f"the {MIN_IMPROVEMENT} °C floor (delta {delta:+.3f} °C). "
+                             "Remains tracked-only.")
     lines.append("")
 
     lines.append(f"requests made this run: {total_requests} "
