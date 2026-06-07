@@ -5,5 +5,8 @@ __pycache__/
 # Generated SQLite verdict store (runtime state, not source)
 *.db
 
+# Local HTTP response cache (runtime state, not source)
+.cache/
+
 # Local agent/editor config
 .claude/

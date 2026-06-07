@@ -31,6 +31,8 @@ import json
 import re
 import socket
 import ssl
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
@@ -53,6 +55,12 @@ ALLOWED_HOSTS = frozenset({
     # READ-ONLY use only — ingested to compare the model verdict against the
     # market's implied probability. No order placement or funds ever touch this.
     "gamma-api.polymarket.com",
+    # Hong Kong Observatory official open data (data.weather.gov.hk): keyless,
+    # HTTPS, CSV/JSON daily climate records straight from the Observatory. The
+    # Meteostat archive for the HKO station ends in 1992, far too old to measure
+    # a *current* settlement-vs-airport offset; this is the only source of the
+    # recent HKO daily record, used solely to make that offset modern. Read-only.
+    "data.weather.gov.hk",
 })
 
 MAX_BYTES = 8 * 1024 * 1024          # 8 MiB ceiling on a *compressed* body
@@ -60,12 +68,42 @@ MAX_DECOMPRESSED = 64 * 1024 * 1024  # 64 MiB ceiling after gunzip (zip-bomb gua
 DEFAULT_TIMEOUT = 30                 # seconds per request
 MAX_REQUESTS_PER_RUN = 64            # ceiling on total outbound calls
 
+# Transient upstream conditions worth a bounded retry rather than failing the
+# whole member. 429 = the keyless Open-Meteo archive throttling a burst; 502/503/
+# 504 = a momentary gateway/upstream hiccup. A retry does NOT consume another unit
+# of the per-run request budget (the budget bounds distinct logical calls, not the
+# transport's redelivery of one of them) — only wall-clock, which the cap bounds.
+RETRYABLE_STATUS = frozenset({429, 502, 503, 504})
+MAX_RETRIES = 3                      # attempts AFTER the first try (so ≤4 total)
+BACKOFF_BASE = 1.0                   # seconds; doubled each attempt
+BACKOFF_CAP = 20.0                   # ceiling on any single backoff sleep
+
 # City names: letters (incl. accented), spaces, and a few separators only.
 _CITY_RE = re.compile(r"^[\wÀ-ɏ .,'\-]{1,80}$", re.UNICODE)
 
 
 class SecurityError(Exception):
     """Raised when a request would violate the sandbox policy."""
+
+
+class RateLimitError(SecurityError):
+    """Raised when an allowlisted host keeps returning a retryable status
+    (e.g. HTTP 429) after the bounded retry budget is spent. Subclasses
+    SecurityError so every existing ``except SecurityError`` site still fails
+    closed, but callers that want to distinguish a *transient throttle* ("try
+    again shortly") from genuinely-absent data can catch this specifically."""
+
+
+def _retry_after_seconds(headers, attempt: int) -> float:
+    """How long to wait before the next retry. Honors a numeric Retry-After
+    header when the host sends one (capped), else exponential backoff."""
+    raw = headers.get("Retry-After") if headers else None
+    if raw:
+        try:
+            return min(BACKOFF_CAP, max(0.0, float(raw)))
+        except (TypeError, ValueError):
+            pass  # HTTP-date form is rare here; fall back to computed backoff
+    return min(BACKOFF_CAP, BACKOFF_BASE * (2 ** attempt))
 
 
 def validate_city(raw: str) -> str:
@@ -173,16 +211,34 @@ class SafeHTTPClient:
         req = urllib.request.Request(
             url, headers={"User-Agent": "weather-council/1.0", "Accept": accept}
         )
-        try:
-            # Hardened opener (re-validating redirects, no env proxy) rather than
-            # a bare urlopen, so every hop stays inside the sandbox policy.
-            with self._opener.open(req, timeout=self._timeout) as resp:
-                # Read one byte past the cap so we can detect oversize bodies.
-                body = resp.read(MAX_BYTES + 1)
-        except SecurityError:
-            raise
-        except Exception as exc:
-            raise SecurityError(f"request to {host} failed: {exc}") from exc
+        # Hardened opener (re-validating redirects, no env proxy) rather than a
+        # bare urlopen, so every hop stays inside the sandbox policy. Retryable
+        # upstream statuses (throttling, transient gateway errors) get a bounded
+        # backoff so one member is not starved by a momentary 429 — the failure
+        # mode that previously cascaded into "no eligible member" when every
+        # member hit the same throttled endpoint at once.
+        attempt = 0
+        while True:
+            try:
+                with self._opener.open(req, timeout=self._timeout) as resp:
+                    # Read one byte past the cap to detect oversize bodies.
+                    body = resp.read(MAX_BYTES + 1)
+                break
+            except SecurityError:
+                raise
+            except urllib.error.HTTPError as exc:
+                if exc.code in RETRYABLE_STATUS and attempt < MAX_RETRIES:
+                    time.sleep(_retry_after_seconds(exc.headers, attempt))
+                    attempt += 1
+                    continue
+                if exc.code in RETRYABLE_STATUS:
+                    raise RateLimitError(
+                        f"{host} rate-limited (HTTP {exc.code}) after "
+                        f"{attempt} retr{'y' if attempt == 1 else 'ies'}"
+                    ) from exc
+                raise SecurityError(f"request to {host} failed: {exc}") from exc
+            except Exception as exc:
+                raise SecurityError(f"request to {host} failed: {exc}") from exc
 
         if len(body) > MAX_BYTES:
             raise SecurityError("response exceeded size cap — aborting")

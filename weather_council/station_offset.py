@@ -164,6 +164,14 @@ def measure_settlement_offset(
         return None
 
     settle_series: DailySeries = sources.fetch_station_daily(best)
+    # The bulk archive for some settlement stations (notably the Hong Kong
+    # Observatory, which ends in 1992) is too old to reach the modern window.
+    # When the matched station exposes a recent first-party record, fold it in so
+    # the overlap — and therefore is_modern — reflects the current relationship,
+    # not a decades-stale one. Returns None for any station without such a feed.
+    recent = sources.recent_station_series(best, target)
+    if recent:
+        settle_series = {**settle_series, **recent}
     back_series: DailySeries = sources.fetch_station_daily(backtest)
     common = sorted(set(settle_series) & set(back_series))
     if not common:

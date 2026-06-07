@@ -24,7 +24,33 @@ from .agents import (ENSEMBLE_MODELS, MIN_SAMPLES, ForecasterAgent, Vote,
                      build_council)
 from .seasonal import (SEASON_ANALOG_ARCHIVE_FLOOR, SEASON_ANALOG_WINDOW_DAYS,
                        seasonal_skill)
-from .sources import DailySeries, Place, Sources, Station, quantize_to_grain
+from .scoring import crps_sample, interval_coverage
+from .calibration import conditional_spread_eval, CalibrationEval
+from .convergence import ConvergenceInputs, Mechanism
+from .security import RateLimitError
+from .sources import (DailySeries, Place, Sources, Station, place_today,
+                      quantize_to_grain)
+
+# A predictive distribution needs a minimum residual sample before its CRPS or
+# coverage means anything; below this we score that held-out day's point error
+# only (CRPS still defined, but the *probabilistic* claim is too thin to trust).
+# Mirrors compare.py's MIN_RESIDUALS floor so the two never disagree on when the
+# empirical distribution is usable.
+CRPS_MIN_SAMPLES = 10
+
+# The newest observed day may stand in as a live "persistence" estimate for the
+# convergence layer only when it is within this many days of the target. Beyond
+# it the archive lag makes persistence a different mechanism than the one its
+# backtested MAE scores, so that lineage abstains rather than mislead. (Lead-0
+# verdicts on a fresh station feed satisfy this; lagged-archive cities do not.)
+CONVERGENCE_PERSIST_MAX_GAP_DAYS = 2
+
+
+class ForecastUnavailableError(RuntimeError):
+    """No council member could produce a usable forecast for an attribute.
+    A RuntimeError subclass so existing handlers still catch it, but typed so a
+    caller can tell "the council genuinely has no data" apart from a transient
+    upstream throttle (RateLimitError), which is retryable."""
 
 ARCHIVE_LAG_DAYS = 2     # ERA5 reanalysis trails real time by ~1-2 days
 OUTLIER_FLOOR_C = 4.0    # never flag a member within this of the median
@@ -55,6 +81,38 @@ MAX_TRUTH_STALE_DAYS = 400
 # confidence, because the hit-rate that anchors that confidence was measured
 # out-of-season and should not be read at face value for this target.
 SEASON_MATCH_DAYS = 31
+
+# Cities whose verdict anchors on a SPECIFIC settlement station rather than the
+# nearest reporting one — a user-pinned directive: the record the market actually
+# settles on. Keyed by case-insensitive city-name substring -> the anchor's ICAO.
+# London weather markets settle on London City Airport (EGLC), ~17 km east of the
+# nearest station (the central London Weather Centre), so we prefer EGLC and let
+# the Weather Centre fall through to a cross-reference.
+PINNED_ANCHOR_ICAO = {"london": "EGLC"}
+
+# Cities pinned to the Hong Kong Royal Observatory anchor. The Observatory has no
+# ICAO (it is not an airport), so it is identified structurally by
+# Sources.is_hko_observatory, not a station-id table. The market and the HKO both
+# settle on the Observatory; the nearest airport (VHHH, ~6 km away) reads ~1 °C
+# different. This pin is STRICT: if the Observatory's modern feed is transiently
+# unavailable, the verdict must fall back to the reanalysis grid — never silently
+# re-anchor on the airport, which would shift the verdict by a physical-station
+# offset and read as model imprecision. (See _resolve_truth.)
+PINNED_ANCHOR_HKO = {"hong kong"}
+
+
+def _pinned_anchor_icao(place) -> str | None:
+    name = (getattr(place, "name", "") or "").strip().lower()
+    for key, icao in PINNED_ANCHOR_ICAO.items():
+        if key in name or name in key:
+            return icao
+    return None
+
+
+def _wants_hko_anchor(place) -> bool:
+    """True for cities pinned to the Hong Kong Observatory (strict anchor)."""
+    name = (getattr(place, "name", "") or "").strip().lower()
+    return any(key in name or name in key for key in PINNED_ANCHOR_HKO)
 
 
 def _doy_gap(dates: list[str], target: dt.date) -> int | None:
@@ -214,6 +272,22 @@ class Validation:
     # the only earned basis for turning a point verdict into bucket probabilities.
     residuals_high: list[float] = field(default_factory=list)
     residuals_low: list[float] = field(default_factory=list)
+    # Probabilistic skill, scored on the SAME held-out days with a strictly
+    # proper rule (CRPS, °C) so the predictive distribution the council sells as
+    # bucket probabilities is itself verified — not just its point error. Each
+    # held-out day is dressed only with residuals from STRICTLY EARLIER held-out
+    # days (no leakage), exactly the empirical distribution compare.py resamples.
+    crps_council: float | None = None       # mean CRPS of the council predictive
+    crps_climatology: float | None = None   # same, for a dressed-climatology ref
+    crps_skill: float | None = None         # 1 − council/climatology (>0 = better)
+    coverage_80: float | None = None        # empirical hit-rate of the 80% interval
+    sharpness_80: float | None = None       # mean width of that interval (°C)
+    crps_n: int = 0                          # held-out days scored probabilistically
+    # Recommend-only ML check: does scaling the predictive spread by per-day member
+    # dispersion (a conditional/heteroscedastic distribution) beat the single
+    # residual cloud on held-out CRPS, past the noise floor? None when too few days
+    # to judge. This NEVER changes the verdict — it surfaces a finding for review.
+    calibration: "CalibrationEval | None" = None
 
 
 @dataclass
@@ -246,6 +320,14 @@ class Verdict:
     naive_high: float | None = None
     naive_low: float | None = None
     settlement: dict | None = None  # native-grain quantization + Meteostat-vs-METAR check
+    convergence: dict | None = None  # recommend-only mechanism-convergence inputs ({"high","low"})
+
+
+def _mae(v: "Validation", mechanism: str, attr: str) -> float | None:
+    """The held-out MAE the walk-forward backtest produced for one mechanism and
+    quantity ('high'/'low'). Used by the convergence layer to score each
+    mechanism on its own proper score — never a fabricated number."""
+    return getattr(v, f"{mechanism}_mae_{attr}", None)
 
 
 def applied_bias_correction(v: Verdict, attr: str = "high") -> float | None:
@@ -281,6 +363,145 @@ def applied_bias_correction(v: Verdict, attr: str = "high") -> float | None:
         total += w * (cor - raw)
         seen = True
     return total if seen else None
+
+
+# Consensus bands (interpretation layer only — never moves the number). Each
+# independent point estimator's distance from the headline verdict is measured
+# in units of the *effective* σ the engine already computed: agreement within
+# 1σ is a matched verdict, beyond 1.5σ is a genuine split worth flagging.
+CONSENSUS_MATCH_SIGMA = 1.0
+CONSENSUS_SPLIT_SIGMA = 1.5
+# σ fallback (°C) when effective uncertainty is unavailable, so consensus can
+# still be judged on an absolute scale rather than silently going unscored.
+CONSENSUS_SIGMA_FLOOR = 1.0
+
+
+def regime_consensus(v: "Verdict") -> dict:
+    """Consolidated regime read + cross-mechanism consensus for a finished
+    Verdict. Pure post-hoc summary, exactly like applied_bias_correction: it
+    reads only what the engine already computed and backtested and NEVER changes
+    the headline number.
+
+    Three jobs, one block:
+      1. Name the *regime* from signals already on the Verdict — seasonality
+         (in/out-of-season), data depth (rich/thin ensemble backtest), today's
+         volatility (effective-σ tier) and the spatial gradient.
+      2. State which validation is load-bearing in that regime (and which to
+         distrust) — making the confidence-tier logic explicit instead of
+         scattered across caveats.
+      3. Measure whether the independent point estimators — the deterministic
+         backtested blend (the verdict), the naive equal-weight average and the
+         raw perturbed-ensemble mean — agree within the stated effective σ
+         ("matched verdict") or split, on the worse of high/low.
+    """
+    cd = v.confidence_detail or {}
+    eff = cd.get("effective_uncertainty")
+    sigma = eff if (eff is not None and eff > 0) else CONSENSUS_SIGMA_FLOOR
+    scaled = eff is not None and eff > 0
+
+    # -- consensus: independent estimators vs the headline, in units of σ ------ #
+    en = v.ensemble
+    estimators = {
+        "high": {"verdict": v.high, "naive": v.naive_high, "ensemble_mean": en.mean_high},
+        "low": {"verdict": v.low, "naive": v.naive_low, "ensemble_mean": en.mean_low},
+    }
+    worst_ratio, worst_axis = 0.0, "high"
+    for axis, headline in (("high", v.high), ("low", v.low)):
+        for key in ("naive", "ensemble_mean"):
+            est = estimators[axis][key]
+            if est is None:
+                continue
+            ratio = abs(est - headline) / sigma
+            if ratio > worst_ratio:
+                worst_ratio, worst_axis = ratio, axis
+    if worst_ratio <= CONSENSUS_MATCH_SIGMA:
+        status = "matched"
+    elif worst_ratio <= CONSENSUS_SPLIT_SIGMA:
+        status = "loose"
+    else:
+        status = "split"
+
+    # -- regime: classify from already-computed, already-backtested signals ---- #
+    gap = cd.get("season_gap_days")
+    out_of_season = bool(gap is not None and gap > SEASON_MATCH_DAYS)
+    season = "out-of-season" if out_of_season else "in-season"
+
+    thin = not en.blend_eligible
+    data = "thin" if thin else "rich"
+
+    if eff is None or eff <= DISP_NORMAL:
+        volatility = "calm"
+    elif eff <= DISP_ELEVATED:
+        volatility = "elevated"
+    else:
+        volatility = "high"
+
+    sp = cd.get("representativeness_sigma")
+    if sp is None or sp < 0.5:
+        spatial = "flat"
+    elif sp < 1.0:
+        spatial = "moderate"
+    else:
+        spatial = "steep"
+
+    label = f"{season} · {data} ensemble · {volatility} · {spatial} field"
+
+    # -- regime -> which validation to trust (explicit, deterministic) -------- #
+    trusted: list[str] = []
+    if out_of_season:
+        trusted.append(
+            f"Trailing-window hit-rate is from a climate regime ~{gap}d off the "
+            f"target day-of-year — lean on the seasonal-analog backtest, not the raw hit-rate.")
+    if thin:
+        trusted.append(
+            f"Perturbed ensemble has only {en.backtest_days} backtestable day(s) "
+            f"(<{MIN_SAMPLES}); it bounds confidence but cannot move the number.")
+    if volatility != "calm" and eff is not None:
+        trusted.append(
+            f"Effective σ {eff:.1f} °C is {volatility} — widen the bucket "
+            f"probabilities; today is harder than the backtest baseline.")
+    if spatial == "steep" and sp is not None:
+        trusted.append(
+            f"Across-cell σ {sp:.1f} °C is steep — a point station may diverge "
+            f"from the grid-cell verdict.")
+    if not trusted:
+        trusted.append(
+            "All regime axes benign — the backtested hit-rate applies at face value.")
+
+    if status == "matched":
+        takeaway = (f"Matched verdict: deterministic blend, naive average and ensemble "
+                    f"mean agree within {worst_ratio:.2f}σ. Regime: {label}.")
+    elif status == "loose":
+        takeaway = (f"Loose agreement: estimators sit within {worst_ratio:.2f}σ on the "
+                    f"{worst_axis} — within tolerance but not tight. Regime: {label}.")
+    else:
+        takeaway = (f"Split verdict: an estimator sits {worst_ratio:.2f}σ from the "
+                    f"headline {worst_axis} — read the bucket probabilities wider. Regime: {label}.")
+
+    return {
+        "regime": {
+            "label": label,
+            "season": season,
+            "season_gap_days": gap,
+            "data": data,
+            "ensemble_backtest_days": en.backtest_days,
+            "test_days": v.validation.test_days,
+            "volatility": volatility,
+            "effective_sigma": eff,
+            "spatial": spatial,
+            "spatial_sigma": sp,
+        },
+        "consensus": {
+            "status": status,
+            "worst_ratio": round(worst_ratio, 2),
+            "worst_axis": worst_axis,
+            "scaled_by_effective_sigma": scaled,
+            "sigma_used": round(sigma, 2),
+            "estimators": estimators,
+        },
+        "trusted_validation": trusted,
+        "takeaway": takeaway,
+    }
 
 
 _SEVERITY = {"high": 3, "medium": 2, "low": 1}
@@ -337,12 +558,14 @@ def _calibrate_confidence(
 
       * within-system spread — how far members/perturbations scatter (max of the
         deterministic weighted σ and the ensemble σ, two views of one axis);
-      * cross-system disagreement — how far the two independent estimators (the
-        bias-corrected deterministic blend and the perturbed-ensemble mean) sit
-        apart on the headline number itself. Tight internal spread tells us a
-        single system is sure of itself; it says nothing about whether a second,
-        independent system agrees. A 1–2 °C gap between them is real epistemic
-        uncertainty about the answer that within-spread cannot see;
+      * cross-system disagreement — how far the bias-corrected deterministic
+        control blend and the perturbed-ensemble mean sit apart on the headline
+        number itself. Tight internal spread tells us a single system is sure of
+        itself; it says nothing about whether the perturbed runs land elsewhere.
+        A 1–2 °C gap is real epistemic uncertainty that within-spread cannot see.
+        These two views share lineage (the ensemble's families are EPS versions
+        of three panel members), so this term is used one-directionally — a wide
+        gap downgrades, a narrow one is never booked as independent corroboration;
       * spatial representativeness — how far a point station may sit from the
         grid cell we actually backtest against.
 
@@ -436,10 +659,12 @@ class Council:
             validation, det_std, ens_sigma, cross_system, representativeness.sigma,
             season_gap_days=truth_source.get("season_gap_days"))
 
-        status = "forecast" if target >= dt.date.today() else "recorded"
+        status = "forecast" if target >= place_today(place) else "recorded"
         basis = self._basis(fp, truth_source)
         settlement = self._settlement(fp, truth_source, observed,
                                       high, low, w_start, w_end)
+        convergence = self._convergence(
+            observed, high, low, naive_h, naive_l, records, validation, target)
 
         return Verdict(
             place=fp, target=target.isoformat(),
@@ -459,6 +684,7 @@ class Council:
             naive_high=round(naive_h, 1) if naive_h is not None else None,
             naive_low=round(naive_l, 1) if naive_l is not None else None,
             settlement=settlement,
+            convergence=convergence,
         )
 
     # -- truth resolution: station observations, else the ERA5 grid ---------- #
@@ -475,13 +701,38 @@ class Council:
         gap (how far the window sits, in day-of-year, from the day we predict);
         this never changes which source is chosen — it drives the out-of-season
         confidence downgrade so a station-anchored verdict stays anchored."""
-        default_end = dt.date.today() - dt.timedelta(days=ARCHIVE_LAG_DAYS)
+        default_end = place_today(place) - dt.timedelta(days=ARCHIVE_LAG_DAYS)
         try:
             candidates = self.sources.nearest_stations(place)
         except Exception:
             candidates = []
 
+        # User-pinned anchor: for cities that settle on a specific station (e.g.
+        # London -> London City Airport, EGLC), try that station first regardless
+        # of distance. Stable sort keeps the others in distance order, and the
+        # usual freshness/sample gates still apply — if the pinned station is
+        # stale or thin we fall through to the nearest reporting one.
+        pinned = _pinned_anchor_icao(place)
+        if pinned:
+            candidates = sorted(
+                candidates, key=lambda s: (s.icao or "").upper() != pinned)
+
+        # Hong Kong is pinned to the Royal Observatory (no ICAO; matched
+        # structurally). This anchor is STRICT: the Observatory is tried first,
+        # and NO other physical station may substitute for it. The airport (VHHH)
+        # sits ~6 km away and reads ~1 °C different, so silently falling through to
+        # it when the Observatory feed hiccups makes the verdict jump between two
+        # stations — exactly the instability we must not present as precision. If
+        # the Observatory is transiently unavailable we let the loop exhaust and
+        # drop to the honest ERA5-grid fallback instead.
+        wants_hko = _wants_hko_anchor(place)
+        if wants_hko:
+            candidates = sorted(
+                candidates, key=lambda s: not self.sources.is_hko_observatory(s))
+
         for st in candidates:
+            if wants_hko and not self.sources.is_hko_observatory(st):
+                continue                          # strict anchor: never the airport
             try:
                 series = self.sources.fetch_station_daily(st)
             except Exception:
@@ -501,15 +752,22 @@ class Council:
                 continue
             fp = Place(place.name, place.country,
                        st.latitude, st.longitude, place.timezone)
+            # Honest provenance: the Hong Kong Observatory anchor is served from the
+            # HKO open-data API (its Meteostat file ends 1992), not Meteostat.
+            is_hko = self.sources.is_hko_observatory(st)
+            data_source = "hko_opendata" if is_hko else "meteostat"
+            feed = ("Hong Kong Observatory open-data daily observations"
+                    if is_hko else "Meteostat daily observations")
             truth_source = {
                 "kind": "station",
+                "data_source": data_source,
                 "station": {
                     "id": st.id, "name": st.name, "icao": st.icao, "wmo": st.wmo,
                     "latitude": st.latitude, "longitude": st.longitude,
                     "elevation": st.elevation,
                     "distance_km": round(st.distance_km, 1),
                 },
-                "label": (f"{st.label()} — Meteostat daily observations, "
+                "label": (f"{st.label()} — {feed}, "
                           f"{st.distance_km:.0f} km from city centre"),
                 "window_start": w_start.isoformat(),
                 "window_end": w_end.isoformat(),
@@ -682,6 +940,74 @@ class Council:
             "source_check": check,
         }
 
+    # -- mechanism convergence: independent corroboration (recommend-only) --- #
+    def _convergence(self, observed: DailySeries, high: float, low: float,
+                     naive_h: float | None, naive_l: float | None,
+                     records: Records, v: Validation,
+                     target: dt.date) -> dict | None:
+        """Gather each verdict-forming mechanism's LIVE estimate of the day's
+        high/low alongside its OWN held-out MAE, for the recommend-only
+        convergence layer (see convergence.py). Returns prepared inputs, not a
+        decision — the C7 gate is applied by the caller. None when the backtest
+        produced no usable held-out scores.
+
+        Mechanisms and lineages:
+          * council     — skill-weighted, bias-corrected blend (the headline)
+          * naive avg   — equal-weight multi-model mean
+            ^ council and naive are BOTH functions of the same NWP forecasts, so
+              they share the 'nwp' lineage and cannot count as independent
+              corroboration of each other (convergence.py guardrail 1).
+          * climatology — the seasonal normal for the date (independent lineage)
+          * persistence — the most recent observed day (independent lineage)
+        """
+        if v is None or not observed:
+            return None
+        # Persistence is only an HONEST live mechanism when the latest observation
+        # genuinely precedes the target (its backtested MAE is for true
+        # day-over-day persistence). With the Meteostat archive lagging real time
+        # by ~ARCHIVE_LAG_DAYS, the newest observed day is usually days stale — a
+        # "5-days-ago" reading carries none of the 1-day MAE it would be scored
+        # against, so we drop it rather than score a different mechanism against
+        # the wrong error bar (the lineage simply abstains).
+        last_date = max(observed)
+        gap = (target - dt.date.fromisoformat(last_date)).days
+        last = observed.get(last_date)
+        if last is not None and 0 < gap <= CONVERGENCE_PERSIST_MAX_GAP_DAYS:
+            persist_h, persist_l = last[0], last[1]
+        else:
+            persist_h = persist_l = None
+
+        def build(attr: str, headline: float, naive: float | None,
+                  normal: float | None, persist: float | None,
+                  residuals: list[float]) -> ConvergenceInputs | None:
+            n = len(residuals)
+            specs = [
+                ("council", "nwp", headline, _mae(v, "council", attr), n),
+                ("naive avg", "nwp", naive, _mae(v, "naive", attr), n),
+                ("climatology", "climatology", normal, _mae(v, "climatology", attr), n),
+                ("persistence", "persistence", persist, _mae(v, "persistence", attr), n),
+            ]
+            mechs = tuple(
+                Mechanism(name=nm, lineage=lin, estimate_c=float(est),
+                          mae_c=float(mae), n=cnt)
+                for (nm, lin, est, mae, cnt) in specs
+                if est is not None and mae is not None
+            )
+            if len(mechs) < 2:
+                return None
+            spread = statistics.stdev(residuals) if len(residuals) >= 2 else None
+            return ConvergenceInputs(
+                quantity=attr, headline_c=float(headline), mechanisms=mechs,
+                residual_spread_c=spread, n_resid=n)
+
+        ch = build("high", high, naive_h, records.normal_high, persist_h,
+                   v.residuals_high or [])
+        cl = build("low", low, naive_l, records.normal_low, persist_l,
+                   v.residuals_low or [])
+        if ch is None and cl is None:
+            return None
+        return {"high": ch, "low": cl}
+
     def _basis(self, place: Place, truth_source: dict) -> str:
         if truth_source["kind"] == "station":
             st = truth_source["station"]
@@ -711,13 +1037,37 @@ class Council:
             current = self.sources.fetch_current(place)
         except Exception:
             current = {}
+        # Hong Kong anchors on the HKO settlement record, so its live "now"
+        # reading must come from the HKO instrument too — not an Open-Meteo grid
+        # cell that can sit ~2 °C off the Observatory. Temperature (and humidity,
+        # which HKO also reports at the HQ) are overridden from the live rhrread
+        # feed; wind/pressure stay from the grid and the temperature's source is
+        # surfaced so the provenance is never silently mixed.
+        if truth_source.get("data_source") == "hko_opendata":
+            try:
+                live = self.sources.hko_current()
+            except Exception:
+                live = None
+            if live and live.get("temperature_2m") is not None:
+                current = dict(current)
+                current["temperature_2m"] = live["temperature_2m"]
+                if live.get("relative_humidity_2m") is not None:
+                    current["relative_humidity_2m"] = live["relative_humidity_2m"]
+                current["temperature_source"] = "Hong Kong Observatory (live rhrread)"
+                current["temperature_record_time"] = live.get("record_time")
         recent = [(d, observed[d][0], observed[d][1])
                   for d in sorted(observed)[-RECENT_OBS_DAYS:]]
         if truth_source["kind"] == "station":
             st = truth_source["station"]
-            backbone = (f"{st['name']} surface observations via Meteostat "
-                        f"(aggregated METAR/SYNOP gauge readings — the point a "
-                        f"temperature record settles on)")
+            if truth_source.get("data_source") == "hko_opendata":
+                backbone = (f"{st['name']} surface observations via Hong Kong "
+                            f"Observatory open data (the Observatory's own gauge — "
+                            f"the point the HK temperature record settles on; live "
+                            f"'now' reading from the HKO rhrread feed)")
+            else:
+                backbone = (f"{st['name']} surface observations via Meteostat "
+                            f"(aggregated METAR/SYNOP gauge readings — the point a "
+                            f"temperature record settles on)")
         else:
             backbone = ("ERA5 reanalysis (assimilates satellite, radiosonde, "
                         "radar, ocean-buoy and ground-station observations)")
@@ -863,7 +1213,7 @@ class Council:
         where the forecast peak ranks. Pooled over ±RECORD_WINDOW_DAYS so the
         sample isn't a single day per year."""
         start = dt.date(CLIMO_START_YEAR, 1, 1)
-        end = dt.date.today() - dt.timedelta(days=ARCHIVE_LAG_DAYS)
+        end = place_today(place) - dt.timedelta(days=ARCHIVE_LAG_DAYS)
         try:
             series = self.sources.fetch_climatology(place, start, end)
         except Exception:
@@ -964,10 +1314,19 @@ class Council:
 
     @staticmethod
     def _cross_system(high: float, low: float, e: Ensemble) -> float | None:
-        """Disagreement between the two independent estimators of the same day:
-        the deterministic blend and the perturbed-ensemble mean. Worst of H/L.
-        Large when the two model families genuinely point to different answers,
-        even if each is internally confident.
+        """Disagreement between two *views* of the same day: the deterministic
+        control-run blend (all eight national centers) and the perturbed-ensemble
+        mean. Worst of H/L.
+
+        These two are NOT fully independent — the ensemble's three families
+        (GEFS / ICON-EPS / GEPS) are the perturbed versions of GFS / ICON / GEM,
+        which also sit in the deterministic panel — so a *small* gap is partly
+        mechanical (shared lineage) and is deliberately never read as positive
+        evidence of robustness. A *large* gap is still informative: it means
+        initial-condition perturbations move the answer away from the control
+        blend, i.e. genuine day-specific uncertainty. Accordingly this feeds the
+        confidence calc one-directionally — it can only *raise* effective
+        uncertainty (downgrade a tier), never manufacture confidence.
 
         The deterministic `high`/`low` are bias-corrected, so we compare against
         the ensemble's *bias-corrected* mean when we have earned that correction
@@ -996,7 +1355,20 @@ class Council:
         usable = [v for v in votes
                   if v.eligible and self._corrected(v, attr) is not None]
         if not usable:
-            raise RuntimeError(f"no eligible council member produced a {attr} forecast")
+            # Distinguish a transient throttle (every member hit the same
+            # rate-limited endpoint — retry shortly) from a genuine data gap, so
+            # the caller doesn't treat a temporary 429 as "this city is
+            # unforecastable". The retry/backoff in SafeHTTPClient already
+            # absorbs isolated 429s; this only fires when the throttle outlasts
+            # the whole retry budget for the entire council at once.
+            throttled = any("rate-limited" in n for v in votes for n in v.notes)
+            if throttled:
+                raise RateLimitError(
+                    f"no {attr} forecast: every council member's data source was "
+                    f"rate-limited beyond the retry budget — transient, retry shortly"
+                )
+            raise ForecastUnavailableError(
+                f"no eligible council member produced a {attr} forecast")
 
         vals = [self._corrected(v, attr) for v in usable]
         median = statistics.median(vals)
@@ -1057,9 +1429,20 @@ class Council:
         persist_err_h, persist_err_l = [], []
         clim_err_h, clim_err_l = [], []
         resid_h, resid_l = [], []           # signed: observed − council prediction
+        prior_clim_h, prior_clim_l = [], []  # signed: observed − climatology, in order
         wins = comparisons = 0
         hits = 0
         hit_total = 0
+        # Proper-scoring accumulators. Both council and climatology are dressed
+        # with their OWN earlier held-out residuals, so a positive skill score
+        # means the council's *distribution* (not just its point) beats the
+        # naive baseline's distribution on identical days.
+        crps_c_sum = crps_clim_sum = 0.0
+        crps_count = cover_hits = cover_count = 0
+        width_sum = 0.0
+        # (signed residual, member dispersion) pairs for the conditional-spread
+        # calibration check — pooled high+low, in walk-forward order. Recommend-only.
+        calib_pairs: list[tuple[float, float]] = []
 
         for i, d in enumerate(test):
             obs = observed.get(d)
@@ -1080,7 +1463,8 @@ class Council:
             cl = self._blend_on_date(votes, "low", d, train)
             if ch is not None:
                 council_err_h.append(abs(ch[0] - obs[0]))
-                resid_h.append(obs[0] - ch[0])
+                r = obs[0] - ch[0]
+                calib_pairs.append((r, ch[2]))
                 naive_err_h.append(abs(ch[1] - obs[0]))
                 clim_err_h.append(abs(clim_h - obs[0]))
                 if prev_obs is not None:
@@ -1089,9 +1473,24 @@ class Council:
                 wins += 1 if abs(ch[0] - obs[0]) <= abs(ch[1] - obs[0]) else 0
                 hits += 1 if abs(ch[0] - obs[0]) <= 2.0 else 0
                 hit_total += 1
+                # CRPS is translation-invariant, so scoring the prior residual
+                # cloud against today's residual r is identical to dressing the
+                # point forecast and scoring against the observation — but needs
+                # no rebuilt list. resid_h/prior_clim_h hold ONLY earlier days.
+                if len(resid_h) >= CRPS_MIN_SAMPLES and len(prior_clim_h) >= CRPS_MIN_SAMPLES:
+                    crps_c_sum += crps_sample(resid_h, r)
+                    crps_clim_sum += crps_sample(prior_clim_h, obs[0] - clim_h)
+                    crps_count += 1
+                    covered, width = interval_coverage(resid_h, r)
+                    cover_hits += 1 if covered else 0
+                    width_sum += width
+                    cover_count += 1
+                resid_h.append(r)
+                prior_clim_h.append(obs[0] - clim_h)
             if cl is not None:
                 council_err_l.append(abs(cl[0] - obs[1]))
-                resid_l.append(obs[1] - cl[0])
+                r = obs[1] - cl[0]
+                calib_pairs.append((r, cl[2]))
                 naive_err_l.append(abs(cl[1] - obs[1]))
                 clim_err_l.append(abs(clim_l - obs[1]))
                 if prev_obs is not None:
@@ -1100,8 +1499,23 @@ class Council:
                 wins += 1 if abs(cl[0] - obs[1]) <= abs(cl[1] - obs[1]) else 0
                 hits += 1 if abs(cl[0] - obs[1]) <= 2.0 else 0
                 hit_total += 1
+                if len(resid_l) >= CRPS_MIN_SAMPLES and len(prior_clim_l) >= CRPS_MIN_SAMPLES:
+                    crps_c_sum += crps_sample(resid_l, r)
+                    crps_clim_sum += crps_sample(prior_clim_l, obs[1] - clim_l)
+                    crps_count += 1
+                    covered, width = interval_coverage(resid_l, r)
+                    cover_hits += 1 if covered else 0
+                    width_sum += width
+                    cover_count += 1
+                resid_l.append(r)
+                prior_clim_l.append(obs[1] - clim_l)
 
+        calibration = conditional_spread_eval(calib_pairs)
         mean = lambda xs: statistics.mean(xs) if xs else None
+        crps_c = (crps_c_sum / crps_count) if crps_count else None
+        crps_clim = (crps_clim_sum / crps_count) if crps_count else None
+        crps_skill = (1.0 - crps_c / crps_clim
+                      if crps_c is not None and crps_clim and crps_clim > 0 else None)
         return Validation(
             council_mae_high=mean(council_err_h),
             council_mae_low=mean(council_err_l),
@@ -1116,14 +1530,27 @@ class Council:
             council_win_rate=(wins / comparisons) if comparisons else None,
             residuals_high=resid_h,
             residuals_low=resid_l,
+            crps_council=crps_c,
+            crps_climatology=crps_clim,
+            crps_skill=crps_skill,
+            coverage_80=(cover_hits / cover_count) if cover_count else None,
+            sharpness_80=(width_sum / cover_count) if cover_count else None,
+            crps_n=crps_count,
+            calibration=calibration,
         )
 
     def _blend_on_date(self, votes: list[Vote], attr: str, day: str,
-                       train: set[str]) -> tuple[float, float] | None:
-        """Return (council_blend, naive_mean) for one held-out day, using bias
-        and weights learned only from `train` dates. None if too sparse."""
+                       train: set[str]) -> tuple[float, float, float] | None:
+        """Return (council_blend, naive_mean, dispersion) for one held-out day,
+        using bias and weights learned only from `train` dates. None if too sparse.
+
+        `dispersion` is the spread of the bias-corrected member forecasts on this
+        day — the leak-free, per-day analog of the live ensemble spread. It feeds
+        the conditional-calibration check (calibration.py); it does NOT change the
+        blend the council serves."""
         num = den = 0.0
         naive_vals = []
+        corrected = []          # bias-corrected member forecasts for this day
         for v in votes:
             series = v.hist_high if attr == "high" else v.hist_low
             if day not in series:
@@ -1138,6 +1565,8 @@ class Council:
             num += w * (f_day - bias)
             den += w
             naive_vals.append(f_day)
+            corrected.append(f_day - bias)
         if den <= 0 or not naive_vals:
             return None
-        return num / den, statistics.mean(naive_vals)
+        disp = statistics.pstdev(corrected) if len(corrected) > 1 else 0.0
+        return num / den, statistics.mean(naive_vals), disp

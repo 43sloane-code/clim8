@@ -21,9 +21,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from run import _build_comparison, verdict_to_dict
+from run import (_build_comparison, verdict_to_dict,
+                 _settlement_reference, _anchor_cross_reference)
 from weather_council.council import Council
-from weather_council.security import SecurityError
+from weather_council.security import RateLimitError, SecurityError
 from weather_council.sources import Sources
 
 HOST = "127.0.0.1"
@@ -61,7 +62,10 @@ def _run_verdict(city: str, date_s: str, window_s: str, with_market: bool = Fals
     market_note = None
     if with_market:
         comparison, market_note = _build_comparison(sources, verdict, place, target)
-    return verdict_to_dict(verdict, comparison, market_note)
+    settlement_ref = _settlement_reference(sources, place, target, verdict)
+    cross_reference = _anchor_cross_reference(sources, place, target, verdict)
+    return verdict_to_dict(verdict, comparison, market_note,
+                           settlement_ref, cross_reference)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -93,6 +97,12 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 data = _run_verdict(city, date_s, window_s, with_market)
                 self._send(200, json.dumps(data).encode(), "application/json")
+            except RateLimitError as exc:
+                # Transient upstream throttle — distinct from a sandbox/validation
+                # rejection, so 503 (retryable) rather than 400 (client error).
+                self._send(503, json.dumps(
+                    {"error": str(exc), "retryable": True}).encode(),
+                    "application/json")
             except SecurityError as exc:
                 self._send(400, json.dumps({"error": str(exc)}).encode(), "application/json")
             except Exception as exc:

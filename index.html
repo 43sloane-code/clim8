@@ -362,6 +362,38 @@ function render(d){
     </div>`;
   }
 
+  // anchor & cross-reference — verdict anchored on a user-pinned settlement
+  // station (Hong Kong -> Observatory, London -> EGLC), with the demoted old
+  // anchor shown as a cross-reference.
+  const xr = d.anchor_cross_reference;
+  if(xr){
+    const anchor = xr.anchor_station || "the settlement station";
+    const anchorDisp = xr.anchor_icao ? `${anchor} (${xr.anchor_icao})` : anchor;
+    const xref = xr.cross_ref_station || "the cross-reference station";
+    let body;
+    if(xr.error){
+      body = `<div class="kv" style="margin-top:8px"><span class="pill bad">Cross-reference unavailable this run (${xr.error}). The verdict still stands on the ${anchor} anchor.</span></div>`;
+    } else {
+      const negligible = Math.abs(xr.high_mean) < 0.15;
+      const vintage = xr.is_modern ? "live overlap" : "climatological (stale) overlap";
+      const vcls = xr.is_modern ? "good" : "bad";
+      const takeaway = negligible
+        ? `${xref} and ${anchor} track within ±0.15 °C on the seasonal high — the anchor choice barely moves the number, but the verdict now settles on the record markets actually pay out on.`
+        : `${xref} reads <b>${xr.high_mean>0?'+':''}${f2(xr.high_mean)} °C</b> off the ${anchor} anchor; keeping the old ${xref} anchor would have biased the verdict by that much against the settlement record.`;
+      body = `
+        <div class="kv" style="margin-top:8px">
+          <span>Cross-ref: <b>${xref}</b>${xr.cross_ref_distance_km!=null?` (${f1(xr.cross_ref_distance_km)} km)`:""} runs <b class="${negligible?'good':'bad'}">${xr.high_mean>0?'+':''}${f2(xr.high_mean)} °C</b> on the daily high vs the anchor</span>
+          <span>median ${xr.high_median>0?'+':''}${f2(xr.high_median)}, ±${f2(xr.se)} SE, n=${xr.n_season} same-season days · <b class="${vcls}">${vintage}</b></span>
+        </div>
+        <div class="kv" style="margin-top:8px"><span class="pill${negligible?'':' bad'}">${takeaway}</span></div>`;
+    }
+    h += `<div class="card"><h3>Anchor — ${anchorDisp} <span class="pill">user-pinned</span></h3>
+      <div class="kv"><span>${xr.note}</span></div>
+      ${xr.data_source==="hko_opendata"?`<div class="kv" style="margin-top:6px"><span>Feed: Hong Kong Observatory open-data (data.weather.gov.hk) — the live settlement record</span></div>`:""}
+      ${body}
+    </div>`;
+  }
+
   // market comparison — model bucket probabilities vs Polymarket implied (read-only)
   const mc = d.market_comparison;
   if(mc){
@@ -423,30 +455,39 @@ function render(d){
     </div>`;
   }
 
-  // why the verdict isn't higher/lower — deterministic blend vs ensemble
-  if(ens.mean && ens.mean.high!=null){
-    const gap = ens.mean.high - v.high;
-    if(Math.abs(gap) >= 0.5){
-      const eligible = ens.blend_eligible;
-      const note = eligible && ens.corrected_mean_high!=null
-        ? `The ensemble has <b>${ens.backtest_days}</b> backtest days (≥10), so its mean was bias-corrected to <b>${f1(ens.corrected_mean_high)} °C</b> and folded into the blend.`
-        : `The ensemble is <b>not</b> blended into the number: only <b>${ens.backtest_days}</b> backtestable day(s) are available here (10 required). On the free archive its history is too sparse to prove skill, so it lowers confidence but cannot move the verdict. The <i>verify</i> pass will score which was right once the day ends.`;
-      h += `<div class="card"><h3>Why the verdict isn't ${gap>0?'higher':'lower'} — deterministic blend vs. ensemble</h3>
-        <div class="kv">
-          <span>Verdict (deterministic, backtested): <b>${f1(v.high)} °C</b></span>
-          <span>Perturbed-ensemble mean (raw): <b class="${gap>0?'bad':'meh'}">${f1(ens.mean.high)} °C</b> (${gap>0?'+':''}${f1(gap)} °C)</span>
-        </div>
-        <div class="kv" style="margin-top:8px"><span>${note}</span></div>
-      </div>`;
-    }
+  // regime & consensus — one consolidated read: the regime, which validation is
+  // load-bearing in it, and whether the independent mechanisms reach a matched
+  // verdict. Subsumes the old naive-vs-verdict and deterministic-vs-ensemble cards.
+  const rc = d.regime_consensus;
+  if(rc){
+    const con = rc.consensus, reg = rc.regime, e = con.estimators;
+    const cls = con.status==="matched" ? "good" : (con.status==="loose" ? "meh" : "bad");
+    const scale = con.scaled_by_effective_sigma ? "σ" : `σ≈${f2(con.sigma_used)}°C`;
+    const row = (label, hi, lo) => (hi!=null)
+      ? `<span>${label}: <b>${f1(hi)} / ${f1(lo)} °C</b></span>` : "";
+    const trust = rc.trusted_validation.map(t=>`<li>${t}</li>`).join("");
+    h += `<div class="card"><h3>Regime &amp; consensus — do the mechanisms agree?</h3>
+      <div class="kv"><span>Regime: <b>${reg.label}</b></span></div>
+      <div class="kv" style="margin-top:6px">
+        <span>Consensus: <b class="${cls}">${con.status.toUpperCase()}</b> — estimators agree within <b>${con.worst_ratio}${scale}</b> (worst: ${con.worst_axis})</span>
+      </div>
+      <div class="kv" style="margin-top:8px">
+        ${row("Verdict (deterministic)", e.high.verdict, e.low.verdict)}
+        ${row("Naive equal-weight", e.high.naive, e.low.naive)}
+        ${row("Perturbed-ensemble mean", e.high.ensemble_mean, e.low.ensemble_mean)}
+      </div>
+      <ul style="margin:8px 0 0 0;padding-left:18px">${trust}</ul>
+      <div class="kv" style="margin-top:8px"><span class="pill ${cls}">${rc.takeaway}</span></div>
+    </div>`;
   }
 
   // computation — members table
   let rows = d.members.map(m=>{
     const aside = !(m.eligible);
     const wt = m.weight_high;
+    const windy = m.shown_by_windy ? ' <span class="pill" title="A model Windy.com displays — your cross-check; weighted here by backtested skill, not Windy\'s raw value">Windy</span>' : '';
     return `<tr>
-      <td class="${aside?'set-aside':''}">${m.institution}${aside?' <span class="pill">(set aside)</span>':''}</td>
+      <td class="${aside?'set-aside':''}">${m.institution}${windy}${aside?' <span class="pill">(set aside)</span>':''}</td>
       <td>${f1(m.raw.high)}/${f1(m.raw.low)}</td>
       <td>${f1(m.bias_corrected.high)}/${f1(m.bias_corrected.low)}</td>
       <td>${m.mae_corrected.high!=null?f1(m.mae_corrected.high):'–'}/${m.mae_corrected.low!=null?f1(m.mae_corrected.low):'–'}</td>
@@ -460,6 +501,7 @@ function render(d){
       ${rows}
     </table>
     <div class="kv" style="margin-top:10px"><span class="pill">raw = the service's forecast · adj = after backtested bias removal · weight = share of the HIGH blend · n = backtest samples</span></div>
+    ${d.members.some(m=>m.shown_by_windy)?'<div class="kv" style="margin-top:6px"><span class="pill">Windy = a model Windy.com shows you — the same forecast, here weighted by its backtested skill rather than displayed raw</span></div>':''}
   </div>`;
 
   // computation — ensemble

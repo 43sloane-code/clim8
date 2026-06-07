@@ -6,7 +6,9 @@ Examples:
   python3 run.py "Chicago" --lead 0       # today
   python3 run.py "Paris" --lead 3 --window 90
   python3 run.py "Berlin" --json          # machine-readable
+  python3 run.py "London" --market        # also log a council-vs-market snapshot
   python3 run.py --verify                 # score past verdicts vs observed
+  python3 run.py --edge                   # settle snapshots, print C7 edge verdict
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import datetime as dt
 import json
 import sys
 
-from weather_council.agents import MIN_SAMPLES
+from weather_council.agents import WINDY_MEMBERS
 from weather_council.compare import (
     VerdictMarketComparison,
     comparison_to_dict,
@@ -24,12 +26,16 @@ from weather_council.compare import (
     grain_support_note,
     match_market,
 )
-from weather_council.council import Council, Verdict, applied_bias_correction
+from weather_council.council import (Council, Verdict, applied_bias_correction,
+                                     regime_consensus)
+from weather_council.edge import report_lines as edge_report_lines, score_snapshots
+from weather_council.convergence import report_lines as convergence_report_lines
 from weather_council.market import MarketData
-from weather_council.security import SecurityError
-from weather_council.sources import Sources
+from weather_council.security import RateLimitError, SecurityError
+from weather_council.sources import Sources, place_today
 from weather_council.station_offset import measure_settlement_offset
-from weather_council.storage import log_verdict, verify
+from weather_council.storage import (fetch_settled_snapshots, log_market_snapshot,
+                                     log_verdict, settle_market_snapshots, verify)
 
 # User-declared settlement-reference stations: cities the user has explicitly
 # pinned to a specific airport record to "compare and contrast" every verdict
@@ -43,6 +49,28 @@ SETTLEMENT_REFERENCE: dict[str, dict[str, str]] = {
         "icao": "EGLC",
         "name": "London City Airport",
         "url": "https://www.wunderground.com/history/daily/gb/london/EGLC",
+    },
+}
+
+# Cities anchored on a NON-airport settlement station, with a nearby airport shown
+# only as a cross-reference. User-supplied directive, same discipline as
+# SETTLEMENT_REFERENCE — never a guessed station table. Hong Kong is the canonical
+# case: the verdict anchors on the Hong Kong Observatory (the settlement-grade
+# record, served live from HKO open-data because Meteostat's HKO file ends 1992),
+# and the VHHH airport — which the council used to anchor on — is demoted to a
+# measured cross-reference so the airport↔Observatory gap stays visible.
+ANCHOR_CROSS_REFERENCE: dict[str, dict[str, str]] = {
+    "hong kong": {
+        "cross_ref_token": "airport",   # how to spot the cross-ref station nearby
+        "note": ("The verdict anchors on the Hong Kong Observatory HQ (Tsim Sha "
+                 "Tsui) — the settlement-grade record, served live from the HKO "
+                 "open-data API. The VHHH airport is shown only as a cross-reference."),
+    },
+    "london": {
+        "cross_ref_token": "weather centre",   # the central London station, demoted
+        "note": ("The verdict anchors on London City Airport (EGLC) — the "
+                 "settlement-grade record London weather markets pay out on. The "
+                 "central London Weather Centre is shown only as a cross-reference."),
     },
 }
 
@@ -76,10 +104,10 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
         w_start = dt.date.fromisoformat(ts.get("window_start"))
         w_end = dt.date.fromisoformat(ts.get("window_end"))
     except (TypeError, ValueError):
-        w_end = dt.date.today() - dt.timedelta(days=1)
+        w_end = place_today(place) - dt.timedelta(days=1)
         w_start = w_end - dt.timedelta(days=60)
     # Extend the fetch through the target day so a finished target is captured.
-    fetch_end = max(w_end, min(target, dt.date.today() - dt.timedelta(days=1)))
+    fetch_end = max(w_end, min(target, place_today(place) - dt.timedelta(days=1)))
     base = {"icao": icao, "name": ref["name"], "url": ref["url"],
             "target_date": target.isoformat(),
             "verdict_high": v.high, "verdict_low": v.low}
@@ -133,6 +161,67 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
     }
 
 
+def _anchor_cross_reference_for(place) -> dict[str, str] | None:
+    """The user-declared anchor/cross-reference directive for this city, or None.
+    Matched on case-insensitive city-name containment, like SETTLEMENT_REFERENCE."""
+    name = (getattr(place, "name", "") or "").strip().lower()
+    for key, ref in ANCHOR_CROSS_REFERENCE.items():
+        if key in name or name in key:
+            return ref
+    return None
+
+
+def _anchor_cross_reference(sources: Sources, place, target, v: Verdict) -> dict | None:
+    """For a city anchored on a non-airport settlement station (e.g. Hong Kong ->
+    Observatory), surface the nearby airport as a *cross-reference*: the measured
+    seasonal offset of the airport's daily high vs the anchor. The verdict already
+    settles on the anchor; this just shows how the airport — which the council used
+    to anchor on — differs, so the gap stays visible. Returns None when the city
+    isn't pinned; an {error} dict (never a silent vanish) when the cross-reference
+    can't be earned this run."""
+    ref = _anchor_cross_reference_for(place)
+    if ref is None:
+        return None
+    ts = v.truth_source or {}
+    station = ts.get("station") or {}
+    base = {"anchor_station": station.get("name"), "anchor_icao": station.get("icao"),
+            "note": ref["note"], "verdict_high": v.high, "verdict_low": v.low,
+            "data_source": ts.get("data_source")}
+    if ts.get("kind") != "station" or not station.get("id"):
+        return {**base, "error": "the verdict isn't anchored on a station this run"}
+    token = ref.get("cross_ref_token", "airport")
+    try:
+        nearby = sources.nearest_stations(place)
+    except Exception as exc:
+        return {**base, "error": str(exc)}
+    air = next((s for s in nearby
+                if token in (s.name or "").lower() and s.id != station.get("id")), None)
+    if air is None:
+        return {**base, "error": f"no '{token}' station found nearby to cross-reference"}
+    try:
+        # measure_settlement_offset computes mean(cross-ref − anchor) on the daily
+        # high, seasonal + leak-free; pass the airport's real Meteostat name so it
+        # matches itself rather than relying on a hardcoded spelling.
+        off = measure_settlement_offset(sources, place, str(station["id"]),
+                                        air.name, target)
+    except Exception as exc:
+        return {**base, "error": str(exc)}
+    if off is None:
+        return {**base, "error": "couldn't earn a seasonal airport↔anchor offset this "
+                "run (no recent same-season overlap matched)"}
+    return {
+        **base,
+        "cross_ref_station": off.settlement_station_name,
+        "cross_ref_distance_km": off.settlement_distance_km,
+        "high_mean": off.high_mean,            # mean(airport_high − anchor_high), °C
+        "high_median": off.high_median,
+        "se": round(off.standard_error, 3),
+        "is_modern": off.is_modern,
+        "n_season": off.n_season,
+        "overlap_end": off.overlap_end,
+    }
+
+
 def _num(x, width=6, prec=1):
     return f"{x:{width}.{prec}f}" if isinstance(x, (int, float)) else " " * (width - 1) + "-"
 
@@ -144,10 +233,15 @@ def _pillars(v: Verdict) -> list[str]:
     cur = obs.current or {}
     t = cur.get("temperature_2m")
     if t is not None:
-        L.append(f"    [x] 1. OBSERVATION   now {t:.1f} °C, "
-                 f"{cur.get('relative_humidity_2m','?')}% RH, "
-                 f"wind {cur.get('wind_speed_10m','?')} km/h, "
-                 f"{cur.get('surface_pressure','?')} hPa")
+        line = (f"    [x] 1. OBSERVATION   now {t:.1f} °C, "
+                f"{cur.get('relative_humidity_2m','?')}% RH, "
+                f"wind {cur.get('wind_speed_10m','?')} km/h, "
+                f"{cur.get('surface_pressure','?')} hPa")
+        src = cur.get("temperature_source")
+        if src:
+            rt = cur.get("temperature_record_time")
+            line += f"  [temp: {src}{(' @ ' + rt) if rt else ''}]"
+        L.append(line)
     else:
         L.append("    [x] 1. OBSERVATION   current conditions unavailable")
     pc = cur.get("pressure_change_24h")
@@ -220,14 +314,29 @@ def _market_lines(c: VerdictMarketComparison) -> list[str]:
                      f"the settlement and backtest stations may have diverged since the overlap "
                      f"ended, so the settlement-scale number above is unreliable and no model "
                      f"edge over the market is asserted (see below).")
-    # The settlement reading is a whole-degree ROUNDING of the real-valued verdict.
-    # Make that explicit so an integer like "18" shown next to a market "19" can't
-    # be misread as a one-degree disagreement when the verdict was e.g. 18.4 °C.
+    # How the verdict settles depends on the record's GRAIN. A sub-degree record
+    # (Hong Kong on the HKO Observatory, 0.1 °C) keeps the tenths — 30.7 °C settles
+    # as 30.7 °C, NOT a whole-degree "31". Only whole-degree airport-METAR records
+    # snap to an integer. Conflating the two is exactly the rounding error that made
+    # a continuous 30.7 °C look like a one-degree disagreement with the market.
     rounded = abs(c.verdict_high_c - c.verdict_reading) > 1e-9
-    snap = "rounds to" if rounded else "settles as"
-    tag = " (ROUNDED)" if rounded else ""
-    L.append(f"    settles  : whole °{c.grain} | verdict {c.verdict_high_c:.1f} °C "
-             f"{snap} {c.verdict_reading}°{tag} -> bucket {c.verdict_bucket}")
+    if c.settles_sub_degree:
+        # The settlement record is finer than its whole-degree bucket labels, so no
+        # whole-degree rounding applies. Show the verdict on the settlement-station
+        # scale to 0.1 °C (the offset transfer is stated on the 'transfer' line).
+        scale_c = c.settlement_high_c if c.settlement_high_c is not None else c.verdict_high_c
+        L.append(f"    settles  : 0.1 °{c.grain} record (sub-degree) | high {scale_c:.1f} °C "
+                 f"settles as {scale_c:.1f} °C — no whole-degree rounding applies "
+                 f"-> bucket {c.verdict_bucket}")
+    else:
+        # Whole-degree airport-METAR record: the contract reads an integer, so the
+        # continuous verdict IS rounded half-up. Make that explicit so an integer
+        # like "18" next to a market "19" isn't misread as a one-degree
+        # disagreement when the verdict was e.g. 18.4 °C.
+        snap = "rounds to" if rounded else "settles as"
+        tag = " (ROUNDED)" if rounded else ""
+        L.append(f"    settles  : whole °{c.grain} | verdict {c.verdict_high_c:.1f} °C "
+                 f"{snap} {c.verdict_reading}°{tag} -> bucket {c.verdict_bucket}")
     fragile = c.edge_distance_c is not None and c.edge_distance_c <= 0.5
     if c.edge_distance_c is not None:
         flip = " — a shift this small flips the bucket" if fragile else ""
@@ -276,7 +385,8 @@ def _market_lines(c: VerdictMarketComparison) -> list[str]:
     # bury earned signal: the integer *label* is fragile (18.4 is a hair from the
     # edge), but the continuous verdict is the real, bias-corrected position
     # (quantified on the 'correction' line above).
-    if rounded and fragile and c.model_modal == c.verdict_bucket \
+    if rounded and fragile and not c.settles_sub_degree \
+            and c.model_modal == c.verdict_bucket \
             and c.market_modal != c.model_modal:
         L.append(f"             ^ the integer label {c.verdict_reading}° is fragile: "
                  f"{c.verdict_high_c:.1f} °C is only {c.edge_distance_c:.2f} °C from the "
@@ -360,8 +470,77 @@ def _settlement_reference_lines(ref: dict) -> list[str]:
     return L
 
 
+def _anchor_cross_reference_lines(ref: dict) -> list[str]:
+    """Render the demoted-station cross-reference for a verdict anchored on a
+    user-pinned settlement station (Hong Kong -> Observatory, London -> EGLC):
+    the measured seasonal offset of the old anchor's daily high vs the new one."""
+    anchor = ref.get("anchor_station") or "the settlement station"
+    icao = ref.get("anchor_icao")
+    anchor_disp = f"{anchor} ({icao})" if icao else anchor
+    xref = ref.get("cross_ref_station") or "the cross-reference station"
+    L = [f"  ANCHOR & CROSS-REFERENCE — anchored on {anchor_disp} [user-pinned]"]
+    L.append(f"    anchor   : {ref['note']}")
+    if ref.get("data_source") == "hko_opendata":
+        L.append(f"    feed     : Hong Kong Observatory open-data "
+                 f"(data.weather.gov.hk) — the live settlement record")
+    if ref.get("error"):
+        L.append(f"    x-ref    : cross-reference unavailable this run "
+                 f"({ref['error']}); the verdict still stands on the {anchor} anchor.")
+        L.append("")
+        return L
+    vintage = "live overlap" if ref["is_modern"] else "climatological (stale) overlap"
+    d = ref.get("cross_ref_distance_km")
+    dist = f" ({d:.1f} km)" if isinstance(d, (int, float)) else ""
+    L.append(f"    x-ref    : {xref}{dist} runs "
+             f"{ref['high_mean']:+.2f} °C on the daily high vs the {anchor} anchor "
+             f"(median {ref['high_median']:+.2f}, ±{ref['se']:.2f} SE, "
+             f"n={ref['n_season']} same-season days, {vintage})")
+    if abs(ref["high_mean"]) < 0.15:
+        L.append(f"    -> {xref} and {anchor} track within ±0.15 °C on the seasonal "
+                 f"high; the anchor choice barely moves the number, but the verdict "
+                 f"now settles on the record markets actually pay out on.")
+    else:
+        L.append(f"    -> {xref} reads {ref['high_mean']:+.2f} °C off the {anchor} "
+                 f"anchor; keeping the old {xref} anchor would have biased the verdict "
+                 f"by that much against the settlement record.")
+    L.append("")
+    return L
+
+
+_CONSENSUS_TAG = {"matched": "MATCHED", "loose": "LOOSE", "split": "SPLIT"}
+
+
+def _regime_consensus_lines(v: Verdict) -> list[str]:
+    """Single consolidated read: the regime, which validation is load-bearing in
+    it, and whether the independent mechanisms reach a matched verdict. Subsumes
+    the standalone naive-vs-verdict and deterministic-vs-ensemble comparisons."""
+    rc = regime_consensus(v)
+    reg, con = rc["regime"], rc["consensus"]
+    est = con["estimators"]
+    scale = "σ" if con["scaled_by_effective_sigma"] else f"σ≈{con['sigma_used']}°C"
+    L = ["  REGIME & CONSENSUS (do the independent mechanisms agree?)"]
+    L.append(f"    regime   : {reg['label']}")
+    L.append(f"    consensus: {_CONSENSUS_TAG[con['status']]} — estimators agree "
+             f"within {con['worst_ratio']}{scale} (worst: {con['worst_axis']})")
+    L.append(f"      verdict (deterministic) : "
+             f"{est['high']['verdict']:.1f} / {est['low']['verdict']:.1f} °C")
+    if est['high']['naive'] is not None:
+        L.append(f"      naive equal-weight      : "
+                 f"{est['high']['naive']:.1f} / {est['low']['naive']:.1f} °C")
+    if est['high']['ensemble_mean'] is not None:
+        L.append(f"      perturbed-ensemble mean : "
+                 f"{est['high']['ensemble_mean']:.1f} / {est['low']['ensemble_mean']:.1f} °C")
+    for i, line in enumerate(rc["trusted_validation"]):
+        L.append(f"    {'trust    :' if i == 0 else '             '} {line}")
+    L.append(f"    -> {rc['takeaway']}")
+    L.append("")
+    return L
+
+
 def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
-           settlement_ref: dict | None = None) -> str:
+           settlement_ref: dict | None = None,
+           cross_reference: dict | None = None,
+           c7_validated: bool = False) -> str:
     L = []
     L.append(f"COUNCIL VERDICT  —  {v.place.label()}  ({v.target})")
     L.append("=" * 64)
@@ -412,9 +591,9 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
                      f"{sa['members_corrected']} member(s) — the trailing window is the wrong "
                      f"season to learn a bias on, so the correction is trained on the right one.")
     L.append(f"    (range across panel: high {v.high_spread} / low {v.low_spread} °C, shown for reference)")
-    if v.naive_high is not None:
-        L.append(f"  Naive equal-weight avg would say: {v.naive_high:.1f} / {v.naive_low:.1f} °C")
     L.append("")
+
+    L.extend(_regime_consensus_lines(v))
 
     rp = v.representativeness
     if rp.sigma is not None:
@@ -472,24 +651,14 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
     if settlement_ref is not None:
         L.extend(_settlement_reference_lines(settlement_ref))
 
-    en = v.ensemble
-    if en.mean_high is not None:
-        gap = en.mean_high - v.high
-        if abs(gap) >= 0.5:
-            L.append("  WHY THE VERDICT ISN'T HIGHER/LOWER (deterministic blend vs. ensemble)")
-            L.append(f"    verdict (deterministic, backtested) : {v.high:.1f} °C")
-            L.append(f"    perturbed-ensemble mean (raw)       : {en.mean_high:.1f} °C "
-                     f"({gap:+.1f} °C vs verdict)")
-            if en.blend_eligible and en.corrected_mean_high is not None:
-                L.append(f"    -> ensemble has {en.backtest_days} backtest days "
-                         f"(≥{MIN_SAMPLES}); bias-corrected to "
-                         f"{en.corrected_mean_high:.1f} °C and folded into the blend")
-            else:
-                L.append(f"    -> ensemble NOT blended: only {en.backtest_days} backtestable "
-                         f"day(s) here (need ≥{MIN_SAMPLES}). On the free archive its history is")
-                L.append(f"       too sparse to prove skill, so it lowers confidence but cannot")
-                L.append(f"       move the number. --verify will score which was right once the day ends.")
-            L.append("")
+    if cross_reference is not None:
+        L.extend(_anchor_cross_reference_lines(cross_reference))
+
+    ci = v.convergence
+    if ci:
+        ch = ci["high"].decide(c7_validated) if ci.get("high") else None
+        cl = ci["low"].decide(c7_validated) if ci.get("low") else None
+        L.extend(convergence_report_lines(ch, cl, c7_validated))
 
     d = v.diurnal
     if d.peak_time or d.obs_peak_hour is not None:
@@ -541,9 +710,15 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
         wt_s = f"{wt*100:4.0f}" if wt is not None else "   -"
         n = min(sk_h.n if sk_h else 0, sk_l.n if sk_l else 0)
         flag = "" if vote.eligible and vote.spec.member_id in v.weights_high else "  (set aside)"
-        L.append(f"    {vote.spec.institution:22}{raw:>13}{adj:>13}{mae:>13}{wt_s:>6}  {n}{flag}")
+        # Mark the rows Windy.com surfaces (ECMWF/GFS/ICON) as a transparent
+        # cross-check — same model, skill-weighted here rather than shown raw.
+        name = vote.spec.institution + (" [W]" if vote.spec.member_id in WINDY_MEMBERS else "")
+        L.append(f"    {name:22}{raw:>13}{adj:>13}{mae:>13}{wt_s:>6}  {n}{flag}")
     L.append("    raw = center's forecast | adj = after backtested bias removal | "
              "wt% = blend weight for HIGH")
+    if any(vote.spec.member_id in WINDY_MEMBERS for vote in v.votes):
+        L.append("    [W] = a model Windy.com displays — your cross-check; the council "
+                 "weights it by backtested skill, not Windy's raw value")
     L.append("")
 
     val = v.validation
@@ -567,6 +742,41 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
             L.append(f"    council closer than naive on {val.council_win_rate*100:.0f}% of held-out predictions")
         if val.hit_rate_2c is not None:
             L.append(f"    within ±2 °C on {val.hit_rate_2c*100:.0f}% of held-out predictions")
+        if val.crps_council is not None:
+            L.append("")
+            L.append("    PROBABILISTIC SKILL (proper scoring rule — CRPS, °C; lower is better)")
+            skill_s = (f"  -> skill {val.crps_skill*100:+.0f}%"
+                       if val.crps_skill is not None else "")
+            L.append(f"      CRPS council {val.crps_council:.3f}  vs dressed climatology "
+                     f"{val.crps_climatology:.3f}{skill_s} "
+                     f"({val.crps_n} scored days)")
+            if val.coverage_80 is not None:
+                cov = val.coverage_80 * 100
+                cal = ("well-calibrated" if 75 <= cov <= 85
+                       else "over-confident (under-dispersed)" if cov < 75
+                       else "under-confident (over-dispersed)")
+                L.append(f"      80% interval covers {cov:.0f}% of outcomes "
+                         f"(width {val.sharpness_80:.1f} °C) — {cal}")
+            L.append("      (the verdict's bucket probabilities are this distribution, "
+                     "now scored — not asserted)")
+        cb = val.calibration
+        if cb is not None:
+            L.append("")
+            L.append("    SELF-IMPROVEMENT CHECK (recommend-only — never auto-applied)")
+            if cb.recommend:
+                L.append(f"      ⮕ RECOMMEND: scale the predictive spread by per-day "
+                         f"member dispersion (conditional distribution).")
+                L.append(f"        held-out CRPS {cb.crps_conditional:.3f} vs current "
+                         f"{cb.crps_incumbent:.3f} ({cb.improvement_pct*100:+.1f}%, "
+                         f"{cb.z:+.1f}σ past noise, disp↔|err| r={cb.disp_corr:+.2f}, "
+                         f"n={cb.n_scored}). Surface for human review; the served "
+                         f"verdict is unchanged.")
+            else:
+                L.append(f"      no change recommended: conditional spread (scale by "
+                         f"member dispersion) does not beat the current single residual "
+                         f"cloud past the noise floor "
+                         f"(CRPS {cb.crps_conditional:.3f} vs {cb.crps_incumbent:.3f}, "
+                         f"{cb.z:+.1f}σ, disp↔|err| r={cb.disp_corr:+.2f}, n={cb.n_scored}).")
     else:
         L.append("    insufficient history in window for split-sample validation")
     L.append("")
@@ -580,6 +790,7 @@ def verdict_to_dict(
     comparison: VerdictMarketComparison | None = None,
     market_note: str | None = None,
     settlement_ref: dict | None = None,
+    cross_reference: dict | None = None,
 ) -> dict:
     val = v.validation
     d = {
@@ -601,12 +812,14 @@ def verdict_to_dict(
             "sigma": v.representativeness.sigma,
         },
         "confidence_detail": v.confidence_detail,
+        "regime_consensus": regime_consensus(v),
         "live_spread": {"high": v.high_spread, "low": v.low_spread},
         "naive_baseline": {"high": v.naive_high, "low": v.naive_low},
         "members": [
             {
                 "id": vote.spec.member_id,
                 "institution": vote.spec.institution,
+                "shown_by_windy": vote.spec.member_id in WINDY_MEMBERS,
                 "raw": {"high": vote.raw_high, "low": vote.raw_low},
                 "bias_corrected": {"high": vote.corrected_high, "low": vote.corrected_low},
                 "mae_corrected": {
@@ -634,6 +847,26 @@ def verdict_to_dict(
             "climatology_mae": {"high": val.climatology_mae_high, "low": val.climatology_mae_low},
             "council_win_rate_vs_naive": val.council_win_rate,
             "hit_rate_within_2c": val.hit_rate_2c,
+            "crps": {
+                "council": val.crps_council,
+                "climatology": val.crps_climatology,
+                "skill_vs_climatology": val.crps_skill,
+                "coverage_80": val.coverage_80,
+                "sharpness_80": val.sharpness_80,
+                "scored_days": val.crps_n,
+            },
+            "self_improvement_check": ({
+                "method": "conditional predictive spread scaled by per-day member "
+                          "dispersion (heteroscedastic distribution)",
+                "recommend": val.calibration.recommend,
+                "crps_conditional": val.calibration.crps_conditional,
+                "crps_incumbent": val.calibration.crps_incumbent,
+                "improvement_pct": val.calibration.improvement_pct,
+                "sigma_past_noise": val.calibration.z,
+                "dispersion_error_corr": val.calibration.disp_corr,
+                "scored_days": val.calibration.n_scored,
+                "applied": False,
+            } if val.calibration is not None else None),
         },
         "observation": {
             "current": v.observation.current,
@@ -694,6 +927,8 @@ def verdict_to_dict(
         d["market_note"] = market_note
     if settlement_ref is not None:
         d["settlement_reference"] = settlement_ref
+    if cross_reference is not None:
+        d["anchor_cross_reference"] = cross_reference
     return d
 
 
@@ -702,9 +937,11 @@ def to_json(
     comparison: VerdictMarketComparison | None = None,
     market_note: str | None = None,
     settlement_ref: dict | None = None,
+    cross_reference: dict | None = None,
 ) -> str:
     return json.dumps(
-        verdict_to_dict(v, comparison, market_note, settlement_ref), indent=2)
+        verdict_to_dict(v, comparison, market_note, settlement_ref,
+                        cross_reference), indent=2)
 
 
 def _build_comparison(
@@ -758,12 +995,25 @@ def main(argv=None) -> int:
                          "compare the model's per-bucket probabilities to the market's")
     ap.add_argument("--verify", action="store_true",
                     help="score past logged verdicts against observed temps")
+    ap.add_argument("--edge", action="store_true",
+                    help="settle logged market snapshots against the anchor station "
+                         "and print the C7 council-vs-market calibration verdict "
+                         "(read-only, recommend-only)")
     args = ap.parse_args(argv)
 
     try:
         if args.verify:
             lines = verify()
             print("\n".join(lines) if lines else "no past verdicts ready to verify yet")
+            return 0
+
+        if args.edge:
+            settled = settle_market_snapshots()
+            if settled:
+                print("settled:")
+                print("\n".join(f"  {s}" for s in settled))
+            report = score_snapshots(fetch_settled_snapshots())
+            print("\n".join(edge_report_lines(report)))
             return 0
 
         if not args.city:
@@ -775,23 +1025,45 @@ def main(argv=None) -> int:
 
         sources = Sources()
         place = sources.geocode(args.city)
-        target = dt.date.today() + dt.timedelta(days=args.lead)
+        # "today" is the place's own civil date, not the host's: a same-day
+        # (lead 0) verdict for a city in another timezone must target the day the
+        # forecast feed actually carries for that city (e.g. Hong Kong is already
+        # "tomorrow" relative to a UTC-1 host). See sources.place_today.
+        target = place_today(place) + dt.timedelta(days=args.lead)
         verdict = Council(sources).deliberate(place, target, args.window)
         log_verdict(verdict)
+
+        # Whether C7 realized-outcome calibration has earned a validated edge yet
+        # (DB read only, no network). Gates whether the mechanism-convergence
+        # layer's nudge is ever ALLOWED to move the headline; until then it is
+        # annotation only. Never True until ≥20 settled days beat the market.
+        try:
+            c7_validated = score_snapshots(fetch_settled_snapshots()).is_edge_validated
+        except Exception:
+            c7_validated = False
 
         comparison = None
         market_note = None
         if args.market:
             comparison, market_note = _build_comparison(sources, verdict, place, target)
+            if comparison is not None:
+                # Persist the comparison so C7 can grade it once the day settles
+                # against the verdict's anchor station (recommend-only ledger).
+                log_market_snapshot(verdict, comparison)
 
         # User-pinned settlement reference (e.g. London -> Wunderground EGLC):
         # always compare & contrast the verdict against that airport's record.
         settlement_ref = _settlement_reference(sources, place, target, verdict)
+        # Non-airport-anchored city (e.g. Hong Kong -> Observatory): surface the
+        # nearby airport as a measured cross-reference to the anchor.
+        cross_reference = _anchor_cross_reference(sources, place, target, verdict)
 
         if args.json:
-            print(to_json(verdict, comparison, market_note, settlement_ref))
+            print(to_json(verdict, comparison, market_note, settlement_ref,
+                          cross_reference))
         else:
-            print(render(verdict, comparison, settlement_ref))
+            print(render(verdict, comparison, settlement_ref, cross_reference,
+                         c7_validated=c7_validated))
             if args.market and comparison is None:
                 if market_note:
                     print("\n  MARKET COMPARISON (withheld)\n    " + market_note)
@@ -799,6 +1071,10 @@ def main(argv=None) -> int:
                     print("\n  (no open Polymarket market matched this city/day — "
                           "nothing to compare)")
         return 0
+    except RateLimitError as exc:
+        print(f"upstream rate-limited (transient — retry shortly): {exc}",
+              file=sys.stderr)
+        return 3
     except SecurityError as exc:
         print(f"blocked by sandbox / validation: {exc}", file=sys.stderr)
         return 2

@@ -27,6 +27,7 @@ import statistics
 from dataclasses import dataclass
 
 from .market import WeatherMarket
+from .scoring import interval_coverage, quantile
 from .station_offset import StationOffset
 
 # Below this many held-out errors we will not assert an empirical distribution —
@@ -69,27 +70,24 @@ def residual_calibration(residuals_c: list[float]) -> Calibration | None:
     skew = 0.0
     if spread > 1e-9:
         skew = sum(((x - mean) / spread) ** 3 for x in xs) / n
-    sxs = sorted(xs)
+    p10, p50, p90 = quantile(xs, 0.10), quantile(xs, 0.50), quantile(xs, 0.90)
 
-    def q(p: float) -> float:
-        i = min(len(sxs) - 1, max(0, round(p * (len(sxs) - 1))))
-        return sxs[i]
-
-    p10, p50, p90 = q(0.10), q(0.50), q(0.90)
-
-    # Weak out-of-sample dispersion check: learn the 80% band from the earlier
-    # half of the (chronological) errors, measure how many later errors fall in
-    # it. Only attempted with enough points; reported with its own n and caveat.
+    # Leak-free out-of-sample dispersion check, sharing ONE engine with the
+    # council's walk-forward calibration (scoring.interval_coverage): for every
+    # error past the same warmup floor the council uses, ask whether it falls
+    # inside the 80% band of the STRICTLY-EARLIER errors. This scores every later
+    # point — not one arbitrary chronological split-half — so this number and
+    # Validation.coverage_80 are the same measurement on the same residuals,
+    # never two conventions that could disagree.
     coverage = None
     cov_n = 0
-    if n >= 20:
-        cut = n // 2
-        train, test = xs[:cut], xs[cut:]
-        strain = sorted(train)
-        lo = strain[max(0, round(0.10 * (len(strain) - 1)))]
-        hi = strain[min(len(strain) - 1, round(0.90 * (len(strain) - 1)))]
-        cov_n = len(test)
-        coverage = sum(1 for x in test if lo <= x <= hi) / cov_n
+    if n > MIN_RESIDUALS:
+        hits = 0
+        for i in range(MIN_RESIDUALS, n):
+            covered, _ = interval_coverage(xs[:i], xs[i])
+            hits += 1 if covered else 0
+            cov_n += 1
+        coverage = hits / cov_n if cov_n else None
 
     note = (
         f"probabilities resampled from {n} held-out errors "

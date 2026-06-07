@@ -48,6 +48,15 @@ COUNCIL: list[MemberSpec] = [
     MemberSpec("cma", "cma_grapes_global", "China CMA GRAPES", "China"),
 ]
 
+# Members that the Windy.com apps surface to end users. Windy is a *viewer* for
+# these same operational models (ECMWF/GFS/ICON), not an independent forecaster —
+# so rather than add Windy as a redundant, un-backtestable data source, we simply
+# tag the council rows it shows. The number you see in Windy for one of these is
+# this same model's raw run; the council additionally weights it by its measured
+# skill. Purely presentational: this set never changes a vote, weight, or verdict.
+WINDY_MEMBERS: frozenset[str] = frozenset({"ecmwf", "gfs", "icon"})
+
+
 # Stage-2 ensemble forecasting: each model is run many times with perturbed
 # initial conditions. Pooling these members measures the chaotic spread of the
 # atmosphere (do the runs agree or diverge?). Verified globally available with

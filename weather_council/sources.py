@@ -15,9 +15,12 @@ an empty result, never a fabricated number.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import math
 from dataclasses import dataclass
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .security import SafeHTTPClient, SecurityError, validate_city
 
@@ -34,6 +37,23 @@ STATION_DAILY_URL = "https://bulk.meteostat.net/v2/daily/{id}.csv.gz"
 # Weather Underground (and thus market settlement) ultimately reads. Returned
 # in the sensor's native unit (whole °F for US ASOS, whole °C internationally).
 METAR_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
+# Hong Kong Observatory official open data — recent daily climate records direct
+# from the Observatory. The Meteostat archive for the HKO station ends in 1992,
+# far too old to measure a *current* settlement-vs-airport offset; this API is
+# the only source of the recent HKO daily record. Read-only, keyless, CSV.
+HKO_OPENDATA_URL = "https://data.weather.gov.hk/weatherAPI/opendata/opendata.php"
+# Hong Kong Observatory headquarters (Tsim Sha Tsui) — the point the "observatory"
+# settlement record reports from. Used to recognise a matched station as the HKO
+# by geography (combined with a name-token check) rather than a hardcoded table.
+HKO_HQ_LAT, HKO_HQ_LON = 22.302, 114.174
+HKO_MATCH_RADIUS_KM = 15.0       # how close a station must sit to count as HKO
+# Hong Kong Observatory real-time "regional weather" open data (rhrread) — the
+# live HKO instrument reading. The daily CLMMAXT/CLMMINT files settle the record;
+# this is the live "now" temperature at the Observatory HQ, so a Hong Kong
+# verdict's current-conditions reading is the HKO instrument itself, not an
+# Open-Meteo grid-cell proxy that can sit ~2 °C away. Keyless JSON, whole-degree.
+HKO_RHRREAD_URL = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php"
+HKO_RHRREAD_PLACE = "Hong Kong Observatory"   # the station label inside rhrread
 
 # Plausibility band: any temperature outside this is treated as corrupt and
 # dropped, so a bad upstream value can never enter a verdict.
@@ -41,6 +61,47 @@ TEMP_MIN_C = -90.0
 TEMP_MAX_C = 60.0
 
 DailySeries = dict[str, tuple[float, float]]  # date -> (high, low)
+
+# Transparent on-disk cache for forecast-history fetches ONLY. The
+# historical-forecast-api is a keyless endpoint that aggressively throttles
+# bursts (HTTP 429); a cold run that needs ~8 members' history can be starved
+# into "no eligible member" purely by rate limiting. Past forecast history for a
+# fixed date window is immutable, so caching the exact JSON response and replaying
+# it is faithful — the council, eligibility, weighting and scoring see byte-for-
+# byte what the network would have returned. The cache NEVER fabricates: a miss
+# during a throttle re-raises rather than inventing data. It only ever replays a
+# response we genuinely fetched before.
+HISTORY_CACHE_DIR = Path(__file__).resolve().parent.parent / ".cache" / "history"
+HISTORY_CACHE_TTL = dt.timedelta(days=7)
+
+
+def _history_cache_key(url: str, params: dict) -> str:
+    blob = url + "?" + json.dumps(params, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
+
+
+def _history_cache_read(key: str):
+    """Return (data, age) for a cached history response, or (None, None)."""
+    f = HISTORY_CACHE_DIR / f"{key}.json"
+    try:
+        raw = f.read_text(encoding="utf-8")
+        age = dt.datetime.now() - dt.datetime.fromtimestamp(f.stat().st_mtime)
+    except OSError:
+        return None, None
+    try:
+        return json.loads(raw), age
+    except ValueError:
+        return None, None
+
+
+def _history_cache_write(key: str, data: dict) -> None:
+    """Best-effort persist; a cache write must never break a live fetch."""
+    try:
+        HISTORY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        (HISTORY_CACHE_DIR / f"{key}.json").write_text(
+            json.dumps(data), encoding="utf-8")
+    except OSError:
+        pass
 
 
 @dataclass(frozen=True)
@@ -74,6 +135,27 @@ class Station:
         return f"{self.name} ({ident})"
 
 
+def place_today(place: Place) -> dt.date:
+    """The current civil date in the *place's own* timezone — the anchor for
+    "today" and forecast lead.
+
+    Open-Meteo indexes its forecast grid by the place's local day, not the
+    host's. Anchoring the target to the machine clock makes a same-day verdict
+    for a city in another timezone ask for a day the forecast feed doesn't carry
+    — e.g. on a UTC-1 host, Hong Kong (UTC+8) is already "tomorrow", so a lead-0
+    request looks up a date the API never returns and every member's live value
+    comes back None, collapsing the whole verdict. Resolving "today" in the
+    place's zone keeps the target, the lead, and the returned grid aligned.
+    Falls back to the host date when the timezone is unknown/unset."""
+    tz = getattr(place, "timezone", None)
+    if tz and tz != "auto":
+        try:
+            return dt.datetime.now(ZoneInfo(tz)).date()
+        except Exception:
+            pass
+    return dt.date.today()
+
+
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
@@ -102,6 +184,39 @@ def _clean_temp_cell(cell: str) -> float | None:
         return _clean_temp(float(cell))
     except ValueError:
         return None
+
+
+def _parse_hko_rhrread(data: dict) -> dict | None:
+    """Extract the Hong Kong Observatory HQ live reading from an rhrread payload.
+
+    rhrread groups readings by field (`temperature`, `humidity`), each carrying a
+    `recordTime` and a `data` list of {place, value, unit}. We pull the row whose
+    place is the Observatory HQ. Temperature runs through the plausibility band;
+    humidity is optional (0–100%). Returns
+    {temperature_2m, relative_humidity_2m, record_time} or None when the
+    Observatory temperature is absent or corrupt — the caller then keeps the grid
+    reading rather than inventing one."""
+    if not isinstance(data, dict):
+        return None
+    temp_block = data.get("temperature") or {}
+    temp_c = None
+    for row in temp_block.get("data", []) or []:
+        if isinstance(row, dict) and row.get("place") == HKO_RHRREAD_PLACE:
+            val = row.get("value")
+            if isinstance(val, (int, float)):
+                temp_c = _clean_temp(float(val))
+            break
+    if temp_c is None:
+        return None
+    rh = None
+    for row in (data.get("humidity") or {}).get("data", []) or []:
+        if isinstance(row, dict) and row.get("place") == HKO_RHRREAD_PLACE:
+            val = row.get("value")
+            if isinstance(val, (int, float)) and 0 <= val <= 100:
+                rh = float(val)
+            break
+    return {"temperature_2m": temp_c, "relative_humidity_2m": rh,
+            "record_time": temp_block.get("recordTime")}
 
 
 def _round_half_up(x: float) -> int:
@@ -187,7 +302,7 @@ class Sources:
         }
 
     def fetch_live(self, model: str, place: Place, target: dt.date) -> tuple[float, float] | None:
-        lead = (target - dt.date.today()).days
+        lead = (target - place_today(place)).days
         data = self.http.get_json(
             LIVE_URL,
             {**self._common(place), "models": model, "forecast_days": max(lead + 1, 1)},
@@ -197,14 +312,30 @@ class Sources:
 
     def fetch_history_series(self, model: str, place: Place,
                              start: dt.date, end: dt.date) -> DailySeries:
-        data = self.http.get_json(
-            HISTORY_URL,
-            {**self._common(place),
-             "models": model,
-             "start_date": start.isoformat(),
-             "end_date": end.isoformat()},
-        )
+        params = {**self._common(place),
+                  "models": model,
+                  "start_date": start.isoformat(),
+                  "end_date": end.isoformat()}
+        data = self._history_json_cached(params)
         return _pair_series(data.get("daily", {}), model, self.qc)
+
+    def _history_json_cached(self, params: dict) -> dict:
+        """Fetch the history JSON, transparently cached on disk. A fresh cache
+        hit skips the network entirely (so a warmed city dodges the throttle);
+        on a rate-limit/transport error we replay real cached history if we have
+        it, else re-raise. Never fabricates — a cold miss under throttle fails."""
+        key = _history_cache_key(HISTORY_URL, params)
+        cached, age = _history_cache_read(key)
+        if cached is not None and age is not None and age <= HISTORY_CACHE_TTL:
+            return cached
+        try:
+            data = self.http.get_json(HISTORY_URL, params)
+        except SecurityError:
+            if cached is not None:        # real (possibly stale) beats nothing
+                return cached
+            raise
+        _history_cache_write(key, data)
+        return data
 
     def fetch_archive_series(self, place: Place,
                              start: dt.date, end: dt.date) -> DailySeries:
@@ -365,7 +496,99 @@ class Sources:
             high = _clean_temp_cell(cols[3])     # tmax
             if high is not None and low is not None:
                 out[day] = (high, low)
+        # The Hong Kong Observatory's Meteostat file ends in 1992. Overlay the
+        # modern HKO open-data record (high+low) so this station is current enough
+        # to anchor a verdict on — the airport is then only a cross-reference.
+        # Recent open-data days win over any stale Meteostat overlap.
+        if self.is_hko_observatory(station):
+            modern = self.hko_truth_series(dt.date.today())
+            if modern:
+                out = {**out, **modern}
         return out
+
+    def _fetch_hko_dataset(self, data_type: str, years: list[int]) -> dict[str, float]:
+        """Recent daily values (date -> °C) for one HKO open-data climate dataset
+        at the Observatory HQ: CLMMAXT (daily max), CLMMINT (daily min), or
+        CLMTEMP (daily mean). One CSV per year; the file has two title lines, a
+        header, then rows `YYYY,M,D,value,flag`. Only rows whose completeness flag
+        is 'C' are kept; '#'/'***' (incomplete / unavailable) are dropped. Values
+        are °C, plausibility-screened. Not added to the operational QC tally."""
+        out: dict[str, float] = {}
+        for year in years:
+            try:
+                txt = self.http.get_text(HKO_OPENDATA_URL, {
+                    "dataType": data_type, "rformat": "csv",
+                    "station": "HKO", "year": year,
+                })
+            except SecurityError:
+                continue                       # a missing year must not abort
+            for line in txt.splitlines():
+                cols = line.split(",")
+                if len(cols) < 5:
+                    continue
+                y, m, d = cols[0].strip(), cols[1].strip(), cols[2].strip()
+                if not (y.isdigit() and m.isdigit() and d.isdigit()):
+                    continue                   # title/header lines
+                if cols[4].strip().strip('"') != "C":
+                    continue                   # keep only complete days
+                val = _clean_temp_cell(cols[3])
+                if val is None:
+                    continue
+                out[f"{int(y):04d}-{int(m):02d}-{int(d):02d}"] = val
+        return out
+
+    def fetch_hko_daily_max(self, years: list[int]) -> dict[str, float]:
+        """Recent daily maximum temperature (date -> high_c) at the Hong Kong
+        Observatory HQ, from the HKO open-data API. The Meteostat file for the HKO
+        station stops in 1992, so it cannot supply a *modern* record; this does."""
+        return self._fetch_hko_dataset("CLMMAXT", years)
+
+    def is_hko_observatory(self, station: Station) -> bool:
+        """True iff this station is the Hong Kong Observatory HQ — recognised by a
+        name token *and* geography (within HKO_MATCH_RADIUS_KM of the Observatory
+        HQ), never a hardcoded city/station table. The nearby VHHH airport is
+        therefore excluded. This is the gate for serving the modern HKO open-data
+        record in place of the station's 1992-truncated Meteostat file."""
+        if "observatory" not in (station.name or "").lower():
+            return False
+        return _haversine_km(station.latitude, station.longitude,
+                             HKO_HQ_LAT, HKO_HQ_LON) <= HKO_MATCH_RADIUS_KM
+
+    def hko_truth_series(self, target: dt.date, back_years: int = 4) -> DailySeries:
+        """Modern daily (high, low) record at the Hong Kong Observatory HQ from the
+        HKO open-data API — the settlement-grade truth the council anchors a Hong
+        Kong verdict on. Daily high from CLMMAXT, low from CLMMINT; only dates with
+        BOTH a complete reading are returned. Refreshed monthly (lags real time by
+        ~weeks — fresher than the airport's Meteostat bulk file)."""
+        years = list(range(target.year - back_years, target.year + 1))
+        highs = self._fetch_hko_dataset("CLMMAXT", years)
+        lows = self._fetch_hko_dataset("CLMMINT", years)
+        return {d: (highs[d], lows[d]) for d in highs.keys() & lows.keys()}
+
+    def recent_station_series(self, station: Station, target: dt.date,
+                              back_years: int = 3) -> DailySeries | None:
+        """Recent daily series for a settlement station when — and only when — that
+        station is the Hong Kong Observatory, whose Meteostat archive ends in 1992.
+        Returns {date -> (high, low)} from the HKO open-data API, or None when the
+        station is not the Observatory or the API yields nothing."""
+        if not self.is_hko_observatory(station):
+            return None
+        series = self.hko_truth_series(target, back_years)
+        return series or None
+
+    def hko_current(self) -> dict | None:
+        """Live current conditions at the Hong Kong Observatory HQ from the HKO
+        real-time open-data feed (rhrread) — the same settlement-grade instrument
+        the daily HKO record settles on. Returns the parsed reading
+        ({temperature_2m, relative_humidity_2m, record_time}) or None on any
+        failure, so a caller can fall back to the grid 'current' without raising.
+        One extra request, made only for the HKO-anchored city."""
+        try:
+            data = self.http.get_json(
+                HKO_RHRREAD_URL, {"dataType": "rhrread", "lang": "en"})
+        except Exception:
+            return None
+        return _parse_hko_rhrread(data)
 
     def fetch_metar_daily(self, icao: str, start: dt.date, end: dt.date,
                           timezone: str) -> dict:
@@ -440,7 +663,7 @@ class Sources:
                                models: list[str]) -> list[tuple[str, float]]:
         """Multi-model mean hourly 2 m temperature for the target day, in the
         location's local time. Returns [(iso_hour, mean_temp), ...]."""
-        lead = (target - dt.date.today()).days
+        lead = (target - place_today(place)).days
         data = self.http.get_json(
             LIVE_URL,
             {"latitude": place.latitude, "longitude": place.longitude,
@@ -507,7 +730,7 @@ class Sources:
     def fetch_ensemble_members(self, model: str, place: Place,
                                target: dt.date) -> tuple[list[float], list[float]]:
         """All perturbed members' (highs, lows) for the target day."""
-        lead = (target - dt.date.today()).days
+        lead = (target - place_today(place)).days
         data = self.http.get_json(
             ENSEMBLE_URL,
             {**self._common(place), "models": model,
