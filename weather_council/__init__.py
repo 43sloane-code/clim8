@@ -9,3 +9,11 @@ figure traces to an API call; every weight is computed from backtested error.
 """
 
 __version__ = "1.0.0"
+
+# Curated public API so `from weather_council import Council` works and the
+# package's surface is explicit. Submodules remain importable directly; this only
+# names the top-level entry points (declarative — there is no `import *` in-tree).
+from .council import Council, Verdict
+from .sources import Place, Sources
+
+__all__ = ["__version__", "Council", "Verdict", "Place", "Sources"]

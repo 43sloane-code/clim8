@@ -46,6 +46,11 @@ Everything below is pure stdlib, seeded, and self-tested.
 """
 from __future__ import annotations
 
+__all__ = [
+    'fidelity_kernel', 'rbf_kernel', 'linear_kernel', 'standardize_fit',
+    'standardize_apply', 'angle_encode', 'KernelRidge'
+]
+
 import math
 import random
 

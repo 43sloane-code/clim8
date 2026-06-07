@@ -40,6 +40,10 @@ Stdlib only (math, statistics); reuses scoring.crps_sample.
 
 from __future__ import annotations
 
+__all__ = [
+    'CalibrationEval', 'conditional_spread_eval'
+]
+
 import math
 import statistics
 from dataclasses import dataclass

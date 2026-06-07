@@ -45,6 +45,7 @@ import json
 import random
 import statistics
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -102,6 +103,10 @@ OUTLIER_FLOORS = sorted({3.0, 4.0, 5.0, 6.0, float(CURRENT_FLOOR)})
 
 REPORTS = ROOT / "reports"
 BASELINE = REPORTS / "baseline.json"
+# Machine-readable summary of the latest good run, so the LIVE verdict (run.py)
+# can surface the monitor's status as a read-only banner. Recommend-only: these
+# are findings the verdict DISPLAYS, never values that move a forecast.
+STATUS = REPORTS / "healthcheck_status.json"
 
 
 def _blend_on_date(votes, attr, day, train, bias_method, power):
@@ -383,6 +388,13 @@ def _persist(report, today, usable_cities, cur_mae, cur, baseline_absent,
     return True
 
 
+def _write_status(status: dict, status_path=STATUS):
+    """Persist the compact, machine-readable health-check summary the live verdict
+    reads. Written only on a good (non-degraded) run, alongside latest.txt, so a
+    transient outage never overwrites the operator's last known-good status."""
+    status_path.write_text(json.dumps(status, indent=2) + "\n")
+
+
 def _city_votes(city, target):
     """Resolve truth + collect each member's votes for one city. Uses a FRESH
     Council (and thus a fresh sandbox request budget) per city, since one client
@@ -466,6 +478,7 @@ def _paired_bootstrap_ci(deltas, iters=BOOT_ITERS, ci=BOOT_CI, seed=BOOT_SEED):
 
 
 def main() -> int:
+    run_t0 = time.monotonic()              # wall-clock of the whole run (metrics)
     today = dt.date.today()
     target = today
 
@@ -614,6 +627,14 @@ def main() -> int:
         except Exception:
             baseline = None
 
+    # Trackers distilled into the machine-readable status the live verdict reads.
+    # Filled in the report blocks below so the banner can never disagree with the
+    # printed report (same decision, captured once).
+    status_reco: list[str] = []      # short CONSIDER/CANDIDATE tags for the banner
+    status_regression = False
+    status_cov = None                # 80% interval coverage (%) of the live variant
+    status_cov_label = None
+
     lines = []
     lines.append(f"WEATHER COUNCIL — DAILY HEALTH CHECK  ({today.isoformat()})")
     lines.append("=" * 64)
@@ -675,8 +696,10 @@ def main() -> int:
                else "OVER-CONFIDENT (under-dispersed)" if mcov < 75
                else "under-confident (over-dispersed)")
         flag = "" if 70 <= mcov <= 90 else "  ⚠"
+        status_cov, status_cov_label = mcov, cal
         lines.append(f"  80% interval empirical coverage: {mcov:.1f}% — {cal}{flag}")
         if mcov < 70:
+            status_reco.append("widen predictive spread (80% coverage below 70%)")
             lines.append("    RECOMMENDATION: intervals are too narrow on fresh data; a human "
                          "should consider widening the predictive spread (do NOT auto-apply).")
     lines.append("")
@@ -702,6 +725,8 @@ def main() -> int:
                     else "CI n/a (single paired city)")
             significant = lo is not None and lo > 0
             if point >= MIN_IMPROVEMENT and significant:
+                status_reco.append(f"variant→ bias {best[0]} 1/MAE^{best[1]} "
+                                   f"({point:+.3f} °C, significant)")
                 lines.append(f"  CONSIDER: bias {best[0]}, 1/MAE^{best[1]} beats current by "
                              f"{point:.4f} °C basket MAE over {npair} paired cities "
                              f"({ci_s}, excludes 0) — exceeds the {MIN_IMPROVEMENT} °C floor "
@@ -747,6 +772,8 @@ def main() -> int:
                      else "CI n/a (single paired city)")
             fsig = flo is not None and flo > 0
             if fpoint >= MIN_IMPROVEMENT and fsig:
+                status_reco.append(f"outlier_floor→ {best_floor:.1f} °C "
+                                   f"({fpoint:+.3f} °C, significant)")
                 lines.append(f"  CONSIDER: floor {best_floor:.1f} °C beats current by "
                              f"{fpoint:.4f} °C basket MAE over {fnp} paired cities "
                              f"({fci_s}, excludes 0) — exceeds the {MIN_IMPROVEMENT} °C floor "
@@ -816,6 +843,7 @@ def main() -> int:
             lines.append(f"  malformed baseline — rewriting with {cur_mae:.4f} °C.")
         else:
             drift = cur_mae - prev
+            status_regression = drift > REGRESSION_TOL
             flag = "  ⚠ REGRESSION" if drift > REGRESSION_TOL else (
                    "  ✓ improved" if drift < -REGRESSION_TOL else "  (stable)")
             lines.append(f"  today {cur_mae:.4f} vs baseline {prev:.4f} "
@@ -974,6 +1002,8 @@ def main() -> int:
                 lines.append(f"  TOO FEW settled days (< {MIN_SAMPLES}) to judge — keep "
                              "accumulating. Weatherbit remains tracked-only, NOT a council vote.")
             elif delta >= MIN_IMPROVEMENT:
+                status_reco.append(f"weatherbit promotion candidate "
+                                   f"({delta:+.3f} °C over {wb['n']} settled days)")
                 lines.append(f"  CANDIDATE (human review): Weatherbit beats the council by "
                              f"{delta:.3f} °C over {wb['n']} settled days (exceeds the "
                              f"{MIN_IMPROVEMENT} °C floor). Worth evaluating it as a properly "
@@ -995,7 +1025,44 @@ def main() -> int:
     # 'latest' pointer or move the baseline — see _persist. Baseline is written
     # only on the first good run; never silently moved, so drift stays measurable.
     usable_cities = len(basket_acc[cur])
-    if not _persist(report, today, usable_cities, cur_mae, cur, baseline is None):
+    persisted = _persist(report, today, usable_cities, cur_mae, cur, baseline is None)
+    if persisted:
+        # Distil the run into the machine-readable status the live verdict reads.
+        # Only on a good run, so a transient outage never overwrites last-known-good.
+        baseline_mae = baseline.get("basket_mae_current") if baseline else None
+        status = {
+            "date": today.isoformat(),
+            "variant": list(cur),
+            "basket_mae": round(cur_mae, 4) if cur_mae is not None else None,
+            "baseline_mae": baseline_mae,
+            "baseline_date": (baseline.get("date") if baseline else None),
+            "regression": status_regression,
+            "calibration_coverage_pct": (round(status_cov, 1)
+                                         if status_cov is not None else None),
+            "calibration_label": status_cov_label,
+            "recommendations": status_reco,
+            "cities_usable": usable_cities,
+            "cities_total": len(BASKET),
+            "data_freshness_max_gap_days": (max(gaps) if gaps else None),
+            "requests": total_requests,
+            # Operational metrics — every value here is MEASURED this run (never a
+            # target or a fabricated number). Surfaced for monitoring; like the
+            # rest of the status, the live verdict only ever DISPLAYS these.
+            "metrics": {
+                "run_seconds": round(time.monotonic() - run_t0, 1),
+                "requests": total_requests,
+                "cities_usable": usable_cities,
+                "cities_total": len(BASKET),
+                "city_error_rate": (round((len(BASKET) - usable_cities) / len(BASKET), 3)
+                                    if BASKET else None),
+                "backtest_mae": round(cur_mae, 4) if cur_mae is not None else None,
+                "coverage_pct_80": (round(status_cov, 1)
+                                    if status_cov is not None else None),
+                "data_freshness_max_gap_days": (max(gaps) if gaps else None),
+            },
+        }
+        _write_status(status)
+    else:
         print(f"[degraded run: {usable_cities}/{len(BASKET)} cities usable — "
               f"latest.txt and baseline preserved from last good run]")
 

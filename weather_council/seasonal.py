@@ -30,6 +30,10 @@ Scope / safety
 
 from __future__ import annotations
 
+__all__ = [
+    'doy_distance', 'filter_analog', 'seasonal_skill'
+]
+
 import datetime as dt
 import statistics
 

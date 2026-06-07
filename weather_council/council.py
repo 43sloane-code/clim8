@@ -15,10 +15,17 @@ Pipeline:
 
 from __future__ import annotations
 
+__all__ = [
+    'CouncilConfig', 'CONFIG', 'ForecastUnavailableError', 'Ensemble',
+    'Interpretation', 'Diurnal', 'Records', 'Representativeness', 'Validation',
+    'Verdict', 'applied_bias_correction', 'regime_consensus', 'Council'
+]
+
 import datetime as dt
 import math
 import statistics
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 from .agents import (ENSEMBLE_MODELS, MIN_SAMPLES, ForecasterAgent, Vote,
                      build_council)
@@ -47,6 +54,41 @@ CRPS_MIN_SAMPLES = 10
 CONVERGENCE_PERSIST_MAX_GAP_DAYS = 2
 
 
+@dataclass(frozen=True)
+class CouncilConfig:
+    """The tunable knobs the daily health check sweeps and re-checks on fresh data,
+    gathered into one validated surface instead of scattered literals. These are the
+    ONLY constants a recommend-only tuning pass may ever propose changing; every
+    other constant in this module is structural. Frozen + validated at construction,
+    so an out-of-range value fails loudly at import — never as a silent bad forecast.
+    The module-level WEIGHT_POWER / OUTLIER_FLOOR_C / DISP_NORMAL / DISP_ELEVATED
+    names below are kept as aliases onto this object, so existing imports (e.g.
+    tools/daily_healthcheck.py) are unchanged and the values can never disagree.
+    """
+    weight_power: int = 2          # inverse-error exponent; 2 == inverse-variance
+    outlier_floor_c: float = 4.0   # °C: never flag a member within this of the median
+    disp_normal: float = 2.0       # °C: effective-σ at/below which spread reads normal
+    disp_elevated: float = 3.5     # °C: effective-σ above which spread reads elevated
+
+    def validate(self) -> None:
+        """Raise (not assert — survives `python -O`) on any out-of-range knob."""
+        if not (isinstance(self.weight_power, int) and self.weight_power > 0):
+            raise ValueError("weight_power must be a positive int")
+        if not self.outlier_floor_c > 0:
+            raise ValueError("outlier_floor_c must be positive (°C)")
+        if not self.disp_normal > 0:
+            raise ValueError("disp_normal must be positive (°C)")
+        if not self.disp_elevated > self.disp_normal:
+            raise ValueError("disp_elevated must exceed disp_normal (°C)")
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+
+# The single validated source of truth for the tuning surface.
+CONFIG = CouncilConfig()
+
+
 class ForecastUnavailableError(RuntimeError):
     """No council member could produce a usable forecast for an attribute.
     A RuntimeError subclass so existing handlers still catch it, but typed so a
@@ -54,7 +96,7 @@ class ForecastUnavailableError(RuntimeError):
     upstream throttle (RateLimitError), which is retryable."""
 
 ARCHIVE_LAG_DAYS = 2     # ERA5 reanalysis trails real time by ~1-2 days
-OUTLIER_FLOOR_C = 4.0    # never flag a member within this of the median
+OUTLIER_FLOOR_C = CONFIG.outlier_floor_c  # alias: never flag a member within this of the median
 # Inverse-error weighting exponent: a member's weight is 1/MAE**WEIGHT_POWER, so
 # WEIGHT_POWER=2 is inverse-variance weighting — the minimum-variance linear
 # combination of independent estimators (statistically principled), not a tuned
@@ -62,7 +104,7 @@ OUTLIER_FLOOR_C = 4.0    # never flag a member within this of the median
 # geographically diverse cities: 1/MAE^2 lowered mean held-out MAE versus 1/MAE
 # in every city (~1.7% on the basket) with hit-rate(±2°C) unchanged. Applied
 # identically in the live blend and the validation pass so they never diverge.
-WEIGHT_POWER = 2
+WEIGHT_POWER = CONFIG.weight_power        # alias onto the validated CouncilConfig
 CLIMO_START_YEAR = 1991  # standard WMO baseline start for normals/records
 RECORD_WINDOW_DAYS = 3   # ± calendar days pooled around the target date
 # A station is only trusted as the truth source if it has reported within this
@@ -388,6 +430,107 @@ CONSENSUS_SPLIT_SIGMA = 1.5
 CONSENSUS_SIGMA_FLOOR = 1.0
 
 
+def _consensus_read(v: "Verdict", sigma: float) -> dict:
+    """Job 3 of regime_consensus, isolated: measure whether the independent point
+    estimators (naive equal-weight average, raw perturbed-ensemble mean) agree with
+    the headline verdict within the stated effective σ, on the worse of high/low.
+    Pure — reads only finished Verdict fields and never moves the number."""
+    en = v.ensemble
+    estimators = {
+        "high": {"verdict": v.high, "naive": v.naive_high, "ensemble_mean": en.mean_high},
+        "low": {"verdict": v.low, "naive": v.naive_low, "ensemble_mean": en.mean_low},
+    }
+    worst_ratio, worst_axis = 0.0, "high"
+    for axis, headline in (("high", v.high), ("low", v.low)):
+        for key in ("naive", "ensemble_mean"):
+            est = estimators[axis][key]
+            if est is None:
+                continue
+            ratio = abs(est - headline) / sigma
+            if ratio > worst_ratio:
+                worst_ratio, worst_axis = ratio, axis
+    if worst_ratio <= CONSENSUS_MATCH_SIGMA:
+        status = "matched"
+    elif worst_ratio <= CONSENSUS_SPLIT_SIGMA:
+        status = "loose"
+    else:
+        status = "split"
+    return {"estimators": estimators, "worst_ratio": worst_ratio,
+            "worst_axis": worst_axis, "status": status}
+
+
+def _classify_regime(v: "Verdict") -> dict:
+    """Job 1 of regime_consensus, isolated: name the regime from already-computed,
+    already-backtested signals on the Verdict — seasonality, ensemble data depth,
+    today's volatility (effective-σ tier) and the spatial gradient. Pure summary."""
+    cd = v.confidence_detail or {}
+    en = v.ensemble
+    eff = cd.get("effective_uncertainty")
+    gap = cd.get("season_gap_days")
+    out_of_season = bool(gap is not None and gap > SEASON_MATCH_DAYS)
+    season = "out-of-season" if out_of_season else "in-season"
+    thin = not en.blend_eligible
+    data = "thin" if thin else "rich"
+    if eff is None or eff <= DISP_NORMAL:
+        volatility = "calm"
+    elif eff <= DISP_ELEVATED:
+        volatility = "elevated"
+    else:
+        volatility = "high"
+    sp = cd.get("representativeness_sigma")
+    if sp is None or sp < 0.5:
+        spatial = "flat"
+    elif sp < 1.0:
+        spatial = "moderate"
+    else:
+        spatial = "steep"
+    label = f"{season} · {data} ensemble · {volatility} · {spatial} field"
+    return {"label": label, "season": season, "gap": gap,
+            "out_of_season": out_of_season, "data": data, "thin": thin,
+            "volatility": volatility, "eff": eff, "spatial": spatial, "sp": sp}
+
+
+def _regime_trusted_notes(r: dict, en: "Ensemble") -> list[str]:
+    """Job 2 of regime_consensus, isolated: state which validation is load-bearing
+    in this regime (and which to distrust), making the confidence-tier reasoning
+    explicit instead of scattered across caveats."""
+    gap, eff, sp = r["gap"], r["eff"], r["sp"]
+    trusted: list[str] = []
+    if r["out_of_season"]:
+        trusted.append(
+            f"Trailing-window hit-rate is from a climate regime ~{gap}d off the "
+            f"target day-of-year — lean on the seasonal-analog backtest, not the raw hit-rate.")
+    if r["thin"]:
+        trusted.append(
+            f"Perturbed ensemble has only {en.backtest_days} backtestable day(s) "
+            f"(<{MIN_SAMPLES}); it bounds confidence but cannot move the number.")
+    if r["volatility"] != "calm" and eff is not None:
+        trusted.append(
+            f"Effective σ {eff:.1f} °C is {r['volatility']} — widen the bucket "
+            f"probabilities; today is harder than the backtest baseline.")
+    if r["spatial"] == "steep" and sp is not None:
+        trusted.append(
+            f"Across-cell σ {sp:.1f} °C is steep — a point station may diverge "
+            f"from the grid-cell verdict.")
+    if not trusted:
+        trusted.append(
+            "All regime axes benign — the backtested hit-rate applies at face value.")
+    return trusted
+
+
+def _consensus_takeaway(status: str, worst_ratio: float, worst_axis: str,
+                        label: str) -> str:
+    """One-line plain-English read of the consensus status, in regime context."""
+    if status == "matched":
+        return (f"Matched verdict: deterministic blend, naive average and ensemble "
+                f"mean agree within {worst_ratio:.2f}σ. Regime: {label}.")
+    if status == "loose":
+        return (f"Loose agreement: estimators sit within {worst_ratio:.2f}σ on the "
+                f"{worst_axis} — within tolerance but not tight. Regime: {label}.")
+    return (f"Split verdict: an estimator sits {worst_ratio:.2f}σ from the "
+            f"headline {worst_axis} — read the bucket probabilities wider. Regime: {label}.")
+
+
 def regime_consensus(v: "Verdict") -> dict:
     """Consolidated regime read + cross-mechanism consensus for a finished
     Verdict. Pure post-hoc summary, exactly like applied_bias_correction: it
@@ -411,105 +554,32 @@ def regime_consensus(v: "Verdict") -> dict:
     sigma = eff if (eff is not None and eff > 0) else CONSENSUS_SIGMA_FLOOR
     scaled = eff is not None and eff > 0
 
-    # -- consensus: independent estimators vs the headline, in units of σ ------ #
-    en = v.ensemble
-    estimators = {
-        "high": {"verdict": v.high, "naive": v.naive_high, "ensemble_mean": en.mean_high},
-        "low": {"verdict": v.low, "naive": v.naive_low, "ensemble_mean": en.mean_low},
-    }
-    worst_ratio, worst_axis = 0.0, "high"
-    for axis, headline in (("high", v.high), ("low", v.low)):
-        for key in ("naive", "ensemble_mean"):
-            est = estimators[axis][key]
-            if est is None:
-                continue
-            ratio = abs(est - headline) / sigma
-            if ratio > worst_ratio:
-                worst_ratio, worst_axis = ratio, axis
-    if worst_ratio <= CONSENSUS_MATCH_SIGMA:
-        status = "matched"
-    elif worst_ratio <= CONSENSUS_SPLIT_SIGMA:
-        status = "loose"
-    else:
-        status = "split"
-
-    # -- regime: classify from already-computed, already-backtested signals ---- #
-    gap = cd.get("season_gap_days")
-    out_of_season = bool(gap is not None and gap > SEASON_MATCH_DAYS)
-    season = "out-of-season" if out_of_season else "in-season"
-
-    thin = not en.blend_eligible
-    data = "thin" if thin else "rich"
-
-    if eff is None or eff <= DISP_NORMAL:
-        volatility = "calm"
-    elif eff <= DISP_ELEVATED:
-        volatility = "elevated"
-    else:
-        volatility = "high"
-
-    sp = cd.get("representativeness_sigma")
-    if sp is None or sp < 0.5:
-        spatial = "flat"
-    elif sp < 1.0:
-        spatial = "moderate"
-    else:
-        spatial = "steep"
-
-    label = f"{season} · {data} ensemble · {volatility} · {spatial} field"
-
-    # -- regime -> which validation to trust (explicit, deterministic) -------- #
-    trusted: list[str] = []
-    if out_of_season:
-        trusted.append(
-            f"Trailing-window hit-rate is from a climate regime ~{gap}d off the "
-            f"target day-of-year — lean on the seasonal-analog backtest, not the raw hit-rate.")
-    if thin:
-        trusted.append(
-            f"Perturbed ensemble has only {en.backtest_days} backtestable day(s) "
-            f"(<{MIN_SAMPLES}); it bounds confidence but cannot move the number.")
-    if volatility != "calm" and eff is not None:
-        trusted.append(
-            f"Effective σ {eff:.1f} °C is {volatility} — widen the bucket "
-            f"probabilities; today is harder than the backtest baseline.")
-    if spatial == "steep" and sp is not None:
-        trusted.append(
-            f"Across-cell σ {sp:.1f} °C is steep — a point station may diverge "
-            f"from the grid-cell verdict.")
-    if not trusted:
-        trusted.append(
-            "All regime axes benign — the backtested hit-rate applies at face value.")
-
-    if status == "matched":
-        takeaway = (f"Matched verdict: deterministic blend, naive average and ensemble "
-                    f"mean agree within {worst_ratio:.2f}σ. Regime: {label}.")
-    elif status == "loose":
-        takeaway = (f"Loose agreement: estimators sit within {worst_ratio:.2f}σ on the "
-                    f"{worst_axis} — within tolerance but not tight. Regime: {label}.")
-    else:
-        takeaway = (f"Split verdict: an estimator sits {worst_ratio:.2f}σ from the "
-                    f"headline {worst_axis} — read the bucket probabilities wider. Regime: {label}.")
+    con = _consensus_read(v, sigma)              # job 3: estimators vs headline, in σ
+    reg = _classify_regime(v)                    # job 1: name the regime
+    trusted = _regime_trusted_notes(reg, v.ensemble)   # job 2: what to trust here
+    takeaway = _consensus_takeaway(
+        con["status"], con["worst_ratio"], con["worst_axis"], reg["label"])
 
     return {
         "regime": {
-            "label": label,
-            "season": season,
-            "season_gap_days": gap,
-            "data": data,
-            "ensemble_backtest_days": en.backtest_days,
+            "label": reg["label"],
+            "season": reg["season"],
+            "season_gap_days": reg["gap"],
+            "data": reg["data"],
+            "ensemble_backtest_days": v.ensemble.backtest_days,
             "test_days": v.validation.test_days,
-            "volatility": volatility,
-            "effective_sigma": eff,
-            "spatial": spatial,
-            "spatial_sigma": sp,
+            "volatility": reg["volatility"],
+            "effective_sigma": reg["eff"],
+            "spatial": reg["spatial"],
+            "spatial_sigma": reg["sp"],
         },
         "consensus": {
-            "status": status,
-            "worst_ratio": round(worst_ratio, 2),
-            "worst_axis": worst_axis,
+            "status": con["status"],
+            "worst_ratio": round(con["worst_ratio"], 2),
+            "worst_axis": con["worst_axis"],
             "scaled_by_effective_sigma": scaled,
             "sigma_used": round(sigma, 2),
-            "estimators": estimators,
+            "estimators": con["estimators"],
         },
         "trusted_validation": trusted,
         "takeaway": takeaway,
@@ -530,8 +600,8 @@ _TIER = {3: "high", 2: "medium", 1: "low"}
 # about?). A city can have models in tight agreement yet a steep local gradient —
 # e.g. a coastal observatory — and should not be sold as high-confidence about a
 # point the data never resolved.
-DISP_NORMAL = 2.0
-DISP_ELEVATED = 3.5
+DISP_NORMAL = CONFIG.disp_normal          # alias onto the validated CouncilConfig
+DISP_ELEVATED = CONFIG.disp_elevated      # alias onto the validated CouncilConfig
 
 
 def _weighted_std(pairs: list[tuple[float, float]]) -> float | None:
@@ -700,6 +770,18 @@ class Council:
         )
 
     # -- truth resolution: station observations, else the ERA5 grid ---------- #
+    def _station_provenance(self, st: Station) -> tuple[str, str]:
+        """Honest provenance for an anchor station: (data_source, human feed label).
+        The Hong Kong Observatory anchor is served from the HKO open-data API (its
+        Meteostat file ends 1992); EGLC's extremes come from the IEM ASOS METAR
+        archive overlaid on Meteostat; everything else is plain Meteostat."""
+        if self.sources.is_hko_observatory(st):
+            return "hko_opendata", "Hong Kong Observatory open-data daily observations"
+        if self.sources.is_london_eglc(st):
+            return "iem_metar", ("IEM ASOS METAR daily extremes at the EGLC sensor "
+                                 "(overlaid on Meteostat for older days)")
+        return "meteostat", "Meteostat daily observations"
+
     def _resolve_truth(self, place: Place, target: dt.date, window: int):
         """Pick the observations the verdict is anchored on and backtested
         against. Prefer the nearest, still-reporting surface station (the point a
@@ -770,20 +852,7 @@ class Council:
                 continue
             fp = Place(place.name, place.country,
                        st.latitude, st.longitude, place.timezone)
-            # Honest provenance: the Hong Kong Observatory anchor is served from the
-            # HKO open-data API (its Meteostat file ends 1992), not Meteostat.
-            is_hko = self.sources.is_hko_observatory(st)
-            is_eglc = self.sources.is_london_eglc(st)
-            if is_hko:
-                data_source = "hko_opendata"
-                feed = "Hong Kong Observatory open-data daily observations"
-            elif is_eglc:
-                data_source = "iem_metar"
-                feed = ("IEM ASOS METAR daily extremes at the EGLC sensor "
-                        "(overlaid on Meteostat for older days)")
-            else:
-                data_source = "meteostat"
-                feed = "Meteostat daily observations"
+            data_source, feed = self._station_provenance(st)
             truth_source = {
                 "kind": "station",
                 "data_source": data_source,
@@ -1391,6 +1460,43 @@ class Council:
         raws = [r for r in raws if r is not None]
         return statistics.mean(raws) if raws else None
 
+    def _wf_step(self, blend: tuple[float, float, float], obs_v: float,
+                 clim: float, prev_v: float | None,
+                 acc: SimpleNamespace) -> dict:
+        """One held-out walk-forward step for a SINGLE attribute (high OR low).
+
+        Records this day's per-attribute errors/residuals into `acc` (the six
+        expanding lists for this attribute) and returns the shared-counter
+        contributions for the caller to fold into the pooled high+low totals.
+        Behavior-preserving extraction of the previously-duplicated high/low
+        blocks: the CRPS cloud is still scored against ONLY strictly-earlier
+        residuals — acc.resid / acc.prior_clim are read for the gate and the
+        score BEFORE today's residual is appended."""
+        council, naive, disp = blend
+        err = abs(council - obs_v)
+        r = obs_v - council
+        acc.council_err.append(err)
+        acc.naive_err.append(abs(naive - obs_v))
+        acc.clim_err.append(abs(clim - obs_v))
+        if prev_v is not None:
+            acc.persist_err.append(abs(prev_v - obs_v))
+        out = {
+            "r": r,
+            "disp": disp,
+            "win": 1 if err <= abs(naive - obs_v) else 0,
+            "hit": 1 if err <= 2.0 else 0,
+            "crps_c": None, "crps_cl": None, "covered": None, "width": None,
+        }
+        if len(acc.resid) >= CRPS_MIN_SAMPLES and len(acc.prior_clim) >= CRPS_MIN_SAMPLES:
+            out["crps_c"] = crps_sample(acc.resid, r)
+            out["crps_cl"] = crps_sample(acc.prior_clim, obs_v - clim)
+            covered, width = interval_coverage(acc.resid, r)
+            out["covered"] = covered
+            out["width"] = width
+        acc.resid.append(r)
+        acc.prior_clim.append(obs_v - clim)
+        return out
+
     def _validate(self, votes: list[Vote], observed: DailySeries) -> Validation:
         dates = sorted(observed.keys())
         if len(dates) < 15:
@@ -1416,6 +1522,15 @@ class Council:
         clim_err_h, clim_err_l = [], []
         resid_h, resid_l = [], []           # signed: observed − council prediction
         prior_clim_h, prior_clim_l = [], []  # signed: observed − climatology, in order
+        # Bundle each attribute's six expanding lists so one _wf_step handles
+        # high and low identically. These reference the SAME list objects named
+        # above, so the means computed at the return are unchanged.
+        acc_h = SimpleNamespace(council_err=council_err_h, naive_err=naive_err_h,
+                                clim_err=clim_err_h, persist_err=persist_err_h,
+                                resid=resid_h, prior_clim=prior_clim_h)
+        acc_l = SimpleNamespace(council_err=council_err_l, naive_err=naive_err_l,
+                                clim_err=clim_err_l, persist_err=persist_err_l,
+                                resid=resid_l, prior_clim=prior_clim_l)
         wins = comparisons = 0
         hits = 0
         hit_total = 0
@@ -1447,54 +1562,29 @@ class Council:
             prev_obs = observed.get(prev)
             ch = self._blend_on_date(votes, "high", d, train)
             cl = self._blend_on_date(votes, "low", d, train)
-            if ch is not None:
-                council_err_h.append(abs(ch[0] - obs[0]))
-                r = obs[0] - ch[0]
-                calib_pairs.append((r, ch[2]))
-                naive_err_h.append(abs(ch[1] - obs[0]))
-                clim_err_h.append(abs(clim_h - obs[0]))
-                if prev_obs is not None:
-                    persist_err_h.append(abs(prev_obs[0] - obs[0]))
+            # High then low, scored identically. CRPS is translation-invariant,
+            # so scoring the prior residual cloud against today's residual r is
+            # identical to dressing the point forecast and scoring against the
+            # observation — and acc.resid/acc.prior_clim hold ONLY earlier days.
+            for blend, obs_v, clim, prev_v, acc in (
+                (ch, obs[0], clim_h, prev_obs[0] if prev_obs else None, acc_h),
+                (cl, obs[1], clim_l, prev_obs[1] if prev_obs else None, acc_l),
+            ):
+                if blend is None:
+                    continue
+                step = self._wf_step(blend, obs_v, clim, prev_v, acc)
+                calib_pairs.append((step["r"], step["disp"]))
                 comparisons += 1
-                wins += 1 if abs(ch[0] - obs[0]) <= abs(ch[1] - obs[0]) else 0
-                hits += 1 if abs(ch[0] - obs[0]) <= 2.0 else 0
+                wins += step["win"]
+                hits += step["hit"]
                 hit_total += 1
-                # CRPS is translation-invariant, so scoring the prior residual
-                # cloud against today's residual r is identical to dressing the
-                # point forecast and scoring against the observation — but needs
-                # no rebuilt list. resid_h/prior_clim_h hold ONLY earlier days.
-                if len(resid_h) >= CRPS_MIN_SAMPLES and len(prior_clim_h) >= CRPS_MIN_SAMPLES:
-                    crps_c_sum += crps_sample(resid_h, r)
-                    crps_clim_sum += crps_sample(prior_clim_h, obs[0] - clim_h)
+                if step["crps_c"] is not None:
+                    crps_c_sum += step["crps_c"]
+                    crps_clim_sum += step["crps_cl"]
                     crps_count += 1
-                    covered, width = interval_coverage(resid_h, r)
-                    cover_hits += 1 if covered else 0
-                    width_sum += width
+                    cover_hits += 1 if step["covered"] else 0
+                    width_sum += step["width"]
                     cover_count += 1
-                resid_h.append(r)
-                prior_clim_h.append(obs[0] - clim_h)
-            if cl is not None:
-                council_err_l.append(abs(cl[0] - obs[1]))
-                r = obs[1] - cl[0]
-                calib_pairs.append((r, cl[2]))
-                naive_err_l.append(abs(cl[1] - obs[1]))
-                clim_err_l.append(abs(clim_l - obs[1]))
-                if prev_obs is not None:
-                    persist_err_l.append(abs(prev_obs[1] - obs[1]))
-                comparisons += 1
-                wins += 1 if abs(cl[0] - obs[1]) <= abs(cl[1] - obs[1]) else 0
-                hits += 1 if abs(cl[0] - obs[1]) <= 2.0 else 0
-                hit_total += 1
-                if len(resid_l) >= CRPS_MIN_SAMPLES and len(prior_clim_l) >= CRPS_MIN_SAMPLES:
-                    crps_c_sum += crps_sample(resid_l, r)
-                    crps_clim_sum += crps_sample(prior_clim_l, obs[1] - clim_l)
-                    crps_count += 1
-                    covered, width = interval_coverage(resid_l, r)
-                    cover_hits += 1 if covered else 0
-                    width_sum += width
-                    cover_count += 1
-                resid_l.append(r)
-                prior_clim_l.append(obs[1] - clim_l)
 
         calibration = conditional_spread_eval(calib_pairs)
         mean = lambda xs: statistics.mean(xs) if xs else None

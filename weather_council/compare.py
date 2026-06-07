@@ -22,6 +22,11 @@ Scope / honesty boundary:
 
 from __future__ import annotations
 
+__all__ = [
+    'Calibration', 'residual_calibration', 'BucketComparison', 'VerdictMarketComparison',
+    'compare_high', 'match_market', 'grain_support_note', 'comparison_to_dict'
+]
+
 import datetime as dt
 import statistics
 from dataclasses import dataclass

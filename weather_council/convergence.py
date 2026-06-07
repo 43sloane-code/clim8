@@ -39,6 +39,11 @@ against each other and never manufactures a number.
 
 from __future__ import annotations
 
+__all__ = [
+    'Mechanism', 'ConvergenceInputs', 'MechanismScore', 'LineageEstimate', 'Convergence',
+    'score_mechanisms', 'converge', 'report_lines'
+]
+
 import math
 from dataclasses import dataclass, field
 

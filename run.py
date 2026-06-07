@@ -17,6 +17,7 @@ import argparse
 import datetime as dt
 import json
 import sys
+from pathlib import Path
 
 from weather_council.agents import WINDY_MEMBERS
 from weather_council.compare import (
@@ -537,6 +538,59 @@ def _regime_consensus_lines(v: Verdict) -> list[str]:
     return L
 
 
+HEALTHCHECK_STATUS = Path(__file__).resolve().parent / "reports" / "healthcheck_status.json"
+
+
+def _healthcheck_banner(today: dt.date | None = None,
+                        status_path: Path = HEALTHCHECK_STATUS) -> list[str]:
+    """Read-only banner that surfaces the latest daily health-check status beside
+    the verdict. The health check is the recommend-only monitor; this ONLY DISPLAYS
+    its findings — it never reads back into, gates, or moves any verdict number.
+    An absent or malformed status file yields no banner, so the verdict is never
+    blocked by the monitor. Findings here require human review; nothing auto-applies.
+    """
+    try:
+        s = json.loads(status_path.read_text())
+    except (OSError, ValueError):
+        return []                                  # no monitor status -> no banner
+    today = today or dt.date.today()
+    date_s = s.get("date", "?")
+    try:
+        age = (today - dt.date.fromisoformat(date_s)).days
+        age_s = "today" if age == 0 else f"{age} day(s) ago"
+        stale = age > 2
+    except (TypeError, ValueError):
+        age_s, stale = "date unknown", True
+    L = ["", "  DAILY HEALTH CHECK (recommend-only monitor — display only, never moves this verdict)"]
+    L.append(f"    as of {date_s} ({age_s})"
+             + ("   ⚠ STALE — monitor has not run in >2 days" if stale else ""))
+    bm, base = s.get("basket_mae"), s.get("baseline_mae")
+    if bm is not None and base is not None:
+        verdict = "⚠ REGRESSION" if s.get("regression") else "stable"
+        L.append(f"    basket MAE {bm:.4f} vs baseline {base:.4f} "
+                 f"({bm - base:+.4f}) — {verdict}")
+    elif bm is not None:
+        L.append(f"    basket MAE {bm:.4f} (no baseline on file yet)")
+    cov, lab = s.get("calibration_coverage_pct"), s.get("calibration_label")
+    if cov is not None:
+        L.append(f"    80% interval coverage {cov:.1f}% — {lab}")
+    m = s.get("metrics") or {}
+    if m.get("run_seconds") is not None:
+        err = m.get("city_error_rate")
+        err_s = f", city error rate {err * 100:.0f}%" if err is not None else ""
+        L.append(f"    monitor run {m['run_seconds']:.1f}s over "
+                 f"{m.get('cities_usable', '?')}/{m.get('cities_total', '?')} cities"
+                 f"{err_s}, {m.get('requests', '?')} requests")
+    reco = s.get("recommendations") or []
+    if reco:
+        L.append("    RECOMMENDATIONS (human review — do NOT auto-apply):")
+        for r in reco:
+            L.append(f"      - {r}")
+    else:
+        L.append("    no constant changes recommended.")
+    return L
+
+
 def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
            settlement_ref: dict | None = None,
            cross_reference: dict | None = None,
@@ -782,6 +836,7 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
     L.append("")
     L.append(f"  Provenance: every figure above came from a live API call "
              f"({v.requests_made} sandboxed requests). No values are model-generated.")
+    L.extend(_healthcheck_banner())          # read-only monitor status; never moves the verdict
     return "\n".join(L)
 
 

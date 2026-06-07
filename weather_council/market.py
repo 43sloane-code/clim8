@@ -19,6 +19,10 @@ JSON-encoded *strings*, not arrays, so each is json.loads'd defensively.
 
 from __future__ import annotations
 
+__all__ = [
+    'MarketBucket', 'WeatherMarket', 'MarketData'
+]
+
 import json
 import re
 from dataclasses import dataclass

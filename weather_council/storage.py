@@ -15,6 +15,12 @@ face-value grid reading.
 
 from __future__ import annotations
 
+__all__ = [
+    'log_verdict', 'verify', 'log_market_snapshot', 'settle_market_snapshots',
+    'fetch_settled_snapshots', 'log_tracked_forecast', 'settle_tracked_forecasts',
+    'tracked_forecast_scores'
+]
+
 import datetime as dt
 import json
 import sqlite3

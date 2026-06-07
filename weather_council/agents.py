@@ -12,6 +12,10 @@ so any figure can be traced back to its source.
 
 from __future__ import annotations
 
+__all__ = [
+    'MemberSpec', 'Skill', 'Vote', 'ForecasterAgent', 'build_council'
+]
+
 import datetime as dt
 import statistics
 from dataclasses import dataclass, field

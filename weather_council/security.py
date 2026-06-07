@@ -26,6 +26,10 @@ by validate_city before it is ever placed in a query string.
 
 from __future__ import annotations
 
+__all__ = [
+    'SecurityError', 'RateLimitError', 'validate_city', 'SafeHTTPClient'
+]
+
 import ipaddress
 import json
 import re

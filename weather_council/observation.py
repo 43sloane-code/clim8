@@ -11,6 +11,10 @@ No behaviour change: Council._observe now delegates here.
 """
 from __future__ import annotations
 
+__all__ = [
+    'Observation', 'observe'
+]
+
 from dataclasses import dataclass
 
 from .sources import DailySeries, Place, Sources
