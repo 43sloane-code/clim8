@@ -27,6 +27,7 @@ from .seasonal import (SEASON_ANALOG_ARCHIVE_FLOOR, SEASON_ANALOG_WINDOW_DAYS,
 from .scoring import crps_sample, interval_coverage
 from .calibration import conditional_spread_eval, CalibrationEval
 from .convergence import ConvergenceInputs, Mechanism
+from .observation import Observation, RECENT_OBS_DAYS, observe
 from .security import RateLimitError
 from .sources import (DailySeries, Place, Sources, Station, place_today,
                       quantize_to_grain)
@@ -62,7 +63,6 @@ OUTLIER_FLOOR_C = 4.0    # never flag a member within this of the median
 # in every city (~1.7% on the basket) with hit-rate(±2°C) unchanged. Applied
 # identically in the live blend and the validation pass so they never diverge.
 WEIGHT_POWER = 2
-RECENT_OBS_DAYS = 3      # observed days surfaced in the observation step
 CLIMO_START_YEAR = 1991  # standard WMO baseline start for normals/records
 RECORD_WINDOW_DAYS = 3   # ± calendar days pooled around the target date
 # A station is only trusted as the truth source if it has reported within this
@@ -182,13 +182,6 @@ def _pct(values: list[float], q: float) -> float:
         return float("nan")
     i = min(len(s) - 1, max(0, round(q * (len(s) - 1))))
     return s[i]
-
-
-@dataclass
-class Observation:
-    current: dict                         # current assimilated surface conditions
-    recent: list[tuple[str, float, float]]  # (date, observed high, observed low)
-    backbone: str
 
 
 @dataclass
@@ -1066,67 +1059,9 @@ class Council:
     # -- stage builders --------------------------------------------------- #
     def _observe(self, place: Place, observed: DailySeries,
                  truth_source: dict) -> Observation:
-        try:
-            current = self.sources.fetch_current(place)
-        except Exception:
-            current = {}
-        # A settlement-anchored city's live "now" must come from the settlement
-        # instrument itself, not an Open-Meteo grid cell that can sit ~2 °C away.
-        # Hong Kong overrides temperature (and humidity, which HKO reports at the
-        # HQ) from the live HKO feed; London overrides temperature from the live
-        # EGLC METAR (the airport gauge the market resolves on). Wind/pressure
-        # stay from the grid and the temperature's source is surfaced so the
-        # provenance is never silently mixed.
-        if truth_source.get("data_source") == "hko_opendata":
-            try:
-                live = self.sources.hko_current()
-            except Exception:
-                live = None
-            if live and live.get("temperature_2m") is not None:
-                current = dict(current)
-                current["temperature_2m"] = live["temperature_2m"]
-                if live.get("relative_humidity_2m") is not None:
-                    current["relative_humidity_2m"] = live["relative_humidity_2m"]
-                current["temperature_source"] = (
-                    live.get("temperature_source")
-                    or "Hong Kong Observatory (live rhrread)")
-                current["temperature_record_time"] = live.get("record_time")
-        elif truth_source.get("data_source") == "iem_metar":
-            try:
-                live = self.sources.eglc_current()
-            except Exception:
-                live = None
-            if live and live.get("temperature_2m") is not None:
-                current = dict(current)
-                current["temperature_2m"] = live["temperature_2m"]
-                current["temperature_source"] = (
-                    "London City Airport EGLC (live IEM METAR, whole-degree)")
-                current["temperature_record_time"] = live.get("record_time")
-        recent = [(d, observed[d][0], observed[d][1])
-                  for d in sorted(observed)[-RECENT_OBS_DAYS:]]
-        if truth_source["kind"] == "station":
-            st = truth_source["station"]
-            if truth_source.get("data_source") == "hko_opendata":
-                backbone = (f"{st['name']} surface observations via Hong Kong "
-                            f"Observatory open data (the Observatory's own gauge — "
-                            f"the point the HK temperature record settles on; live "
-                            f"'now' reading from the HKO rhrread feed)")
-            elif truth_source.get("data_source") == "iem_metar":
-                backbone = (f"{st['name']} daily extremes reconstructed from raw "
-                            f"IEM ASOS METAR (London City Airport's own EGLC sensor "
-                            f"— the point the London market settles on)")
-            else:
-                backbone = (f"{st['name']} surface observations via Meteostat "
-                            f"(aggregated METAR/SYNOP gauge readings — the point a "
-                            f"temperature record settles on)")
-        else:
-            backbone = ("ERA5 reanalysis (assimilates satellite, radiosonde, "
-                        "radar, ocean-buoy and ground-station observations)")
-        return Observation(
-            current=current,
-            recent=recent,
-            backbone=backbone,
-        )
+        # Stage 1 lives in observation.observe — a Sources-only unit, no council
+        # state. Kept as a thin method so call sites and tests are unchanged.
+        return observe(self.sources, place, observed, truth_source)
 
     def _ensemble(self, place: Place, target: dt.date,
                   observed: DailySeries, w_start: dt.date,
