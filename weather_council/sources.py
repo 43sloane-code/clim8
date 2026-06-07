@@ -18,6 +18,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -63,6 +64,13 @@ HKO_RHRREAD_PLACE = "Hong Kong Observatory"   # the station label inside rhrread
 HKO_1MIN_TEMP_URL = ("https://data.weather.gov.hk/weatherAPI/hko_data/"
                      "regional-weather/latest_1min_temperature.csv")
 HKO_1MIN_PLACE = "HK Observatory"   # the Observatory's label inside the 1-min CSV
+# Weatherbit daily forecast — a non-Open-Meteo forecaster added as a RECOMMEND-
+# ONLY tracked source (logged and scored prospectively, never voted into the live
+# blend until it earns >= MIN_SAMPLES paired days). Keyed: the API key is read
+# from the WEATHERBIT_API_KEY env var and passed as a request PARAMETER, so it is
+# never embedded in a logged base_url. Metric units (°C) requested explicitly.
+WEATHERBIT_FORECAST_URL = "https://api.weatherbit.io/v2.0/forecast/daily"
+WEATHERBIT_MAX_DAYS = 16            # Weatherbit's daily forecast horizon
 
 # Plausibility band: any temperature outside this is treated as corrupt and
 # dropped, so a bad upstream value can never enter a verdict.
@@ -341,6 +349,51 @@ class Sources:
         )
         series = _pair_series(data.get("daily", {}), model, self.qc)
         return series.get(target.isoformat())
+
+    def fetch_weatherbit_forecast(self, place: Place,
+                                  target: dt.date) -> tuple[float, float] | None:
+        """Weatherbit daily forecast (high, low) °C for `target`, or None.
+
+        RECOMMEND-ONLY tracked forecaster. Weatherbit is NOT an Open-Meteo model
+        and exposes no free archive of its PAST forecasts, so its skill cannot be
+        backtested instantly the way every council member's is; it is only logged
+        and scored prospectively and must NEVER be voted into the live blend until
+        it has earned >= MIN_SAMPLES paired days on real data.
+
+        Key handling (the repo is public): the API key is read from the
+        WEATHERBIT_API_KEY environment variable and passed as a request PARAMETER
+        — it never appears in a base_url, and SafeHTTPClient logs only the bare
+        host, so the key cannot leak into reports or logs. If the variable is
+        unset/blank the source SILENTLY yields None, so the repo and the test
+        suite stay runnable without a key.
+
+        Honest-or-nothing: returns None on a missing field, an unparseable value,
+        or any transport/security error, exactly like the Open-Meteo fetchers —
+        it never fabricates a number, and never aborts the caller's run."""
+        key = (os.environ.get("WEATHERBIT_API_KEY") or "").strip()
+        if not key:
+            return None
+        lead = (target - place_today(place)).days
+        days = min(max(lead + 1, 1), WEATHERBIT_MAX_DAYS)
+        try:
+            data = self.http.get_json(
+                WEATHERBIT_FORECAST_URL,
+                {"lat": place.latitude, "lon": place.longitude,
+                 "days": days, "units": "M", "key": key},
+            )
+        except SecurityError:
+            return None                     # optional source: degrade, never raise
+        rows = data.get("data")
+        if not isinstance(rows, list):
+            return None
+        want = target.isoformat()
+        for row in rows:
+            if not isinstance(row, dict) or row.get("valid_date") != want:
+                continue
+            hi = _clean_temp(row.get("max_temp"))
+            lo = _clean_temp(row.get("min_temp"))
+            return (hi, lo) if hi is not None and lo is not None else None
+        return None
 
     def fetch_history_series(self, model: str, place: Place,
                              start: dt.date, end: dt.date) -> DailySeries:

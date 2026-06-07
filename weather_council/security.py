@@ -61,6 +61,13 @@ ALLOWED_HOSTS = frozenset({
     # a *current* settlement-vs-airport offset; this is the only source of the
     # recent HKO daily record, used solely to make that offset modern. Read-only.
     "data.weather.gov.hk",
+    # Weatherbit daily forecast API: a non-Open-Meteo forecaster. It exposes NO
+    # free archive of its PAST forecasts, so — unlike the council members — its
+    # skill cannot be backtested instantly; it is added as a RECOMMEND-ONLY
+    # tracked forecaster (logged and scored prospectively, never voted into the
+    # live blend until it earns history). Keyed: the API key rides in the request
+    # PARAMS (never a logged URL) and is read from WEATHERBIT_API_KEY at runtime.
+    "api.weatherbit.io",
 })
 
 MAX_BYTES = 8 * 1024 * 1024          # 8 MiB ceiling on a *compressed* body
