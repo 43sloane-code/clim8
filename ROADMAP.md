@@ -42,8 +42,10 @@ bucket. The verdict must be expressible in those same terms.
 - [ ] **A1. Identify the exact settlement station per market.** A market names
   a specific airport (e.g. the one Weather Underground displays). Resolve the
   market's station → ICAO so the verdict is anchored on the *same* sensor the
-  oracle reads. Currently the council picks its own station; for a given market
-  this must match the market's.
+  oracle reads. *Partial:* the two pinned cities are already aligned to their
+  settlement instrument (London→EGLC, Hong Kong→HKO Observatory; see A5). What
+  remains is the **generic** per-market station→ICAO resolution so any city in
+  the basket matches its market's sensor, not just the two hand-pinned anchors.
 - [ ] **A3. Map to the market's bucket definition.** Beyond rounding, encode
   the actual bucket edges a market uses (ranges / over-under thresholds) and
   report which bucket the quantized verdict lands in, with the distance to the
@@ -57,10 +59,22 @@ bucket. The verdict must be expressible in those same terms.
   the 33.9°C verdict is reported as settling 33.9°C, NOT a rounded 34. The real
   decimal→bucket convention still needs the contract rules (+ the right station,
   see A5) before HK can be compared for real.
-- [ ] **A5. Decide the truth-source fork.** Either (a) keep Meteostat as
-  backtest truth and carry the documented METAR bias as a disclosed
-  adjustment, or (b) repoint truth to raw METAR for settlement-station markets.
-  This is an architecture decision — **needs user sign-off before coding.**
+- [x] **A5. Truth-source fork — DECIDED: option (b), already shipped.** For
+  cities pinned to a specific settlement station, truth is repointed to that
+  station's own settlement-grade instrument, not Meteostat:
+  - **Hong Kong** anchors strictly on the **HKO Observatory open-data** daily
+    record (`council._resolve_truth` → `data_source="hko_opendata"`; live "now"
+    from the HKO rhrread / 1-minute 0.1 °C feed). The VHHH airport may **never**
+    substitute; if the Observatory feed is stale the verdict drops to the honest
+    ERA5 grid rather than jumping sensors.
+  - **London** anchors strictly on the **EGLC METAR** record
+    (`data_source="iem_metar"`); Meteostat survives only as the older-days
+    coverage base under the METAR overlay.
+  - Meteostat is retained for non-pinned cities and as the **disclosed-bias
+    reference** (A4), never silently mixed into a pinned city's anchor.
+  Signed off 2026-06. The remaining sub-degree HK *market-comparison* mapping is
+  a data-acquisition task (the contract bucket rules), tracked under A1/A3 — it
+  is **withheld, not fabricated**, until those rules are in hand.
 
 ### Quarantined lore (do NOT encode as fact)
 Pasted market folklore that is unverified or self-contradictory and must not be
@@ -114,9 +128,11 @@ the market's implied probability. **Read-only. No trading, ever.**
     0.1°C — not airport, not whole-degree.**
   - Paris settles on **Le Bourget (LFPB)**, confirmed by the WU URL — resolves
     the old contradictory-codes lore.
-  - The council's HK settlement block currently anchors on VHHH airport METAR
-    and snaps to whole °C; for the actual HK market that is the **wrong
-    station, source, and grain** → sharpens the A5 truth-source decision.
+  - *(Resolved, see A5.)* The HK verdict no longer anchors on VHHH airport: it
+    is repointed to the **HKO Observatory open-data record** (the Observatory's
+    own gauge — the same instrument the HK market settles on). What remains is
+    only the sub-degree **bucket-edge** convention (0.1 °C labels), still
+    withheld under A3 pending the contract rules — never fabricated.
 - [x] **C4. Parse bucket edges + match a verdict to its bucket.** Each bucket
   label parses to inclusive integer edges in the native unit (`MarketBucket.lo`
   /`.hi`; open tails = `None`). `WeatherMarket.bucket_for_high(verdict_c)` maps
