@@ -15,3 +15,8 @@ __pycache__/
 reports/launchd.out.log
 reports/launchd.err.log
 reports/server.log
+
+# Daily-generated health-check reports (reproducible output, not source).
+# reports/baseline.json is the committed reference and stays tracked.
+reports/healthcheck_*.txt
+reports/latest.txt
