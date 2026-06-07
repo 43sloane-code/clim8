@@ -626,6 +626,42 @@ class Sources:
             return {}
         return dict(res.get("daily", {}))
 
+    def fetch_metar_observations(self, icao: str, start: dt.date, end: dt.date,
+                                 timezone: str) -> list[tuple[str, float]]:
+        """Raw timestamped air-temperature obs (°C) from the IEM ASOS METAR
+        archive — the sub-daily record underneath fetch_metar_daily. Returns a
+        time-sorted list of (local_timestamp_iso, temp_c).
+
+        The native cadence is the station's *reporting interval* (ASOS routine
+        METAR ~hourly, plus SPECIs) — emphatically NOT per-second or per-minute.
+        A caller asking for a finer timescale than this cadence is asking for
+        truth that was never measured; such scales must be reported as
+        unobserved, never interpolated into fabricated readings."""
+        tz = timezone if "/" in (timezone or "") else "Etc/UTC"
+        txt = self.http.get_text(METAR_URL, {
+            "station": icao,
+            "data": ["tmpc"],
+            "year1": start.year, "month1": start.month, "day1": start.day,
+            "year2": end.year, "month2": end.month, "day2": end.day,
+            "tz": tz, "format": "onlycomma", "latlon": "no",
+            "missing": "empty", "trace": "empty",
+            "report_type": [3, 4],
+        })
+        obs: list[tuple[str, float]] = []
+        for line in txt.splitlines()[1:]:           # skip header
+            p = line.split(",")
+            if len(p) < 3:
+                continue
+            ts = p[1].strip()
+            if len(ts) < 16 or ts[4] != "-" or ts[7] != "-":
+                continue
+            c = _clean_temp_cell(p[2])
+            if c is None:
+                continue
+            obs.append((ts, c))
+        obs.sort()
+        return obs
+
     def fetch_metar_daily(self, icao: str, start: dt.date, end: dt.date,
                           timezone: str) -> dict:
         """Daily max/min reconstructed from raw airport METAR (IEM ASOS archive)

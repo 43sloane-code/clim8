@@ -721,6 +721,78 @@ class TestFeedbackLoop(unittest.TestCase):
         self.assertEqual(loop.run(e).reached, loop.Stage.HYPOTHESIS)
 
 
+class TestTimescaleVerdict(unittest.TestCase):
+    """The cross-timescale verdict (weather_council/timescale.py) must be a fixed,
+    parameter-free function of the data: skillful series read SKILL CONFIRMED,
+    i.i.d. noise never does, sub-cadence scales are refused (UNOBSERVABLE), and the
+    Diebold-Mariano significance is HAC-valid. No human judgement may enter it."""
+
+    def test_self_test_passes(self):
+        from weather_council import timescale as tk
+        tk._self_test()
+
+    def test_ar1_is_skill_confirmed_noise_is_not(self):
+        from weather_council import timescale as tk
+        rng = random.Random(3)
+        ar = [0.0]
+        for _ in range(500):
+            ar.append(0.85 * ar[-1] + rng.gauss(0, 1))
+        self.assertEqual(tk.evaluate(ar, "ar1").verdict, "SKILL CONFIRMED")
+        noise = [rng.gauss(0, 1) for _ in range(500)]
+        self.assertNotEqual(tk.evaluate(noise, "noise").verdict, "SKILL CONFIRMED")
+
+    def test_observability_gate_refuses_subcadence(self):
+        from weather_council import timescale as tk
+        v = tk.evaluate([1.0, 2.0, 3.0] * 30, "sub", observability=0.02)
+        self.assertEqual(v.verdict, "UNOBSERVABLE")
+
+    def test_insufficient_below_min_periods(self):
+        from weather_council import timescale as tk
+        v = tk.evaluate([1.0, 2.0, 3.0, 4.0, 5.0], "tiny", observability=1.0)
+        self.assertEqual(v.verdict, "INSUFFICIENT")
+
+    def test_resample_observability_and_binning(self):
+        from weather_council import timescale as tk
+        # Two points 1s apart, binned at 10s -> one filled bin, obs=1.0.
+        series, obs = tk.resample([(0.0, 4.0), (1.0, 6.0)], 10.0)
+        self.assertEqual(series, [5.0])
+        self.assertEqual(obs, 1.0)
+        # Points 0s and 100s, binned at 10s -> 2 filled of 11 spanned -> obs ~0.18.
+        series, obs = tk.resample([(0.0, 1.0), (100.0, 2.0)], 10.0)
+        self.assertEqual(series, [1.0, 2.0])
+        self.assertAlmostEqual(obs, 2 / 11, places=6)
+
+    def test_dm_symmetric_for_identical_forecasters(self):
+        from weather_council import timescale as tk
+        dm, p = tk.diebold_mariano([1.0, 2.0, 1.5, 3.0], [1.0, 2.0, 1.5, 3.0])
+        self.assertAlmostEqual(dm, 0.0, places=9)
+        self.assertGreater(p, 0.99)
+
+    def test_cascade_beats_persistence_on_noise(self):
+        # rho~0 -> shrinkage collapses to climatology, which beats persistence.
+        from weather_council import timescale as tk
+        rng = random.Random(11)
+        noise = [rng.gauss(0, 1) for _ in range(500)]
+        self.assertEqual(tk.evaluate_cascade(noise, "noise").verdict, "CASCADE BETTER")
+
+    def test_cascade_ties_persistence_at_unit_root(self):
+        # rho~1 -> shrinkage collapses to persistence; never significantly worse.
+        from weather_council import timescale as tk
+        rng = random.Random(12)
+        unit = [0.0]
+        for _ in range(500):
+            unit.append(0.97 * unit[-1] + rng.gauss(0, 1))
+        self.assertNotEqual(tk.evaluate_cascade(unit, "unit").verdict, "CASCADE WORSE")
+
+    def test_autocorr1_recovers_ar_coefficient(self):
+        from weather_council import timescale as tk
+        rng = random.Random(5)
+        x = [0.0]
+        for _ in range(4000):
+            x.append(0.6 * x[-1] + rng.gauss(0, 1))
+        self.assertAlmostEqual(tk._autocorr1(x), 0.6, delta=0.05)
+
+
 class TestRegimeConsensus(unittest.TestCase):
     """regime_consensus is a pure post-hoc summary of a finished Verdict: it
     classifies the regime from already-computed signals and measures whether the
