@@ -24,6 +24,7 @@ __all__ = [
 ]
 
 import json
+import math
 import re
 from dataclasses import dataclass
 
@@ -192,6 +193,39 @@ class WeatherMarket:
             lo_edge_c = self._to_c(b.lo - 0.5)
             dists.append(abs(verdict_high_c - lo_edge_c))
         return min(dists) if dists else None
+
+    def _bucket_label_for_reading(self, reading_int: int) -> str | None:
+        """The bucket label a native whole-degree reading lands in (None if no
+        bucket contains it)."""
+        for b in self.buckets:
+            if b.contains(reading_int):
+                return b.label
+        return None
+
+    def rounding_rule_robustness(
+        self, verdict_high_c: float
+    ) -> tuple[bool, str | None, str | None] | None:
+        """For a market that settles FINER than its whole-degree bucket labels
+        (e.g. HK at 0.1 °C), test whether the chosen whole-degree bucket actually
+        DEPENDS on the 0.1°→whole rounding rule the contract labels do not reveal.
+
+        Honest, not a fabricated rule: bucket_for_high commits to round-half-up,
+        but the contract might truncate instead ('the high was 30.7, settles 30').
+        This returns (robust, nearest_bucket, truncate_bucket): the bucket under
+        round-to-nearest (what the comparison assumes) and under truncation, and
+        whether they AGREE. Disagreement is the honest red flag that the displayed
+        single-bucket assignment rests on the unverified rule; agreement means the
+        gap is immaterial for this verdict. None for whole-degree markets, where
+        the labels ARE the settlement grain and no extra snap exists. Native °F is
+        handled in-unit (the snap happens on the °F reading the contract reads)."""
+        if not self.settles_sub_degree():
+            return None
+        native = verdict_high_c * 9 / 5 + 32 if self.grain == "F" else verdict_high_c
+        nearest = _round_half_up(native)        # round-to-nearest (half up): the assumed rule
+        truncate = math.floor(native)           # drop the fraction: the plausible alternative
+        near_b = self._bucket_label_for_reading(nearest)
+        trunc_b = self._bucket_label_for_reading(truncate)
+        return (near_b == trunc_b, near_b, trunc_b)
 
     def _to_c(self, native_value: float) -> float:
         return (native_value - 32) * 5 / 9 if self.grain == "F" else native_value

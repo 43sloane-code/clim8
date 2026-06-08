@@ -128,6 +128,11 @@ class VerdictMarketComparison:
     verdict_reading: int             # verdict snapped to native whole-degree
     verdict_bucket: str | None       # bucket the point verdict alone lands in
     edge_distance_c: float | None    # verdict's distance to nearest bucket edge
+    # Sub-degree only (HK): does the whole-degree bucket DEPEND on the unverified
+    # 0.1°→whole rounding rule? None for whole-degree markets.
+    rounding_robust: bool | None     # round-to-nearest and truncation pick the SAME bucket
+    rounding_near_bucket: str | None # bucket under round-to-nearest (what we assume)
+    rounding_trunc_bucket: str | None# bucket under truncation (the plausible alternative)
     bias_correction_c: float | None  # signed backtested correction baked into the verdict
     settles_sub_degree: bool         # market settles finer than its whole-degree labels
     settlement_offset_c: float | None  # measured settlement-vs-backtest station offset (°C)
@@ -231,6 +236,9 @@ def compare_high(
         verdict_bucket=(market.bucket_for_high(settle_c).label
                         if market.bucket_for_high(settle_c) else None),
         edge_distance_c=market.edge_distance_c(settle_c),
+        rounding_robust=(rr[0] if (rr := market.rounding_rule_robustness(settle_c)) else None),
+        rounding_near_bucket=(rr[1] if rr else None),
+        rounding_trunc_bucket=(rr[2] if rr else None),
         bias_correction_c=(round(bias_correction_c, 3)
                            if bias_correction_c is not None else None),
         settles_sub_degree=sub_degree,
@@ -333,6 +341,9 @@ def comparison_to_dict(c: VerdictMarketComparison) -> dict:
         "verdict_reading": c.verdict_reading,
         "verdict_bucket": c.verdict_bucket,
         "edge_distance_c": c.edge_distance_c,
+        "rounding_robust": c.rounding_robust,
+        "rounding_near_bucket": c.rounding_near_bucket,
+        "rounding_trunc_bucket": c.rounding_trunc_bucket,
         "bias_correction_c": c.bias_correction_c,
         "settles_sub_degree": c.settles_sub_degree,
         "settlement_offset_c": c.settlement_offset_c,

@@ -10,8 +10,9 @@ What this is — and is NOT:
     through the project's own sandboxed client and writes a text report.
 
 Each run:
-  1. Walk-forward backtests the council across the 8-city basket (rolling-origin,
-     no future leakage), exactly the evaluation the live verdict uses.
+  1. Walk-forward backtests the council across the basket (London + Hong Kong,
+     each pinned to its exact settlement station; rolling-origin, no future
+     leakage), exactly the evaluation the live verdict uses.
   2. Compares the four weighting/bias variants (bias mean|median × 1/MAE^1|^2)
      so the committed choice (mean bias, 1/MAE^2) is re-justified — or challenged
      — on today's data. A challenger is surfaced only if it beats current on the
@@ -58,7 +59,10 @@ from weather_council.council import (Council, WEIGHT_POWER,  # noqa: E402
                                      _weighted_std)
 from weather_council.edge import report_lines as edge_report_lines  # noqa: E402
 from weather_council.edge import score_snapshots  # noqa: E402
-from weather_council.scoring import crps_sample, interval_coverage  # noqa: E402
+from weather_council.scoring import crps_sample, interval_coverage, pit  # noqa: E402
+from weather_council.spread_skill import spread_skill_eval  # noqa: E402
+from weather_council.ensemble_verification import (rank_histogram_eval,  # noqa: E402
+                                                   pit_calibration_eval)
 from weather_council.storage import (fetch_settled_snapshots,  # noqa: E402
                                      log_market_snapshot, settle_market_snapshots,
                                      log_tracked_forecast, settle_tracked_forecasts,
@@ -70,10 +74,21 @@ from run import _build_comparison                       # noqa: E402
 
 CRPS_MIN = 10               # residuals needed before a predictive CRPS is trusted
 
-# The basket — geographically diverse so a constant has to generalize, not fit
-# one climate. Mirrors the sweep the weighting exponent was originally earned on.
-BASKET = ["London", "Tokyo", "New York", "Sydney",
-          "Berlin", "Chicago", "São Paulo", "Cairo"]
+# The basket — narrowed to the two markets we actually settle against, each pinned
+# to its exact settlement station: London -> EGLC (London City Airport, the
+# strict-ICAO anchor) and Hong Kong -> the Royal Observatory HQ (the strict-HKO
+# anchor, NOT the airport VHHH ~6 km away). Accuracy here means matching THESE two
+# stations' published daily highs, so the basket is the settlement set, not a
+# diversity sweep.
+#
+# Trade-off, stated honestly: with only two cities the cross-city paired bootstrap
+# (BOOT_*) has just two per-city deltas to resample, so its 90% CI is effectively
+# "did BOTH cities agree" — it can no longer distinguish a real constant-change
+# from a two-city coincidence with any power. The challenger gate therefore
+# becomes deliberately near-impossible to clear; read a surfaced CONSIDER on a
+# 2-city basket as "look harder", never as statistical proof. Re-widen the basket
+# if you want the constants re-justified with real significance.
+BASKET = ["London", "Hong Kong"]
 
 WINDOW = 120                 # days of history per city (bounded by archive lag)
 WARMUP = MIN_SAMPLES         # walk-forward warmup = the live validation warmup
@@ -111,8 +126,13 @@ STATUS = REPORTS / "healthcheck_status.json"
 
 def _blend_on_date(votes, attr, day, train, bias_method, power):
     """One held-out day's blend under a chosen (bias_method, power), using only
-    `train` dates to learn each member's bias and weight. None if too sparse."""
+    `train` dates to learn each member's bias and weight. Returns
+    (prediction, corrected_members) where `corrected_members` is the raw
+    bias-corrected member panel for this day — surfaced (recommend-only) so the
+    walk-forward can build the rank histogram, exactly as council._blend_on_date
+    does for the live verdict. Returns (None, []) if too sparse."""
     num = den = 0.0
+    corrected = []          # raw bias-corrected member forecasts for this day
     for v in votes:
         series = v.hist_high if attr == "high" else v.hist_low
         if day not in series:
@@ -127,7 +147,8 @@ def _blend_on_date(votes, attr, day, train, bias_method, power):
         w = 1.0 / max(mae_c, 0.1) ** power
         num += w * (series[day][0] - bias)
         den += w
-    return (num / den) if den > 0 else None
+        corrected.append(series[day][0] - bias)
+    return ((num / den) if den > 0 else None), corrected
 
 
 def _walk_forward(votes, observed, bias_method, power):
@@ -145,15 +166,26 @@ def _walk_forward(votes, observed, bias_method, power):
     These are the two axes MAE conflates; RMSE² = bias² + σ². A city can be
     off-centre, scattered, or both, and you fix each differently.
 
-    Returns (mae, hit_rate, n, crps_skill_vs_climatology, coverage_80, bias, σ)."""
+    Finally returns the leak-free ENSEMBLE-CALIBRATION inputs (recommend-only),
+    the same two the live council._validate now emits: `rank_inputs`, the
+    per-day (bias-corrected member panel, observation) pairs the rank histogram
+    consumes to ask whether the raw panel's dispersion is the right SIZE; and
+    `pits`, each the PIT of the held-out outcome through ONLY the
+    strictly-earlier residual cloud — the same distribution scored by CRPS — so
+    the PIT histogram can ask whether the SERVED distribution is calibrated.
+
+    Returns (mae, hit_rate, n, crps_skill_vs_climatology, coverage_80, bias, σ,
+             rank_inputs, pits)."""
     dates = sorted(observed)
     test = dates[WARMUP:]
     if len(test) < 5:
-        return None, None, 0, None, None, None, None
+        return None, None, 0, None, None, None, None, [], []
     errs, hits, n = [], 0, 0
     signed: list[float] = []                 # signed errors (obs − pred): accuracy + precision
     resid = {"high": [], "low": []}          # signed council residuals, in order
     clim_resid = {"high": [], "low": []}     # signed climatology residuals, in order
+    rank_inputs: list[tuple[list[float], float]] = []   # (corrected panel, obs) per day
+    pits: list[float] = []                   # leak-free PIT of obs through earlier cloud
     crps_c_sum = crps_clim_sum = 0.0
     crps_count = cover_hits = cover_count = 0
     for i, d in enumerate(test):
@@ -164,7 +196,7 @@ def _walk_forward(votes, observed, bias_method, power):
         clim = {"high": statistics.mean(observed[t][0] for t in train),
                 "low": statistics.mean(observed[t][1] for t in train)}
         for attr, idx in (("high", 0), ("low", 1)):
-            pred = _blend_on_date(votes, attr, d, train, bias_method, power)
+            pred, members = _blend_on_date(votes, attr, d, train, bias_method, power)
             if pred is None:
                 continue
             e = abs(pred - obs[idx])
@@ -173,6 +205,8 @@ def _walk_forward(votes, observed, bias_method, power):
             n += 1
             r = obs[idx] - pred
             signed.append(r)                 # accuracy=mean(signed); precision=pstdev(signed)
+            if len(members) >= 2:            # raw panel for the rank histogram
+                rank_inputs.append((members, obs[idx]))
             rc = obs[idx] - clim[attr]
             pr, pc = resid[attr], clim_resid[attr]
             if len(pr) >= CRPS_MIN and len(pc) >= CRPS_MIN:
@@ -182,6 +216,9 @@ def _walk_forward(votes, observed, bias_method, power):
                 covered, _w = interval_coverage(pr, r)
                 cover_hits += 1 if covered else 0
                 cover_count += 1
+                # PIT of today's residual through ONLY strictly-earlier residuals
+                # — the same leak-free cloud CRPS scores and compare.py resamples.
+                pits.append(pit(pr, r))
             pr.append(r)
             pc.append(rc)
     skill = (1.0 - crps_c_sum / crps_clim_sum
@@ -190,7 +227,8 @@ def _walk_forward(votes, observed, bias_method, power):
     bias = statistics.mean(signed) if signed else None
     spread = statistics.pstdev(signed) if len(signed) >= 2 else None
     return (statistics.mean(errs) if errs else None,
-            (hits / n) if n else None, n, skill, cover, bias, spread)
+            (hits / n) if n else None, n, skill, cover, bias, spread,
+            rank_inputs, pits)
 
 
 def _screened_blend_on_date(votes, attr, day, train, bias_method, power, floor):
@@ -490,6 +528,12 @@ def main() -> int:
     basket_cover = {v: [] for v in VARIANTS}
     basket_floor = {f: {} for f in OUTLIER_FLOORS}   # outlier-floor -> {city: per-city MAE}
     disp_pairs_all: list[tuple[float, float]] = []   # (|error|, dispersion), current config
+    # Ensemble-calibration inputs pooled basket-wide at the LIVE variant only
+    # (recommend-only): the raw member panels feed the rank histogram, the PIT
+    # values feed the PIT histogram. Live variant only — these verify the served
+    # configuration, not the challenger sweep.
+    rank_inputs_all: list[tuple[list[float], float]] = []
+    pit_values_all: list[float] = []
     freshness = {}
     convergence_by_city = {}                          # city -> {"high":Conv,"low":Conv}
     market_div = {}                                    # city -> VerdictMarketComparison
@@ -516,8 +560,8 @@ def main() -> int:
         freshness[city] = fresh
         res = {}
         for variant in VARIANTS:
-            mae, hit, n, skill, cover, bias, spread = _walk_forward(
-                votes, observed, *variant)
+            (mae, hit, n, skill, cover, bias, spread,
+             rank_inputs, pit_vals) = _walk_forward(votes, observed, *variant)
             res[variant] = (mae, hit, n, skill, cover, bias, spread)
             if mae is not None:
                 basket_acc[variant].append(mae)
@@ -527,6 +571,10 @@ def main() -> int:
                 basket_skill[variant].append(skill)
             if cover is not None:
                 basket_cover[variant].append(cover)
+            # Pool the ensemble-calibration inputs for the LIVE variant only.
+            if variant == (CURRENT_BIAS, CURRENT_POWER):
+                rank_inputs_all.extend(rank_inputs)
+                pit_values_all.extend(pit_vals)
         per_city[city] = res
         if res[(CURRENT_BIAS, CURRENT_POWER)][2] == 0:   # n==0 on the live variant
             no_holdout_reason[city] = _diagnose_no_holdout(votes, observed)
@@ -827,6 +875,63 @@ def main() -> int:
                          "DISP_ELEVATED (do NOT auto-apply).")
     else:
         lines.append("  insufficient tier coverage to validate the thresholds today.")
+
+    # Spread–skill reliability of the SAME (|error|, dispersion) axis: beyond the
+    # 3-tier ordering test above, does dispersion track error with the right SHAPE
+    # across regimes (a binned reliability diagram + significance-gated rank
+    # correlation), or only on average? Recommend-only; never moves a cutoff.
+    ss_eval = spread_skill_eval(disp_pairs_all)
+    if ss_eval is not None:
+        lines.append(f"  spread–skill: {ss_eval.label} "
+                     f"(disp↔|err| r={ss_eval.consistency:+.2f}, relative-reliability "
+                     f"gap {ss_eval.reliability_gap*100:.0f}%, averaging 1/α≈"
+                     f"{ss_eval.avg_members_factor:.1f}×, n={ss_eval.n}).")
+        if not ss_eval.tracks_error:
+            lines.append("  ⚠ dispersion does not track held-out error past the noise "
+                         "floor — the per-day confidence signal is weak on today's "
+                         "data. RECOMMENDATION: a human should review whether the "
+                         "dispersion-based tiers earn their place (do NOT auto-apply).")
+            status_reco.append("spread–skill FLAT (dispersion ⊥ held-out error)")
+    else:
+        lines.append("  spread–skill: insufficient held-out days to bin a reliability "
+                     "diagram today.")
+    lines.append("")
+
+    # Ensemble-calibration companions to spread–skill (recommend-only). Two
+    # standard verification diagrams, pooled basket-wide at the LIVE variant:
+    #   1. rank histogram (Talagrand): is the raw member panel's dispersion the
+    #      right SIZE? A U-shape = under-dispersed (too tight), a dome = too wide,
+    #      a tilt = a panel bias.
+    #   2. PIT histogram: is the SERVED distribution — the held-out residual cloud
+    #      compare.py resamples into bucket probabilities — calibrated? A U-shape
+    #      = over-confident buckets, a dome = under-confident, a tilt = biased.
+    # Together with spread–skill they verify the bucket-probability spread end to
+    # end. Like every block here they emit a finding for human review; they never
+    # move a verdict number or a cutoff.
+    rh_eval = rank_histogram_eval(rank_inputs_all)
+    pc_eval = pit_calibration_eval(pit_values_all)
+    lines.append("ENSEMBLE CALIBRATION CHECK (is the spread the right size, and the "
+                 "served cloud honest?)")
+    if rh_eval is not None:
+        rhd = rh_eval.diag
+        lines.append(f"  rank histogram (raw panel dispersion): {rh_eval.verdict} — "
+                     f"{rhd.shape}, edge ratio {rhd.edge_ratio:.2f}, reduced χ²="
+                     f"{rhd.reduced_chi2} (z={rhd.z:+.1f}), n={rhd.n}.")
+        if rh_eval.verdict != "CALIBRATED":
+            lines.append(f"    → {rh_eval.meaning}.")
+            status_reco.append(f"rank histogram {rh_eval.verdict} ({rhd.shape})")
+    else:
+        lines.append("  rank histogram: insufficient held-out days to fill the bins today.")
+    if pc_eval is not None:
+        pcd = pc_eval.diag
+        lines.append(f"  PIT of served cloud (the bucket-probability distribution): "
+                     f"{pc_eval.verdict} — {pcd.shape}, edge ratio {pcd.edge_ratio:.2f}, "
+                     f"reduced χ²={pcd.reduced_chi2} (z={pcd.z:+.1f}), n={pcd.n}.")
+        if pc_eval.verdict != "CALIBRATED":
+            lines.append(f"    → {pc_eval.meaning}.")
+            status_reco.append(f"PIT {pc_eval.verdict} ({pcd.shape})")
+    else:
+        lines.append("  PIT histogram: insufficient leak-free PIT values to bin today.")
     lines.append("")
 
     # Baseline drift.
@@ -1040,6 +1145,41 @@ def main() -> int:
             "calibration_coverage_pct": (round(status_cov, 1)
                                          if status_cov is not None else None),
             "calibration_label": status_cov_label,
+            # Spread–skill reliability of the dispersion signal on today's basket
+            # (recommend-only; MEASURED, never a target). None when too few days.
+            "spread_skill": ({
+                "label": ss_eval.label,
+                "tracks_error": ss_eval.tracks_error,
+                "reliable": ss_eval.reliable,
+                "consistency": ss_eval.consistency,
+                "reliability_gap": ss_eval.reliability_gap,
+                "averaging_factor": ss_eval.avg_members_factor,
+                "n": ss_eval.n,
+            } if ss_eval is not None else None),
+            # Ensemble-calibration companions (recommend-only; MEASURED, never a
+            # target). "applied": False makes explicit they change no served value.
+            "rank_histogram": ({
+                "verdict": rh_eval.verdict,
+                "shape": rh_eval.diag.shape,
+                "edge_ratio": rh_eval.diag.edge_ratio,
+                "reduced_chi2": rh_eval.diag.reduced_chi2,
+                "z": rh_eval.diag.z,
+                "uniform": rh_eval.diag.uniform,
+                "bins": list(rh_eval.diag.bins),
+                "n": rh_eval.n,
+                "applied": False,
+            } if rh_eval is not None else None),
+            "pit_calibration": ({
+                "verdict": pc_eval.verdict,
+                "shape": pc_eval.diag.shape,
+                "edge_ratio": pc_eval.diag.edge_ratio,
+                "reduced_chi2": pc_eval.diag.reduced_chi2,
+                "z": pc_eval.diag.z,
+                "uniform": pc_eval.diag.uniform,
+                "bins": list(pc_eval.diag.bins),
+                "n": pc_eval.n,
+                "applied": False,
+            } if pc_eval is not None else None),
             "recommendations": status_reco,
             "cities_usable": usable_cities,
             "cities_total": len(BASKET),

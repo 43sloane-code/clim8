@@ -329,6 +329,18 @@ def _market_lines(c: VerdictMarketComparison) -> list[str]:
         L.append(f"    settles  : 0.1 °{c.grain} record (sub-degree) | high {scale_c:.1f} °C "
                  f"settles as {scale_c:.1f} °C — no whole-degree rounding applies "
                  f"-> bucket {c.verdict_bucket}")
+        # Honest caveat: showing ONE bucket above needs a 0.1°→whole rule the
+        # contract labels don't reveal. Say whether that unverified rule actually
+        # CHANGES the bucket here — don't imply false certainty.
+        if c.rounding_robust is False:
+            L.append(f"    map rule : ⚠ the whole-degree bucket DEPENDS on the unverified "
+                     f"0.1°→whole rule — round-to-nearest -> {c.rounding_near_bucket}, "
+                     f"truncation -> {c.rounding_trunc_bucket}. The comparison below assumes "
+                     f"round-to-nearest; a human should confirm the contract's rule.")
+        elif c.rounding_robust is True:
+            L.append(f"    map rule : the unverified 0.1°→whole rule does not change the "
+                     f"bucket here (round-to-nearest and truncation both -> "
+                     f"{c.rounding_near_bucket}).")
     else:
         # Whole-degree airport-METAR record: the contract reads an integer, so the
         # continuous verdict IS rounded half-up. Make that explicit so an integer
@@ -831,6 +843,36 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
                          f"cloud past the noise floor "
                          f"(CRPS {cb.crps_conditional:.3f} vs {cb.crps_incumbent:.3f}, "
                          f"{cb.z:+.1f}σ, disp↔|err| r={cb.disp_corr:+.2f}, n={cb.n_scored}).")
+        ss = val.spread_skill
+        if ss is not None:
+            L.append("")
+            L.append("    SPREAD–SKILL CHECK (is member disagreement an honest per-day "
+                     "uncertainty signal? — recommend-only)")
+            L.append(f"      {ss.label}: consistency(disp,|err|) r={ss.consistency:+.2f}, "
+                     f"relative-reliability gap {ss.reliability_gap*100:.0f}% over "
+                     f"{len(ss.bins)} spread bins (n={ss.n}).")
+            L.append(f"      averaging factor 1/α≈{ss.avg_members_factor:.1f}× — raw member "
+                     f"spread overstates the blend's error by ~this (≈√members); the "
+                     f"bucket cloud already uses the de-scaled error, so this only "
+                     f"VERIFIES the spread, never changes it.")
+        rh = val.rank_histogram
+        pc = val.pit_calibration
+        if rh is not None or pc is not None:
+            L.append("")
+            L.append("    ENSEMBLE-CALIBRATION CHECK (is the spread the right SIZE, and is the "
+                     "served distribution honest? — recommend-only)")
+            if rh is not None:
+                d = rh.diag
+                L.append(f"      rank histogram (raw {v.ensemble.member_count or 8}-member "
+                         f"panel — Talagrand): {rh.verdict} [{d.shape}], "
+                         f"edge ratio {d.edge_ratio:.2f}, χ² z={d.z:+.1f}, n={d.n}.")
+                L.append(f"        {rh.meaning}.")
+            if pc is not None:
+                d = pc.diag
+                L.append(f"      PIT of the SERVED cloud (the distribution compare.py turns "
+                         f"into bucket probabilities): {pc.verdict} [{d.shape}], "
+                         f"χ² z={d.z:+.1f}, n={d.n}.")
+                L.append(f"        {pc.meaning}.")
     else:
         L.append("    insufficient history in window for split-sample validation")
     L.append("")
@@ -922,6 +964,40 @@ def verdict_to_dict(
                 "scored_days": val.calibration.n_scored,
                 "applied": False,
             } if val.calibration is not None else None),
+            "spread_skill": ({
+                "label": val.spread_skill.label,
+                "reliable": val.spread_skill.reliable,
+                "tracks_error": val.spread_skill.tracks_error,
+                "consistency": val.spread_skill.consistency,
+                "reliability_gap": val.spread_skill.reliability_gap,
+                "averaging_factor": val.spread_skill.avg_members_factor,
+                "rmse": val.spread_skill.rmse,
+                "mean_spread": val.spread_skill.mean_spread,
+                "n": val.spread_skill.n,
+                "applied": False,
+            } if val.spread_skill is not None else None),
+            "rank_histogram": ({
+                "verdict": val.rank_histogram.verdict,
+                "shape": val.rank_histogram.diag.shape,
+                "edge_ratio": val.rank_histogram.diag.edge_ratio,
+                "reduced_chi2": val.rank_histogram.diag.reduced_chi2,
+                "z": val.rank_histogram.diag.z,
+                "uniform": val.rank_histogram.diag.uniform,
+                "bins": list(val.rank_histogram.diag.bins),
+                "n": val.rank_histogram.n,
+                "applied": False,
+            } if val.rank_histogram is not None else None),
+            "pit_calibration": ({
+                "verdict": val.pit_calibration.verdict,
+                "shape": val.pit_calibration.diag.shape,
+                "edge_ratio": val.pit_calibration.diag.edge_ratio,
+                "reduced_chi2": val.pit_calibration.diag.reduced_chi2,
+                "z": val.pit_calibration.diag.z,
+                "uniform": val.pit_calibration.diag.uniform,
+                "bins": list(val.pit_calibration.diag.bins),
+                "n": val.pit_calibration.n,
+                "applied": False,
+            } if val.pit_calibration is not None else None),
         },
         "observation": {
             "current": v.observation.current,

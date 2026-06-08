@@ -82,5 +82,50 @@ class TestSubDegreeSettlementRendering(unittest.TestCase):
         self.assertIn("rounds to 31", settles)
         self.assertIn("(ROUNDED)", settles)
 
+    def test_sub_degree_flags_when_rounding_rule_changes_bucket(self):
+        # Assigning ONE whole-degree bucket to a 0.1°C-settled record needs a
+        # 0.1°→whole rule the labels don't reveal. 30.7 °C rounds-to-nearest to 31
+        # but TRUNCATES to 30 — different buckets — so the comparison must SAY the
+        # bucket depends on the unverified rule, not imply false certainty.
+        import run
+        rng = random.Random(11)
+        residuals = [rng.gauss(0.0, 0.7) for _ in range(80)]
+        cmp = compare_high(self._ladder("0.1°C"), verdict_high_c=30.7,
+                           residuals_c=residuals, station_offset=self._offset(0.0))
+        self.assertIsNotNone(cmp)
+        self.assertFalse(cmp.rounding_robust)
+        self.assertEqual(cmp.rounding_near_bucket, "31°C")
+        self.assertEqual(cmp.rounding_trunc_bucket, "30°C")
+        line = [ln for ln in run._market_lines(cmp) if "map rule :" in ln][0]
+        self.assertIn("DEPENDS on the unverified", line)
+        self.assertIn("round-to-nearest -> 31°C", line)
+        self.assertIn("truncation -> 30°C", line)
+
+    def test_sub_degree_robust_when_rule_does_not_change_bucket(self):
+        # 30.2 °C rounds-to-nearest to 30 AND truncates to 30 — same bucket — so
+        # the unverified rule is immaterial here and the line says so plainly.
+        import run
+        rng = random.Random(11)
+        residuals = [rng.gauss(0.0, 0.7) for _ in range(80)]
+        cmp = compare_high(self._ladder("0.1°C"), verdict_high_c=30.2,
+                           residuals_c=residuals, station_offset=self._offset(0.0))
+        self.assertTrue(cmp.rounding_robust)
+        self.assertEqual(cmp.rounding_near_bucket, "30°C")
+        self.assertEqual(cmp.rounding_trunc_bucket, "30°C")
+        line = [ln for ln in run._market_lines(cmp) if "map rule :" in ln][0]
+        self.assertIn("does not change the bucket", line)
+
+    def test_whole_degree_has_no_rounding_rule_caveat(self):
+        # No sub-degree snap exists for a whole-degree record: the fields are None
+        # and the 'map rule' caveat must NOT appear.
+        import run
+        rng = random.Random(13)
+        residuals = [rng.gauss(0.0, 0.7) for _ in range(80)]
+        cmp = compare_high(self._ladder("whole °C"), verdict_high_c=30.7,
+                           residuals_c=residuals)
+        self.assertIsNone(cmp.rounding_robust)
+        self.assertIsNone(cmp.rounding_near_bucket)
+        self.assertEqual([ln for ln in run._market_lines(cmp) if "map rule :" in ln], [])
+
 if __name__ == "__main__":
     unittest.main()

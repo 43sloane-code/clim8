@@ -31,8 +31,11 @@ from .agents import (ENSEMBLE_MODELS, MIN_SAMPLES, ForecasterAgent, Vote,
                      build_council)
 from .seasonal import (SEASON_ANALOG_ARCHIVE_FLOOR, SEASON_ANALOG_WINDOW_DAYS,
                        seasonal_skill)
-from .scoring import crps_sample, interval_coverage
+from .scoring import crps_sample, interval_coverage, pit
 from .calibration import conditional_spread_eval, CalibrationEval
+from .spread_skill import spread_skill_eval, SpreadSkill
+from .ensemble_verification import (
+    rank_histogram_eval, pit_calibration_eval, RankHistogram, PITCalibration)
 from .convergence import ConvergenceInputs, Mechanism
 from .observation import Observation, RECENT_OBS_DAYS, observe
 from .security import RateLimitError
@@ -342,6 +345,22 @@ class Validation:
     # residual cloud on held-out CRPS, past the noise floor? None when too few days
     # to judge. This NEVER changes the verdict — it surfaces a finding for review.
     calibration: "CalibrationEval | None" = None
+    # Recommend-only spread–skill diagnostic over the SAME leak-free walk-forward
+    # (signed_residual, member_dispersion) pairs: after removing the global
+    # averaging scale, does member dispersion track the blend's error with the
+    # right shape across regimes (a reliable per-day uncertainty signal), or is it
+    # flat? This is the verification that makes the bucket probabilities' SPREAD
+    # trustworthy. None when too few days. Never moves the verdict.
+    spread_skill: "SpreadSkill | None" = None
+    # Recommend-only ensemble-calibration companions to spread_skill, over the
+    # SAME leak-free walk-forward. rank_histogram (Talagrand) asks whether the raw
+    # member panel's dispersion is the right SIZE (U = under-dispersed, the classic
+    # deterministic-panel failure that justifies serving the wider residual cloud).
+    # pit_calibration asks whether the SERVED distribution — the residual cloud
+    # compare.py resamples into bucket probabilities — is itself calibrated
+    # (uniform PIT). None when too few days. Neither moves the verdict.
+    rank_histogram: "RankHistogram | None" = None
+    pit_calibration: "PITCalibration | None" = None
 
 
 @dataclass
@@ -1460,8 +1479,8 @@ class Council:
         raws = [r for r in raws if r is not None]
         return statistics.mean(raws) if raws else None
 
-    def _wf_step(self, blend: tuple[float, float, float], obs_v: float,
-                 clim: float, prev_v: float | None,
+    def _wf_step(self, blend: tuple[float, float, float, tuple[float, ...]],
+                 obs_v: float, clim: float, prev_v: float | None,
                  acc: SimpleNamespace) -> dict:
         """One held-out walk-forward step for a SINGLE attribute (high OR low).
 
@@ -1472,7 +1491,7 @@ class Council:
         blocks: the CRPS cloud is still scored against ONLY strictly-earlier
         residuals — acc.resid / acc.prior_clim are read for the gate and the
         score BEFORE today's residual is appended."""
-        council, naive, disp = blend
+        council, naive, disp, members = blend
         err = abs(council - obs_v)
         r = obs_v - council
         acc.council_err.append(err)
@@ -1483,6 +1502,8 @@ class Council:
         out = {
             "r": r,
             "disp": disp,
+            "members": members,        # raw bias-corrected panel, for the rank histogram
+            "pit": None,               # PIT of obs through the strictly-earlier cloud
             "win": 1 if err <= abs(naive - obs_v) else 0,
             "hit": 1 if err <= 2.0 else 0,
             "crps_c": None, "crps_cl": None, "covered": None, "width": None,
@@ -1493,6 +1514,10 @@ class Council:
             covered, width = interval_coverage(acc.resid, r)
             out["covered"] = covered
             out["width"] = width
+            # PIT of today's residual through ONLY the strictly-earlier residual
+            # cloud — the SAME leak-free distribution scored by CRPS and resampled
+            # into bucket probabilities. Uniform PIT == that distribution is honest.
+            out["pit"] = pit(acc.resid, r)
         acc.resid.append(r)
         acc.prior_clim.append(obs_v - clim)
         return out
@@ -1544,6 +1569,11 @@ class Council:
         # (signed residual, member dispersion) pairs for the conditional-spread
         # calibration check — pooled high+low, in walk-forward order. Recommend-only.
         calib_pairs: list[tuple[float, float]] = []
+        # (member panel, observation) for the rank histogram, and leak-free PIT
+        # values for the served-distribution calibration check — both pooled
+        # high+low over the same walk-forward, both recommend-only.
+        rank_inputs: list[tuple[tuple[float, ...], float]] = []
+        pit_values: list[float] = []
 
         for i, d in enumerate(test):
             obs = observed.get(d)
@@ -1574,6 +1604,10 @@ class Council:
                     continue
                 step = self._wf_step(blend, obs_v, clim, prev_v, acc)
                 calib_pairs.append((step["r"], step["disp"]))
+                if step["members"] and len(step["members"]) >= 2:
+                    rank_inputs.append((step["members"], obs_v))
+                if step["pit"] is not None:
+                    pit_values.append(step["pit"])
                 comparisons += 1
                 wins += step["win"]
                 hits += step["hit"]
@@ -1587,6 +1621,15 @@ class Council:
                     cover_count += 1
 
         calibration = conditional_spread_eval(calib_pairs)
+        # Same pairs, a complementary property measurement: the spread–skill
+        # reliability of the member-dispersion signal (recommend-only).
+        spread_skill = spread_skill_eval(calib_pairs)
+        # Ensemble-calibration companions, also recommend-only: is the raw panel's
+        # dispersion the right SIZE (rank histogram), and is the SERVED residual
+        # cloud calibrated (PIT)? Together with spread_skill they verify the
+        # bucket probabilities' spread end-to-end.
+        rank_histogram = rank_histogram_eval(rank_inputs)
+        pit_calibration = pit_calibration_eval(pit_values)
         mean = lambda xs: statistics.mean(xs) if xs else None
         crps_c = (crps_c_sum / crps_count) if crps_count else None
         crps_clim = (crps_clim_sum / crps_count) if crps_count else None
@@ -1613,17 +1656,23 @@ class Council:
             sharpness_80=(width_sum / cover_count) if cover_count else None,
             crps_n=crps_count,
             calibration=calibration,
+            spread_skill=spread_skill,
+            rank_histogram=rank_histogram,
+            pit_calibration=pit_calibration,
         )
 
     def _blend_on_date(self, votes: list[Vote], attr: str, day: str,
-                       train: set[str]) -> tuple[float, float, float] | None:
-        """Return (council_blend, naive_mean, dispersion) for one held-out day,
-        using bias and weights learned only from `train` dates. None if too sparse.
+                       train: set[str]) -> tuple[float, float, float, tuple[float, ...]] | None:
+        """Return (council_blend, naive_mean, dispersion, members) for one held-out
+        day, using bias and weights learned only from `train` dates. None if too
+        sparse.
 
         `dispersion` is the spread of the bias-corrected member forecasts on this
         day — the leak-free, per-day analog of the live ensemble spread. It feeds
         the conditional-calibration check (calibration.py); it does NOT change the
-        blend the council serves."""
+        blend the council serves. `members` is that same bias-corrected member set
+        (the raw panel), surfaced so the walk-forward can build the rank histogram
+        — also recommend-only, also never moving the verdict."""
         num = den = 0.0
         naive_vals = []
         corrected = []          # bias-corrected member forecasts for this day
@@ -1645,4 +1694,4 @@ class Council:
         if den <= 0 or not naive_vals:
             return None
         disp = statistics.pstdev(corrected) if len(corrected) > 1 else 0.0
-        return num / den, statistics.mean(naive_vals), disp
+        return num / den, statistics.mean(naive_vals), disp, tuple(corrected)

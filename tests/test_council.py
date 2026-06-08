@@ -72,6 +72,66 @@ class TestValidateCRPS(unittest.TestCase):
         dull = Council.__new__(Council)._validate(v_dull, o_dull)
         self.assertLess(sharp.crps_council, dull.crps_council)
 
+    def test_spread_skill_wired_and_detects_averaging(self):
+        # _validate must attach the recommend-only spread–skill diagnostic on the
+        # SAME leak-free pairs it builds for calibration. Two earned properties on
+        # this fixture: (a) the global averaging factor 1/α exceeds 1 — the blend's
+        # error is smaller than raw member dispersion (it must NOT be branded
+        # over-dispersed for averaging); (b) with each member at a CONSTANT noise
+        # scale there is no flow-dependence, so the honest read is FLAT.
+        votes, observed = self._synthetic()
+        val = Council.__new__(Council)._validate(votes, observed)
+        ss = val.spread_skill
+        self.assertIsNotNone(ss)
+        self.assertGreater(ss.n, 0)
+        self.assertTrue(ss.label)
+        self.assertIsInstance(ss.tracks_error, bool)
+        self.assertIsInstance(ss.reliable, bool)
+        # Averaging detected (blend error < member spread): 1/α ≈ √(effective members).
+        self.assertGreater(ss.avg_members_factor, 1.0)
+        # Constant per-member noise ⇒ dispersion does not track error ⇒ FLAT.
+        self.assertFalse(ss.tracks_error)
+        self.assertTrue(ss.label.startswith("FLAT"))
+
+    def test_spread_skill_is_deterministic(self):
+        a = Council.__new__(Council)._validate(*self._synthetic()).spread_skill
+        b = Council.__new__(Council)._validate(*self._synthetic()).spread_skill
+        self.assertEqual((a.label, a.n, a.alpha, a.consistency),
+                         (b.label, b.n, b.alpha, b.consistency))
+
+    def test_rank_histogram_and_pit_wired(self):
+        # _validate must also attach the two recommend-only ensemble-calibration
+        # companions built from the SAME leak-free walk-forward: the rank histogram
+        # (raw panel dispersion) over the per-day member panels, and the PIT
+        # histogram (served residual cloud) over the leak-free PIT values. Both must
+        # populate, carry a real sample, and read a known verdict word.
+        votes, observed = self._synthetic()
+        val = Council.__new__(Council)._validate(votes, observed)
+        rh, pc = val.rank_histogram, val.pit_calibration
+        self.assertIsNotNone(rh)
+        self.assertIsNotNone(pc)
+        self.assertGreater(rh.n, 0)
+        self.assertGreater(pc.n, 0)
+        # Verdict words come from the fixed diagnostic vocabulary, never invented.
+        self.assertIn(rh.verdict, {"CALIBRATED", "UNDER-DISPERSED", "OVER-DISPERSED",
+                                   "BIASED COLD", "BIASED WARM"})
+        self.assertIn(pc.verdict, {"CALIBRATED", "OVER-CONFIDENT", "UNDER-CONFIDENT",
+                                   "BIASED COLD", "BIASED WARM"})
+        # The PIT sample is the leak-free CRPS-gated count: one per scored day.
+        self.assertEqual(pc.n, val.crps_n)
+
+    def test_rank_histogram_and_pit_deterministic(self):
+        # The randomized rank uses a SEEDED rng, so two independent validations of
+        # the same fixture must return byte-identical histograms and verdicts.
+        a = Council.__new__(Council)._validate(*self._synthetic())
+        b = Council.__new__(Council)._validate(*self._synthetic())
+        self.assertEqual((a.rank_histogram.verdict, a.rank_histogram.diag.bins,
+                          a.rank_histogram.diag.z),
+                         (b.rank_histogram.verdict, b.rank_histogram.diag.bins,
+                          b.rank_histogram.diag.z))
+        self.assertEqual((a.pit_calibration.verdict, a.pit_calibration.diag.bins),
+                         (b.pit_calibration.verdict, b.pit_calibration.diag.bins))
+
 class TestNoHoldoutDiagnosis(unittest.TestCase):
     """The healthcheck must explain WHY a city scored n=0, distinguishing a
     transient fetch failure from a genuine archive-overlap gap from a defect."""
