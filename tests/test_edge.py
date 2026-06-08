@@ -185,5 +185,134 @@ class TestC7Settlement(unittest.TestCase):
             except OSError:
                 pass
 
+    def test_settlement_reconstructs_station_identity(self):
+        """The snapshot must persist the anchor's icao+name and settlement must
+        rebuild the EXACT Station — carrying those fields so fetch_station_daily's
+        modern truth overlay fires (EGLC by icao). Regression guard: a blank
+        Station (icao=None, name="") was the bug that made every snapshot read only
+        the stale bulk file and never settle. We assert BOTH that the rebuilt
+        Station carries the identity AND that the day settles to the right bucket."""
+        import tempfile, types, os, datetime as dt
+        from pathlib import Path
+        from weather_council import storage
+
+        tmp = Path(tempfile.mkdtemp()) / "c7_ident.db"
+        orig = storage.DB_PATH
+        storage.DB_PATH = tmp
+        try:
+            # London City anchor, with full identity as the council records it.
+            place = types.SimpleNamespace(
+                latitude=51.5, longitude=0.1167, label=lambda: "London, United Kingdom")
+            target = (dt.date.today() - dt.timedelta(days=4)).isoformat()  # <= cutoff
+            verdict = types.SimpleNamespace(
+                place=place, target=target,
+                truth_source={"kind": "station",
+                              "station": {"id": "EGLC0", "name": "London / City Airport",
+                                          "icao": "EGLC", "wmo": None,
+                                          "latitude": 51.5, "longitude": 0.1167}})
+            bucket = types.SimpleNamespace
+            comparison = types.SimpleNamespace(
+                market_title="Highest temperature in London", grain="C",
+                buckets=[bucket(label="18 or below", lo=None, hi=18,
+                                model_prob=0.3, market_prob=0.35),
+                         bucket(label="19", lo=19, hi=19,
+                                model_prob=0.45, market_prob=0.35),
+                         bucket(label="20 or above", lo=20, hi=None,
+                                model_prob=0.25, market_prob=0.30)])
+            storage.log_market_snapshot(verdict, comparison)
+
+            # Confirm the identity actually landed in the row.
+            with storage._connect() as c:
+                row = c.execute("SELECT station_icao, station_name FROM market_snapshots "
+                                "WHERE place LIKE 'London%'").fetchone()
+            self.assertEqual(row, ("EGLC", "London / City Airport"))
+
+            # Fake sources that CAPTURE the Station settlement rebuilds, and report a
+            # 19 °C high for the target day — the value the real EGLC record holds.
+            seen = []
+            def fake_fetch(st):
+                seen.append(st)
+                return {target: (19.0, 11.0)}
+            fake_sources = types.SimpleNamespace(fetch_station_daily=fake_fetch)
+
+            settled = storage.settle_market_snapshots(fake_sources)
+            self.assertEqual(len(settled), 1)
+            # The regression assertion: the rebuilt Station carries the real identity,
+            # not a blank one. Pre-fix this was icao=None, name="".
+            self.assertEqual((seen[0].icao, seen[0].name), ("EGLC", "London / City Airport"))
+
+            snaps = storage.fetch_settled_snapshots()
+            self.assertEqual(len(snaps), 1)
+            self.assertEqual(snaps[0]["realized_label"], "19")
+        finally:
+            storage.DB_PATH = orig
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    def test_duplicate_intraday_rows_collapse_to_one_settled_day(self):
+        """Several snapshots for the SAME (place, target_date) — e.g. the twice-
+        daily LaunchAgent plus a manual run — must score as ONE settled day, not
+        N. Otherwise correlated intraday rows inflate C7's `n` and falsely narrow
+        its bootstrap CI. The kept row is the earliest issued_at (most day-ahead)."""
+        import tempfile, types, os
+        from pathlib import Path
+        from weather_council import storage
+
+        tmp = Path(tempfile.mkdtemp()) / "c7_dup.db"
+        orig = storage.DB_PATH
+        storage.DB_PATH = tmp
+        try:
+            place = types.SimpleNamespace(
+                latitude=22.3, longitude=114.2, label=lambda: "Hong Kong, HK")
+            verdict = types.SimpleNamespace(
+                place=place, target="2026-06-01",
+                truth_source={"kind": "station", "station": {"id": "HKO"}})
+            bucket = types.SimpleNamespace
+
+            def comp(modal_prob):
+                return types.SimpleNamespace(
+                    market_title="Highest temperature in Hong Kong", grain="C",
+                    buckets=[bucket(label="30 or below", lo=None, hi=30,
+                                    model_prob=0.3, market_prob=0.4),
+                             bucket(label="31", lo=31, hi=31,
+                                    model_prob=modal_prob, market_prob=0.35),
+                             bucket(label="32 or above", lo=32, hi=None,
+                                    model_prob=0.7 - modal_prob, market_prob=0.25)])
+
+            # Three rows, same place + same target day, distinct issued_at. The
+            # earliest (issued first, modal_prob 0.5) is the canonical day-ahead one.
+            import json as _json
+            for issued, modal in (("2026-05-31T08:00:00", 0.5),
+                                  ("2026-05-31T20:00:00", 0.55),
+                                  ("2026-06-01T07:00:00", 0.6)):
+                with storage._connect() as c:   # _connect() ensures the schema
+                    c.execute(
+                        "INSERT INTO market_snapshots "
+                        "(issued_at, place, target_date, market_title, grain, "
+                        " buckets_json, realized_high, realized_label, settled_at) "
+                        "VALUES (?,?,?,?,?,?,?,?,?)",
+                        (issued, "Hong Kong, HK", "2026-06-01",
+                         "Highest temperature in Hong Kong", "C",
+                         _json.dumps([{"label": b.label, "lo": b.lo, "hi": b.hi,
+                                       "model_prob": b.model_prob,
+                                       "market_prob": b.market_prob}
+                                      for b in comp(modal).buckets]),
+                         31.2, "31", "2026-06-02T00:00:00"))
+
+            snaps = storage.fetch_settled_snapshots()
+            self.assertEqual(len(snaps), 1, "duplicate rows must collapse to one day")
+            # Earliest issued_at wins: its council prob on the realized bucket is 0.5.
+            from weather_council.edge import score_snapshot, score_snapshots
+            self.assertAlmostEqual(score_snapshot(snaps[0]).council_p_realized, 0.5)
+            self.assertEqual(score_snapshots(snaps).n, 1)
+        finally:
+            storage.DB_PATH = orig
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
 if __name__ == "__main__":
     unittest.main()

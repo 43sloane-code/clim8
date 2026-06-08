@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -101,6 +102,48 @@ class TestTrackedLedger(unittest.TestCase):
         fake = _FakeSources({})                  # truth not in yet
         self.assertEqual(storage.settle_tracked_forecasts(fake), [])
         self.assertEqual(storage.tracked_forecast_scores("weatherbit")["n"], 0)
+
+    def test_station_settlement_reconstructs_station_identity(self):
+        """A station-anchored tracked forecast must persist the anchor's icao+name,
+        and settlement must rebuild the EXACT Station carrying them — so
+        fetch_station_daily's modern truth overlay fires (EGLC by icao). Regression
+        guard: a blank Station (icao=None, name="") made settlement read only the
+        stale bulk Meteostat file (London EGLC0 ends ~March) and never grade recent
+        days. We assert BOTH that the rebuilt Station carries the identity AND that
+        the day settles. Mirrors test_edge.py::test_settlement_reconstructs_station_identity."""
+        truth_source = {"kind": "station",
+                        "station": {"id": "EGLC0", "name": "London / City Airport",
+                                    "icao": "EGLC", "wmo": None,
+                                    "latitude": 51.5, "longitude": 0.1167}}
+        storage.log_tracked_forecast("weatherbit", _place(), self.target,
+                                     20.0, 10.0, 19.0, 11.0, truth_source)
+        # The anchor identity must actually land in the row.
+        conn = storage._connect()
+        row = conn.execute(
+            "SELECT station_icao, station_name FROM tracked_forecasts").fetchone()
+        conn.close()
+        self.assertEqual(row, ("EGLC", "London / City Airport"))
+
+        # Fake sources that CAPTURE the Station settlement rebuilds and report a
+        # 19/11 day for the target — the value the real EGLC record holds.
+        seen = []
+        def fake_fetch(st):
+            seen.append(st)
+            return {self.target: (19.0, 11.0)}
+        fake = types.SimpleNamespace(fetch_station_daily=fake_fetch)
+
+        notes = storage.settle_tracked_forecasts(fake)
+        self.assertEqual(len(notes), 1)
+        # The regression assertion: the rebuilt Station carries the real identity,
+        # not a blank one. Pre-fix this was icao=None, name="".
+        self.assertEqual((seen[0].icao, seen[0].name),
+                         ("EGLC", "London / City Airport"))
+
+        sc = storage.tracked_forecast_scores("weatherbit")
+        self.assertEqual(sc["n"], 1)
+        # source: |20-19|=1, |10-11|=1 -> 1.0 ; council: |19-19|=0, |11-11|=0 -> 0.0
+        self.assertAlmostEqual(sc["source_mae"], 1.0, places=9)
+        self.assertAlmostEqual(sc["council_mae"], 0.0, places=9)
 
 
 if __name__ == "__main__":

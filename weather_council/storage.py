@@ -77,6 +77,8 @@ def _connect() -> sqlite3.Connection:
                buckets_json   TEXT NOT NULL,
                truth_kind     TEXT,
                station_id     TEXT,
+               station_icao   TEXT,
+               station_name   TEXT,
                fc_lat         REAL,
                fc_lon         REAL,
                realized_high  REAL,
@@ -84,6 +86,22 @@ def _connect() -> sqlite3.Connection:
                settled_at     TEXT,
                PRIMARY KEY (place, target_date, issued_at))"""
     )
+    # Migrate market_snapshots tables that predate the read-only market-depth
+    # columns. event_volume/event_liquidity record HOW REAL the market a snapshot
+    # was scored against was (thin/one-sided books vs deep two-sided ones), so C7
+    # can later condition on quote quality. Additive and nullable: never changes a
+    # model probability or an existing score.
+    # station_icao/station_name persist the anchor's IDENTITY (not just its id), so
+    # settlement can reconstruct the exact Station the verdict used — the modern
+    # truth overlays gate on these fields (EGLC by icao, the HKO Observatory by a
+    # name token + geography). Without them settlement saw only the stale bulk
+    # Meteostat file and never settled. Additive/nullable: never alters a score.
+    ms_existing = {row[1] for row in conn.execute("PRAGMA table_info(market_snapshots)")}
+    ms_added = {"market_volume": "REAL", "market_liquidity": "REAL",
+                "station_icao": "TEXT", "station_name": "TEXT"}
+    for col, typ in ms_added.items():
+        if col not in ms_existing:
+            conn.execute(f"ALTER TABLE market_snapshots ADD COLUMN {col} {typ}")
     # Tracked-forecaster ledger: one row per (source, place, target_date) logging
     # a NON-council forecaster's predicted high/low ALONGSIDE the council's own
     # forecast for the identical day, so the two can be graded head-to-head once
@@ -103,6 +121,8 @@ def _connect() -> sqlite3.Connection:
                council_low   REAL,
                truth_kind    TEXT,
                station_id    TEXT,
+               station_icao  TEXT,
+               station_name  TEXT,
                fc_lat        REAL,
                fc_lon        REAL,
                actual_high   REAL,
@@ -110,6 +130,18 @@ def _connect() -> sqlite3.Connection:
                settled_at    TEXT,
                PRIMARY KEY (source, place, target_date))"""
     )
+    # Migrate tracked_forecasts tables that predate the anchor-identity columns.
+    # station_icao/station_name persist the anchor's IDENTITY (not just its id) so
+    # settlement can rebuild the exact Station the verdict used — the modern truth
+    # overlays gate on these fields (EGLC by icao, the HKO Observatory by name +
+    # geography). Without them settlement saw only the stale bulk Meteostat file
+    # and never graded recent days. Additive/nullable: never alters a score. Same
+    # latent bug, same fix, as market_snapshots above.
+    tf_existing = {row[1] for row in conn.execute("PRAGMA table_info(tracked_forecasts)")}
+    tf_added = {"station_icao": "TEXT", "station_name": "TEXT"}
+    for col, typ in tf_added.items():
+        if col not in tf_existing:
+            conn.execute(f"ALTER TABLE tracked_forecasts ADD COLUMN {col} {typ}")
     conn.commit()
     return conn
 
@@ -226,9 +258,20 @@ def log_market_snapshot(v: Verdict, comparison) -> None:
     with `.label/.lo/.hi/.model_prob/.market_prob`)."""
     ts = v.truth_source or {}
     station = ts.get("station") or {}
+    # Persist the read-only market microstructure alongside the two probability
+    # columns. getattr-with-default keeps this tolerant of any object exposing
+    # only .label/.lo/.hi/.model_prob/.market_prob (the documented duck type), so
+    # older callers/tests keep working while richer comparisons record depth.
     buckets = [
         {"label": b.label, "lo": b.lo, "hi": b.hi,
-         "model_prob": b.model_prob, "market_prob": b.market_prob}
+         "model_prob": b.model_prob, "market_prob": b.market_prob,
+         "market_yes": getattr(b, "market_yes", None),
+         "liquidity": getattr(b, "market_liquidity", None),
+         "volume": getattr(b, "market_volume", None),
+         "best_bid": getattr(b, "best_bid", None),
+         "best_ask": getattr(b, "best_ask", None),
+         "last_trade": getattr(b, "last_trade", None),
+         "two_sided": getattr(b, "two_sided", None)}
         for b in comparison.buckets
     ]
     conn = _connect()
@@ -236,12 +279,16 @@ def log_market_snapshot(v: Verdict, comparison) -> None:
         conn.execute(
             "INSERT OR REPLACE INTO market_snapshots "
             "(issued_at, place, target_date, market_title, grain, buckets_json, "
-            " truth_kind, station_id, fc_lat, fc_lon) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            " truth_kind, station_id, station_icao, station_name, fc_lat, fc_lon, "
+            " market_volume, market_liquidity) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (dt.datetime.now().isoformat(timespec="seconds"),
              v.place.label(), v.target, comparison.market_title, comparison.grain,
              json.dumps(buckets), ts.get("kind"), station.get("id") or None,
-             v.place.latitude, v.place.longitude),
+             station.get("icao") or None, station.get("name") or None,
+             v.place.latitude, v.place.longitude,
+             getattr(comparison, "market_volume", None),
+             getattr(comparison, "market_liquidity", None)),
         )
     conn.close()
 
@@ -276,7 +323,8 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
     conn = _connect()
     rows = conn.execute(
         "SELECT issued_at, place, target_date, grain, buckets_json, "
-        "       truth_kind, station_id, fc_lat, fc_lon FROM market_snapshots "
+        "       truth_kind, station_id, station_icao, station_name, "
+        "       fc_lat, fc_lon FROM market_snapshots "
         "WHERE realized_label IS NULL AND target_date <= ?",
         (cutoff,),
     ).fetchall()
@@ -284,14 +332,20 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
     station_cache: dict[str, dict] = {}
     report: list[str] = []
     for (issued_at, place_label, target, grain, buckets_json,
-         truth_kind, station_id, fc_lat, fc_lon) in rows:
+         truth_kind, station_id, station_icao, station_name,
+         fc_lat, fc_lon) in rows:
         actual = None
         if truth_kind == "station" and station_id:
             series = station_cache.get(station_id)
             if series is None:
                 try:
+                    # Reconstruct the verdict's EXACT anchor — carrying icao+name so
+                    # fetch_station_daily's modern overlays fire (EGLC by icao, the
+                    # HKO Observatory by name+geography). A blank station here was the
+                    # bug that left every snapshot reading only the stale bulk file.
                     series = sources.fetch_station_daily(
-                        Station(id=station_id, name="", wmo=None, icao=None,
+                        Station(id=station_id, name=station_name or "", wmo=None,
+                                icao=station_icao or None,
                                 latitude=fc_lat or 0.0, longitude=fc_lon or 0.0,
                                 elevation=None, distance_km=0.0))
                 except Exception:
@@ -328,18 +382,37 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
 
 
 def fetch_settled_snapshots() -> list[dict]:
-    """All settled market snapshots, shaped for `edge.score_snapshot`: each dict
-    carries `place`, `target_date`, `realized_label`, and `buckets` (list of
-    {label, model_prob, market_prob})."""
+    """Settled market snapshots, ONE canonical row per (place, target_date),
+    shaped for `edge.score_snapshot`: each dict carries `place`, `target_date`,
+    `realized_label`, and `buckets` (list of {label, model_prob, market_prob}).
+
+    Why dedup here, at the read/scoring boundary: C7 grades DISTINCT SETTLED
+    DAYS. Its `n`, its proper-score means, and especially its paired bootstrap
+    all assume ONE independent observation per city per day. But several writers
+    can leave more than one row for the same (place, target_date): the
+    accumulator LaunchAgent fires twice daily for wake-robustness, the
+    healthcheck and ad-hoc manual runs also snapshot, and a crashed re-run can
+    leave a partial row. Scoring every row would inflate `n` with
+    intraday-correlated observations and falsely narrow the bootstrap CI — i.e.
+    manufacture a non-existent edge. Defending at the writer (idempotency guards)
+    is necessary but not sufficient: it cannot retract rows other writers already
+    laid down. So we collapse here to the FIRST-issued snapshot per
+    (place, target_date) — the most genuinely day-ahead, least settlement-leaking
+    row — chosen deterministically by ascending issued_at."""
     conn = _connect()
     rows = conn.execute(
-        "SELECT place, target_date, realized_label, buckets_json "
+        "SELECT place, target_date, realized_label, buckets_json, issued_at "
         "FROM market_snapshots WHERE realized_label IS NOT NULL "
-        "ORDER BY target_date, place",
+        "ORDER BY place, target_date, issued_at",
     ).fetchall()
     conn.close()
     out: list[dict] = []
-    for place_label, target, realized_label, buckets_json in rows:
+    seen: set[tuple[str, str]] = set()
+    for place_label, target, realized_label, buckets_json, _issued in rows:
+        key = (place_label, target)
+        if key in seen:
+            continue                       # earlier issued_at already kept for this day
+        seen.add(key)
         out.append({
             "place": place_label,
             "target_date": target,
@@ -353,7 +426,8 @@ def fetch_settled_snapshots() -> list[dict]:
 # Tracked-forecaster ledger — prospective, head-to-head, recommend-only.       #
 # --------------------------------------------------------------------------- #
 
-def _anchored_actual(sources: Sources, truth_kind, station_id, fc_lat, fc_lon,
+def _anchored_actual(sources: Sources, truth_kind, station_id,
+                     station_icao, station_name, fc_lat, fc_lon,
                      place_label: str, target: str,
                      station_cache: dict[str, dict]):
     """Realized (high, low) for `target` from the SAME anchored truth a verdict
@@ -364,8 +438,13 @@ def _anchored_actual(sources: Sources, truth_kind, station_id, fc_lat, fc_lon,
         series = station_cache.get(station_id)
         if series is None:
             try:
+                # Rebuild the verdict's EXACT anchor — carrying icao+name so
+                # fetch_station_daily's modern overlays fire (EGLC by icao, the
+                # HKO Observatory by name+geography). A blank station here was the
+                # bug that left every tracked row reading only the stale bulk file.
                 series = sources.fetch_station_daily(
-                    Station(id=station_id, name="", wmo=None, icao=None,
+                    Station(id=station_id, name=station_name or "", wmo=None,
+                            icao=station_icao or None,
                             latitude=fc_lat or 0.0, longitude=fc_lon or 0.0,
                             elevation=None, distance_km=0.0))
             except Exception:
@@ -399,12 +478,15 @@ def log_tracked_forecast(source: str, place: Place, target: str,
         conn.execute(
             "INSERT OR IGNORE INTO tracked_forecasts "
             "(source, issued_at, place, target_date, fc_high, fc_low, "
-            " council_high, council_low, truth_kind, station_id, fc_lat, fc_lon) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            " council_high, council_low, truth_kind, station_id, "
+            " station_icao, station_name, fc_lat, fc_lon) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (source, dt.datetime.now().isoformat(timespec="seconds"),
              place.label(), target, fc_high, fc_low,
              council_high, council_low, ts.get("kind"),
-             station.get("id") or None, place.latitude, place.longitude),
+             station.get("id") or None,
+             station.get("icao") or None, station.get("name") or None,
+             place.latitude, place.longitude),
         )
     conn.close()
 
@@ -419,14 +501,17 @@ def settle_tracked_forecasts(sources: Sources | None = None) -> list[str]:
     cutoff = (dt.date.today() - dt.timedelta(days=2)).isoformat()
     conn = _connect()
     rows = conn.execute(
-        "SELECT source, place, target_date, truth_kind, station_id, fc_lat, fc_lon "
+        "SELECT source, place, target_date, truth_kind, station_id, "
+        "       station_icao, station_name, fc_lat, fc_lon "
         "FROM tracked_forecasts WHERE actual_high IS NULL AND target_date <= ?",
         (cutoff,),
     ).fetchall()
     station_cache: dict[str, dict] = {}
     report: list[str] = []
-    for (source, place_label, target, truth_kind, station_id, fc_lat, fc_lon) in rows:
-        actual = _anchored_actual(sources, truth_kind, station_id, fc_lat, fc_lon,
+    for (source, place_label, target, truth_kind, station_id,
+         station_icao, station_name, fc_lat, fc_lon) in rows:
+        actual = _anchored_actual(sources, truth_kind, station_id,
+                                  station_icao, station_name, fc_lat, fc_lon,
                                   place_label, target, station_cache)
         if not actual:
             continue                       # anchored truth not yet available
