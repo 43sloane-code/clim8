@@ -14,6 +14,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
 import json
 import sys
@@ -1113,6 +1114,34 @@ def _build_comparison(
                         station_offset=station_offset), None
 
 
+def _dump_wf_stream(out_dir: str, city: str, validation) -> None:
+    """Write the leak-free per-day walk-forward stream to two CSVs (high, low).
+
+    Columns: date,point,realized. The stream is exactly the (date, served point
+    verdict, realized) triples the council's own held-out evaluation produced —
+    no re-simulation, no leakage, measure-only. Feeds an external bucket-
+    calibration backtest (monte-carlo/backtest_mc.py walkforward --data). Silent
+    no-op for an attribute with an empty stream (too few held-out days)."""
+    if validation is None:
+        print("dump-stream: no validation panel (window too short?)", file=sys.stderr)
+        return
+    slug = "".join(c if c.isalnum() else "_" for c in city.strip().lower()).strip("_")
+    d = Path(out_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    for attr, stream in (("high", getattr(validation, "wf_high", [])),
+                         ("low", getattr(validation, "wf_low", []))):
+        if not stream:
+            print(f"dump-stream: {attr} stream empty, skipped", file=sys.stderr)
+            continue
+        path = d / f"{slug}_{attr}.csv"
+        with path.open("w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["date", "point", "realized"])
+            for date_iso, point, realized in stream:
+                w.writerow([date_iso, f"{point:.4f}", f"{realized:.4f}"])
+        print(f"dump-stream: wrote {len(stream)} rows -> {path}", file=sys.stderr)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Council-of-5 backtested weather verdict.")
     ap.add_argument("city", nargs="?", help="city name, e.g. 'Tokyo'")
@@ -1130,6 +1159,11 @@ def main(argv=None) -> int:
                     help="settle logged market snapshots against the anchor station "
                          "and print the C7 council-vs-market calibration verdict "
                          "(read-only, recommend-only)")
+    ap.add_argument("--dump-stream", metavar="DIR",
+                    help="write the leak-free per-day walk-forward stream "
+                         "({city}_high.csv / {city}_low.csv, columns "
+                         "date,point,realized) to DIR for external bucket-calibration "
+                         "backtesting (monte-carlo/backtest_mc.py). Measure-only.")
     args = ap.parse_args(argv)
 
     try:
@@ -1163,6 +1197,9 @@ def main(argv=None) -> int:
         target = place_today(place) + dt.timedelta(days=args.lead)
         verdict = Council(sources).deliberate(place, target, args.window)
         log_verdict(verdict)
+
+        if args.dump_stream:
+            _dump_wf_stream(args.dump_stream, args.city, verdict.validation)
 
         # Whether C7 realized-outcome calibration has earned a validated edge yet
         # (DB read only, no network). Gates whether the mechanism-convergence

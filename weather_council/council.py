@@ -27,12 +27,16 @@ import statistics
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
-from .agents import (ENSEMBLE_MODELS, MIN_SAMPLES, ForecasterAgent, Vote,
+from .agents import (ENSEMBLE_MODELS, MIN_SAMPLES, ForecasterAgent, Skill, Vote,
                      build_council)
 from .seasonal import (SEASON_ANALOG_ARCHIVE_FLOOR, SEASON_ANALOG_WINDOW_DAYS,
                        seasonal_skill)
 from .scoring import crps_sample, interval_coverage, pit
-from .calibration import conditional_spread_eval, CalibrationEval
+from .calibration import (conditional_spread_eval, CalibrationEval,
+                          coverage_calibration_eval_grouped, CoverageEval)
+from .bucket_verdict import bucket_verdict_eval, BucketVerdictEval
+from .recency_bias import (recency_weighted_bias, evaluate as recency_bias_evaluate,
+                           RecencyBiasEval, RECENCY_HALFLIFE_DAYS)
 from .spread_skill import spread_skill_eval, SpreadSkill
 from .ensemble_verification import (
     rank_histogram_eval, pit_calibration_eval, RankHistogram, PITCalibration)
@@ -179,6 +183,29 @@ def _wants_hko_anchor(place) -> bool:
     return any(key in name or name in key for key in PINNED_ANCHOR_HKO)
 
 
+def _served_bias_halflife(place) -> float | None:
+    """The recency half-life (days) the SERVED member-bias correction uses at this
+    station, or None for the plain trailing-window mean.
+
+    Per-station policy, each entry justified by the leak-free recency-bias gate
+    (validation.recency_bias): a station turns recency ON only where that gate
+    RECOMMENDED it past the noise floor — a measured decision, not a tuned knob,
+    exactly like the measurement-justified PINNED_ANCHOR_HKO settlement pins.
+      * Hong Kong Observatory — ON at 30 d. The gate cleared at +6.2σ (held-out
+        CRPS +4.6%, whole-degree bucket-hit +2.3pp, point MAE -0.06 °C over 692
+        paired days): HKO's high-side bias is genuinely non-stationary and the
+        recency weighting tracks it.
+      * London City Airport and every other station — OFF (None). The gate found
+        no gain past the floor (~+0.9σ for London): the bias is effectively
+        stationary on the window and the served residual cloud already absorbs the
+        constant part, so plain-mean is correct.
+    None for an unknown place, so the conservative plain-mean path is the default
+    everywhere a station has not been explicitly, measurably opted in."""
+    if place is not None and _wants_hko_anchor(place):
+        return RECENCY_HALFLIFE_DAYS
+    return None
+
+
 def _doy_gap(dates: list[str], target: dt.date) -> int | None:
     """Smallest circular day-of-year distance between the target and any observed
     day in the backtest window — i.e. how far, seasonally, the truth we learned
@@ -323,12 +350,26 @@ class Validation:
     persistence_mae_low: float | None = None
     climatology_mae_high: float | None = None  # "tomorrow = the seasonal normal"
     climatology_mae_low: float | None = None
+    # RMSE alongside MAE (forecast-verification: report both — RMSE ≫ MAE is the
+    # fingerprint of occasional big busts, i.e. a fat-/regime-dependent tail. That
+    # tail is exactly why a single constant band-widening can lift coverage yet hurt
+    # CRPS, so the coverage check declines it). Same held-out days as the MAE.
+    council_rmse_high: float | None = None
+    council_rmse_low: float | None = None
     council_win_rate: float | None = None      # frac of held-out preds beating naive
     # Signed held-out errors (observed − council prediction), in the backtest
     # truth unit (°C). The *empirical* error distribution of the method here —
     # the only earned basis for turning a point verdict into bucket probabilities.
     residuals_high: list[float] = field(default_factory=list)
     residuals_low: list[float] = field(default_factory=list)
+    # Per-day leak-free walk-forward stream: ordered (iso_date, served_point,
+    # realized) triples, one per held-out day, per attribute (high/low are
+    # separate markets). This is the residual cloud WITH the point's fractional
+    # offset preserved — exactly what an external bucket-calibration backtest
+    # (monte-carlo/backtest_mc.py walkforward) needs, since round_half_up(point+r)
+    # depends on the point's fraction. Measure-only; never feeds the live verdict.
+    wf_high: list[tuple[str, float, float]] = field(default_factory=list)
+    wf_low: list[tuple[str, float, float]] = field(default_factory=list)
     # Probabilistic skill, scored on the SAME held-out days with a strictly
     # proper rule (CRPS, °C) so the predictive distribution the council sells as
     # bucket probabilities is itself verified — not just its point error. Each
@@ -361,6 +402,43 @@ class Validation:
     # (uniform PIT). None when too few days. Neither moves the verdict.
     rank_histogram: "RankHistogram | None" = None
     pit_calibration: "PITCalibration | None" = None
+    # Recommend-only coverage calibration over the SAME leak-free walk-forward
+    # residual stream: is the ONE served cloud the right WIDTH on average? Learns a
+    # single online-conformal inflation factor from the council's realized
+    # out-of-sample coverage and asks whether widening the cloud by it beats the
+    # incumbent on CRPS past the noise floor while dragging coverage toward nominal.
+    # Complements pit_calibration (shape) with a scale check. None when too few
+    # days. RECOMMEND-ONLY — never widens the cloud the council actually serves.
+    coverage_calibration: "CoverageEval | None" = None
+    # Bucket-verdict simulation: the council scored on the object the MARKET pays
+    # on — the whole-degree settlement bucket — over the SAME leak-free
+    # walk-forward. The modal bucket (point verdict dressed with the prior
+    # residual cloud, rounded to the settlement integer) is compared to the
+    # realized bucket; reports hit-rate, directional off-by-one bias, and
+    # edge-distance fragility (misses near a boundary vs gross errors). Scored per
+    # attribute because high and low settle as separate markets. None when too few
+    # days. MEASURE-ONLY — never moves the served verdict. See bucket_verdict.py.
+    bucket_verdict_high: "BucketVerdictEval | None" = None
+    bucket_verdict_low: "BucketVerdictEval | None" = None
+    # Recency-weighted-bias candidate evaluation: does recency-weighting each
+    # member's bias (vs the served plain training mean) sharpen the held-out
+    # distribution? Scored leak-free on paired CRPS (SE-gated) and bucket-hit, per
+    # attribute then pooled. None when too few paired days. RECOMMEND-ONLY — the
+    # served blend always uses the plain-mean bias. See recency_bias.py.
+    recency_bias: "RecencyBiasEval | None" = None
+    # The SAME recency-bias audit, split PER ATTRIBUTE (high and low are separate
+    # markets). The pooled `recency_bias` above can recommend off a gain that lives
+    # entirely in one attribute; these localize it. A per-station served policy
+    # that turns recency on for the pool is only justified on an attribute whose
+    # own audit clears the gate — so these are the evidence that keeps the served
+    # _served_bias_halflife honest at the attribute grain. Recommend-only.
+    recency_bias_high: "RecencyBiasEval | None" = None
+    recency_bias_low: "RecencyBiasEval | None" = None
+    # The recency half-life (days) this station's SERVED bias correction uses, or
+    # None for the plain trailing mean. When set, the headline MAE/CRPS/bucket
+    # above already reflect the recency-weighted bias (it is APPLIED, not just
+    # recommended). Set by _served_bias_halflife — see recency_bias gate.
+    bias_halflife_served: "float | None" = None
 
 
 @dataclass
@@ -739,6 +817,12 @@ class Council:
         # winter-trained correction mis-corrects a summer target. In-season
         # verdicts are untouched (the method returns early).
         self._apply_seasonal_analog(votes, fp, target, w_start, truth_source)
+        # In season, at stations the leak-free recency-bias gate recommended
+        # (today: Hong Kong), upgrade each member's trailing-window bias to an
+        # exponentially recency-weighted one so the correction tracks a drifting
+        # regime. SERVED — moves the verdict; a no-op everywhere else and out of
+        # season. _validate(fp=...) measures this same served method.
+        self._apply_recency_bias(votes, fp, target, truth_source)
         ensemble = self._ensemble(fp, target, observed, w_start, w_end)
 
         # Stage 3 — Interpretation: bias correction, weighting, outlier screen.
@@ -746,7 +830,7 @@ class Council:
         low, inc_l, spread_l, wts_l = self._blend(votes, "low")
         naive_h = self._naive(votes, "high")
         naive_l = self._naive(votes, "low")
-        validation = self._validate(votes, observed)
+        validation = self._validate(votes, observed, fp)
         interpretation = self._interpret(votes, inc_h, window)
         diurnal = self._diurnal(fp, target, w_start, w_end,
                                 round(high, 1), round(low, 1), window)
@@ -996,6 +1080,64 @@ class Council:
             "analog_start": a_start.isoformat(),
             "analog_end": a_end.isoformat(),
             "analog_obs_days": len(analog_obs),
+        }
+
+    def _apply_recency_bias(self, votes: list[Vote], fp: Place, target: dt.date,
+                            truth_source: dict) -> None:
+        """In-season SERVED bias upgrade: replace each member's plain trailing-window
+        bias with an exponentially recency-weighted one (half-life from
+        _served_bias_halflife), so the correction tracks a drifting in-season regime.
+
+        This MOVES THE VERDICT and runs only where the leak-free recency-bias gate
+        recommended it (today: Hong Kong) — a no-op for every other station. It is
+        also a no-op OUT of season: seasonal-analog owns that regime (it re-learns
+        the bias from day-of-year analogs), and double-correcting would be wrong, so
+        recency defers whenever the trailing window is seasonally far from the
+        target. Purely data-derived from each member's own paired history (the same
+        hist_high/hist_low the trailing-mean correction already used); recomputes
+        skill_high/low with the recency-weighted bias and weighted MAD and resets
+        corrected_high/low so the live _blend serves the recency-corrected number.
+
+        Coherence: Council._validate(fp=...) reproduces this exact bias per held-out
+        day (its _blend_on_date headline runs at the SAME served half-life), so the
+        reported MAE/CRPS/bucket/confidence measure what is actually served."""
+        halflife = _served_bias_halflife(fp)
+        if halflife is None:
+            return                                   # station not opted in
+        season_gap = (truth_source or {}).get("season_gap_days")
+        if season_gap is not None and season_gap > SEASON_MATCH_DAYS:
+            return                                   # out of season — seasonal-analog owns it
+        target_iso = target.isoformat()
+        members_corrected = 0
+        for v in votes:
+            changed = False
+            for raw, hist, set_skill, set_corr in (
+                (v.raw_high, v.hist_high,
+                 lambda s: setattr(v, "skill_high", s),
+                 lambda c: setattr(v, "corrected_high", c)),
+                (v.raw_low, v.hist_low,
+                 lambda s: setattr(v, "skill_low", s),
+                 lambda c: setattr(v, "corrected_low", c)),
+            ):
+                if raw is None or len(hist) < MIN_SAMPLES:
+                    continue
+                dated = [(d, f - o) for d, (f, o) in hist.items()]
+                bias, mad = recency_weighted_bias(dated, target_iso, halflife)
+                mae_raw = statistics.mean(abs(e) for _, e in dated)
+                set_skill(Skill(bias=bias, mae_raw=mae_raw, mae_corrected=mad,
+                                n=len(dated)))
+                set_corr(raw - bias)
+                changed = True
+            if changed:
+                members_corrected += 1
+                v.notes.append(
+                    f"recency-weighted bias: {halflife:.0f}-day exponential weighting "
+                    f"of the trailing window (served — tracks the station's drifting "
+                    f"in-season bias; recency-bias gate recommended)")
+        truth_source["recency_bias_applied"] = {
+            "applied": members_corrected > 0,
+            "members_corrected": members_corrected,
+            "halflife_days": halflife,
         }
 
     # -- settlement alignment: native-grain quantization + source check ------ #
@@ -1522,10 +1664,18 @@ class Council:
         acc.prior_clim.append(obs_v - clim)
         return out
 
-    def _validate(self, votes: list[Vote], observed: DailySeries) -> Validation:
+    def _validate(self, votes: list[Vote], observed: DailySeries,
+                  fp: "Place | None" = None) -> Validation:
         dates = sorted(observed.keys())
         if len(dates) < 15:
             return Validation(None, None, None, None, None, 0)
+        # The bias half-life this station actually SERVES (None == plain mean).
+        # The headline walk-forward (MAE/CRPS/bucket/confidence) is scored on this
+        # served method so it measures what the verdict uses; the recency-bias
+        # evaluation below stays a fixed plain-vs-recency A/B that keeps auditing
+        # the choice regardless of what is served. fp=None (e.g. unit tests) keeps
+        # the conservative plain-mean path.
+        served_hl = _served_bias_halflife(fp)
 
         # Walk-forward (rolling-origin) evaluation. For every day after an
         # initial warmup, learn bias + weights ONLY from strictly-earlier
@@ -1574,6 +1724,23 @@ class Council:
         # high+low over the same walk-forward, both recommend-only.
         rank_inputs: list[tuple[tuple[float, ...], float]] = []
         pit_values: list[float] = []
+        # Ordered (council point verdict, observed) pairs per attribute, for the
+        # whole-degree bucket-verdict simulation — the object the market settles
+        # on. Kept separate (high/low are separate markets) and scored leak-free
+        # against each attribute's own expanding residual cloud. Measure-only.
+        bucket_pairs_h: list[tuple[float, float]] = []
+        bucket_pairs_l: list[tuple[float, float]] = []
+        # Same pairs WITH the held-out date kept, per attribute — the surfaced
+        # per-day stream for an external bucket-calibration backtest. Measure-only.
+        wf_high: list[tuple[str, float, float]] = []
+        wf_low: list[tuple[str, float, float]] = []
+        # Per-attribute ordered (incumbent_point, candidate_point, observed) triples
+        # for the recency-weighted-bias evaluation. The candidate re-runs the SAME
+        # leak-free blend with an exponential recency half-life on each member's
+        # bias; the incumbent is the served plain-mean bias. Recommend-only — the
+        # served verdict is always the incumbent. See recency_bias.evaluate.
+        recency_streams: dict[str, list[tuple[float, float, float]]] = {
+            "high": [], "low": []}
 
         for i, d in enumerate(test):
             obs = observed.get(d)
@@ -1590,19 +1757,50 @@ class Council:
             # Reference forecast #2 — persistence: predict the previous day.
             prev = (dt.date.fromisoformat(d) - dt.timedelta(days=1)).isoformat()
             prev_obs = observed.get(prev)
-            ch = self._blend_on_date(votes, "high", d, train)
-            cl = self._blend_on_date(votes, "low", d, train)
+            # Two leak-free blends per attribute: the PLAIN training-mean bias
+            # (incumbent) and the RECENCY-weighted bias (candidate). The SERVED
+            # headline uses whichever this station actually serves; the recency
+            # evaluation always pairs incumbent-vs-candidate so it keeps auditing
+            # that choice on fresh data.
+            inc_h = self._blend_on_date(votes, "high", d, train)
+            inc_l = self._blend_on_date(votes, "low", d, train)
+            cand_h = self._blend_on_date(votes, "high", d, train,
+                                         bias_halflife=RECENCY_HALFLIFE_DAYS)
+            cand_l = self._blend_on_date(votes, "low", d, train,
+                                         bias_halflife=RECENCY_HALFLIFE_DAYS)
+            if served_hl is None:
+                ch, cl = inc_h, inc_l
+            elif served_hl == RECENCY_HALFLIFE_DAYS:
+                ch, cl = cand_h, cand_l
+            else:                                    # any other served half-life
+                ch = self._blend_on_date(votes, "high", d, train, bias_halflife=served_hl)
+                cl = self._blend_on_date(votes, "low", d, train, bias_halflife=served_hl)
             # High then low, scored identically. CRPS is translation-invariant,
             # so scoring the prior residual cloud against today's residual r is
             # identical to dressing the point forecast and scoring against the
             # observation — and acc.resid/acc.prior_clim hold ONLY earlier days.
-            for blend, obs_v, clim, prev_v, acc in (
-                (ch, obs[0], clim_h, prev_obs[0] if prev_obs else None, acc_h),
-                (cl, obs[1], clim_l, prev_obs[1] if prev_obs else None, acc_l),
+            for blend, inc, cand, obs_v, clim, prev_v, acc in (
+                (ch, inc_h, cand_h, obs[0], clim_h, prev_obs[0] if prev_obs else None, acc_h),
+                (cl, inc_l, cand_l, obs[1], clim_l, prev_obs[1] if prev_obs else None, acc_l),
             ):
                 if blend is None:
                     continue
                 step = self._wf_step(blend, obs_v, clim, prev_v, acc)
+                # blend[0] is the SERVED council point verdict for this held-out
+                # day; obs_v is the realized value. Route to the right attribute's
+                # stream for the bucket-verdict simulation (high vs low markets).
+                (bucket_pairs_h if acc is acc_h else bucket_pairs_l).append(
+                    (blend[0], obs_v))
+                # Same routing, date retained, for the surfaced per-day stream.
+                (wf_high if acc is acc_h else wf_low).append(
+                    (d, blend[0], obs_v))
+                # Recency-bias audit: pair the plain-bias point against the
+                # recency-bias point for the same held-out day so the post-loop
+                # evaluation can score whether recency-weighting sharpens the
+                # distribution — independent of which one this station serves.
+                attr = "high" if acc is acc_h else "low"
+                if inc is not None and cand is not None:
+                    recency_streams[attr].append((inc[0], cand[0], obs_v))
                 calib_pairs.append((step["r"], step["disp"]))
                 if step["members"] and len(step["members"]) >= 2:
                     rank_inputs.append((step["members"], obs_v))
@@ -1630,7 +1828,31 @@ class Council:
         # bucket probabilities' spread end-to-end.
         rank_histogram = rank_histogram_eval(rank_inputs)
         pit_calibration = pit_calibration_eval(pit_values)
+        # Scale companion to the shape checks above: is the served cloud the right
+        # WIDTH? Scored PER ATTRIBUTE — high residuals against the served high cloud,
+        # low against the served low cloud — because compare_high/compare_low dress
+        # the buckets with residuals_high/residuals_low separately; pooling them would
+        # measure a mixture the council never emits. Leak-free, CRPS-gated,
+        # recommend-only — see calibration.coverage_calibration_eval_grouped.
+        coverage_calibration = coverage_calibration_eval_grouped([resid_h, resid_l])
+        # Bucket-verdict simulation: the economically-relevant score the market
+        # settles on. Per attribute (high and low are separate markets), each
+        # scored leak-free against its own expanding residual cloud. Measure-only.
+        bucket_verdict_high = bucket_verdict_eval(bucket_pairs_h)
+        bucket_verdict_low = bucket_verdict_eval(bucket_pairs_l)
+        # Recency-weighted-bias candidate vs the served plain-mean bias, scored
+        # leak-free on paired per-day CRPS (with a standard-error gate) AND the
+        # whole-degree bucket-hit rate. Recommend-only: a positive verdict here is
+        # a lever to pull, never an automatic change to the served blend.
+        recency_bias = recency_bias_evaluate(recency_streams)
+        # The SAME audit split per attribute, so a served per-station policy can be
+        # justified (or refused) at the grain it is actually applied — each market
+        # settles separately, and a pooled recommend can hide an attribute on which
+        # recency does nothing. Leak-free (same triples), recommend-only.
+        recency_bias_high = recency_bias_evaluate({"high": recency_streams["high"]})
+        recency_bias_low = recency_bias_evaluate({"low": recency_streams["low"]})
         mean = lambda xs: statistics.mean(xs) if xs else None
+        rmse = lambda xs: math.sqrt(statistics.mean(e * e for e in xs)) if xs else None
         crps_c = (crps_c_sum / crps_count) if crps_count else None
         crps_clim = (crps_clim_sum / crps_count) if crps_count else None
         crps_skill = (1.0 - crps_c / crps_clim
@@ -1646,9 +1868,13 @@ class Council:
             persistence_mae_low=mean(persist_err_l),
             climatology_mae_high=mean(clim_err_h),
             climatology_mae_low=mean(clim_err_l),
+            council_rmse_high=rmse(council_err_h),
+            council_rmse_low=rmse(council_err_l),
             council_win_rate=(wins / comparisons) if comparisons else None,
             residuals_high=resid_h,
             residuals_low=resid_l,
+            wf_high=wf_high,
+            wf_low=wf_low,
             crps_council=crps_c,
             crps_climatology=crps_clim,
             crps_skill=crps_skill,
@@ -1659,23 +1885,44 @@ class Council:
             spread_skill=spread_skill,
             rank_histogram=rank_histogram,
             pit_calibration=pit_calibration,
+            coverage_calibration=coverage_calibration,
+            bucket_verdict_high=bucket_verdict_high,
+            bucket_verdict_low=bucket_verdict_low,
+            recency_bias=recency_bias,
+            recency_bias_high=recency_bias_high,
+            recency_bias_low=recency_bias_low,
+            bias_halflife_served=served_hl,
         )
 
     def _blend_on_date(self, votes: list[Vote], attr: str, day: str,
-                       train: set[str]) -> tuple[float, float, float, tuple[float, ...]] | None:
+                       train: set[str], *, bias_halflife: float | None = None,
+                       ) -> tuple[float, float, float, tuple[float, ...]] | None:
         """Return (council_blend, naive_mean, dispersion, members) for one held-out
         day, using bias and weights learned only from `train` dates. None if too
         sparse.
 
-        `dispersion` is the spread of the bias-corrected member forecasts on this
-        day — the leak-free, per-day analog of the live ensemble spread. It feeds
-        the conditional-calibration check (calibration.py); it does NOT change the
-        blend the council serves. `members` is that same bias-corrected member set
-        (the raw panel), surfaced so the walk-forward can build the rank histogram
-        — also recommend-only, also never moving the verdict."""
-        num = den = 0.0
+        `bias_halflife` is the recommend-only recency seam: when None (default,
+        and the ONLY path the served verdict uses) each member's bias is the plain
+        mean of its training errors. When set, the bias is recency-weighted with
+        that exponential half-life (recency_bias.recency_weighted_bias) — used
+        solely by the leak-free recency-bias evaluation, never by the live blend.
+
+        The blend mirrors the LIVE `_blend` exactly: bias-correct each member from
+        its own `train` history, apply the SAME MAD outlier screen
+        (thresh = max(OUTLIER_FLOOR_C, 3*MAD) about the per-day median, with the
+        keep-all fallback when every member trips it), then take the skill-weighted
+        (1/MAE^WEIGHT_POWER) mean of the survivors. Validating the *served* method
+        rather than an all-members proxy is the whole point — the held-out
+        MAE/residual/PIT must measure what the council actually serves.
+
+        `dispersion` is the spread of the SURVIVING bias-corrected members (the
+        leak-free, per-day analog of the live ensemble spread); `members` is that
+        same survivor set, surfaced so the walk-forward can build the rank
+        histogram. Both are recommend-only and never move the verdict.
+        `naive_mean` stays over ALL eligible members, matching the unscreened live
+        `_naive` baseline."""
         naive_vals = []
-        corrected = []          # bias-corrected member forecasts for this day
+        panel: list[tuple[float, float]] = []   # (bias-corrected forecast, weight)
         for v in votes:
             series = v.hist_high if attr == "high" else v.hist_low
             if day not in series:
@@ -1683,15 +1930,36 @@ class Council:
             train_pairs = [series[d] for d in series if d in train]
             if len(train_pairs) < 5:
                 continue
-            bias = statistics.mean(f - o for f, o in train_pairs)
-            mae_c = statistics.mean(abs(f - o - bias) for f, o in train_pairs)
+            if bias_halflife is None:
+                bias = statistics.mean(f - o for f, o in train_pairs)
+                mae_c = statistics.mean(abs(f - o - bias) for f, o in train_pairs)
+            else:
+                # Recommend-only recency seam: weight recent training days more so
+                # the bias tracks a drifting regime. Pure helper; default path above
+                # is untouched.
+                bias, mae_c = recency_weighted_bias(
+                    [(d, series[d][0] - series[d][1]) for d in series if d in train],
+                    day, bias_halflife)
             w = 1.0 / max(mae_c, 0.1) ** WEIGHT_POWER
             f_day = series[day][0]
-            num += w * (f_day - bias)
-            den += w
             naive_vals.append(f_day)
-            corrected.append(f_day - bias)
-        if den <= 0 or not naive_vals:
+            panel.append((f_day - bias, w))
+        if not panel or not naive_vals:
             return None
+
+        # Same MAD outlier screen the live _blend serves, so the backtest measures
+        # the served method. `or panel` reproduces live's keep-all fallback when
+        # every member would be excluded.
+        corrected_all = [c for c, _ in panel]
+        median = statistics.median(corrected_all)
+        mad = statistics.median([abs(c - median) for c in corrected_all]) or 0.0
+        thresh = max(OUTLIER_FLOOR_C, 3 * mad)
+        included = [(c, w) for c, w in panel if abs(c - median) <= thresh] or panel
+
+        den = sum(w for _, w in included)
+        if den <= 0:
+            return None
+        num = sum(w * c for c, w in included)
+        corrected = [c for c, _ in included]
         disp = statistics.pstdev(corrected) if len(corrected) > 1 else 0.0
         return num / den, statistics.mean(naive_vals), disp, tuple(corrected)
