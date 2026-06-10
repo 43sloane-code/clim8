@@ -565,6 +565,33 @@ class Sources:
         cand.sort(key=lambda st: st.distance_km)
         return cand[:limit]
 
+    def station_by_id(self, station_id: str) -> Station | None:
+        """Full Station (name + ICAO + real coordinates) for a stored station_id,
+        from the Meteostat inventory, or None if absent. verify() uses this to
+        recover the IDENTITY of verdict rows logged before that identity was
+        persisted — the settlement overlays in fetch_station_daily gate on it (the
+        HKO Observatory by a name token + geography, London City by the EGLC ICAO),
+        so an id-only Station silently skips them. Not a city->station guess: it
+        resolves the exact station the verdict already anchored on, by its own id."""
+        for s in self._load_stations():
+            if str(s.get("id")) != str(station_id):
+                continue
+            loc = s.get("location") or {}
+            ids = s.get("identifiers") or {}
+            lat, lon = loc.get("latitude"), loc.get("longitude")
+            elev = loc.get("elevation")
+            return Station(
+                id=str(s.get("id")),
+                name=str((s.get("name") or {}).get("en") or s.get("id")),
+                wmo=(str(ids["wmo"]) if ids.get("wmo") else None),
+                icao=(str(ids["icao"]) if ids.get("icao") else None),
+                latitude=float(lat) if isinstance(lat, (int, float)) else 0.0,
+                longitude=float(lon) if isinstance(lon, (int, float)) else 0.0,
+                elevation=float(elev) if isinstance(elev, (int, float)) else None,
+                distance_km=0.0,
+            )
+        return None
+
     def fetch_station_daily(self, station: Station) -> DailySeries:
         """Full daily (high, low) history for one station from its bulk CSV.
         CSV columns: date,tavg,tmin,tmax,prcp,snow,wdir,wspd,wpgt,pres,tsun.

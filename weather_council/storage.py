@@ -58,6 +58,15 @@ def _connect() -> sqlite3.Connection:
         # was anchored on (the station), at the exact point it was forecast for.
         "truth_kind": "TEXT", "station_id": "TEXT",
         "fc_lat": "REAL", "fc_lon": "REAL",
+        # station_icao/station_name persist the anchor's IDENTITY (not just its id)
+        # so verify() can rebuild the exact Station the verdict used — the modern
+        # settlement overlays in fetch_station_daily gate on these (EGLC by icao,
+        # the HKO Observatory by name + geography). Without them verify saw only the
+        # stale bulk Meteostat file (HKO ends 1992 -> never settles; EGLC -> the
+        # Abbey Wood gauge weeks away), so every station-anchored basket-city verdict
+        # stayed unsettled. Same latent bug, same fix, as market_snapshots and
+        # tracked_forecasts below. Additive/nullable: never alters an existing score.
+        "station_icao": "TEXT", "station_name": "TEXT",
     }
     for col, typ in added.items():
         if col not in existing:
@@ -154,11 +163,12 @@ def log_verdict(v: Verdict) -> None:
         conn.execute(
             "INSERT OR REPLACE INTO verdicts "
             "(issued_at, place, target_date, high, low, confidence, "
-            " truth_kind, station_id, fc_lat, fc_lon) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            " truth_kind, station_id, station_icao, station_name, fc_lat, fc_lon) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (dt.datetime.now().isoformat(timespec="seconds"),
              v.place.label(), v.target, v.high, v.low, v.confidence,
              ts.get("kind"), station.get("id") or None,
+             station.get("icao") or None, station.get("name") or None,
              v.place.latitude, v.place.longitude),
         )
     conn.close()
@@ -178,7 +188,8 @@ def verify(sources: Sources | None = None) -> list[str]:
     conn = _connect()
     rows = conn.execute(
         "SELECT issued_at, place, target_date, high, low, "
-        "       truth_kind, station_id, fc_lat, fc_lon FROM verdicts "
+        "       truth_kind, station_id, station_icao, station_name, "
+        "       fc_lat, fc_lon FROM verdicts "
         "WHERE actual_high IS NULL AND target_date <= ?",
         (cutoff,),
     ).fetchall()
@@ -186,16 +197,30 @@ def verify(sources: Sources | None = None) -> list[str]:
     station_cache: dict[str, dict] = {}
     report: list[str] = []
     for (issued_at, place_label, target, high, low,
-         truth_kind, station_id, fc_lat, fc_lon) in rows:
+         truth_kind, station_id, station_icao, station_name,
+         fc_lat, fc_lon) in rows:
         actual, truth_note = None, ""
         if truth_kind == "station" and station_id:
             series = station_cache.get(station_id)
             if series is None:
+                # Rebuild the verdict's EXACT anchor so fetch_station_daily's modern
+                # settlement overlays fire (EGLC by icao, the HKO Observatory by
+                # name + geography). Prefer the identity persisted at log time;
+                # for rows logged before that was stored, recover it from the
+                # station inventory by id. A blank id-only Station skipped the
+                # overlays entirely — the bug that left every station-anchored
+                # basket-city verdict unsettled.
+                station = None
+                if not (station_icao or station_name):
+                    station = sources.station_by_id(station_id)
+                if station is None:
+                    station = Station(
+                        id=station_id, name=station_name or "", wmo=None,
+                        icao=station_icao or None,
+                        latitude=fc_lat or 0.0, longitude=fc_lon or 0.0,
+                        elevation=None, distance_km=0.0)
                 try:
-                    series = sources.fetch_station_daily(
-                        Station(id=station_id, name="", wmo=None, icao=None,
-                                latitude=fc_lat or 0.0, longitude=fc_lon or 0.0,
-                                elevation=None, distance_km=0.0))
+                    series = sources.fetch_station_daily(station)
                 except Exception:
                     series = {}
                 station_cache[station_id] = series
