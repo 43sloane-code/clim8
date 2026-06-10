@@ -1,0 +1,10 @@
+date,abs_max_c,mean_c,abs_min_c,mean_dewpoint_c,mean_rh_pct,mean_cloud_pct,rainfall_mm,source
+2026-06-01,32.3,29.2,27.6,24.2,74,79,trace,HKO_dailyExtract_provisional
+2026-06-02,33.3,30.0,28.3,25.3,76,74,0.0,HKO_dailyExtract_provisional
+2026-06-03,34.3,30.5,28.7,25.5,75,71,trace,HKO_dailyExtract_provisional
+2026-06-04,34.2,30.8,27.5,25.3,73,44,0.2,HKO_dailyExtract_provisional
+2026-06-05,34.6,30.7,27.4,25.9,76,72,7.5,HKO_dailyExtract_provisional
+2026-06-06,30.4,27.7,25.2,25.1,86,86,71.2,HKO_dailyExtract_provisional
+2026-06-07,32.0,28.1,25.8,25.8,88,88,10.2,HKO_dailyExtract_provisional
+2026-06-08,30.9,27.6,25.2,25.4,88,90,109.7,HKO_dailyExtract_provisional
+2026-06-09,28.4,26.7,25.5,22.9,80,88,0.3,HKO_dailyExtract_provisional
