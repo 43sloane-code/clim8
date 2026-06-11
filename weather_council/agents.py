@@ -50,13 +50,6 @@ COUNCIL: list[MemberSpec] = [
     MemberSpec("gem", "gem_seamless", "Env. Canada GEM", "Canada"),
     MemberSpec("jma", "jma_seamless", "JMA", "Japan"),
     MemberSpec("cma", "cma_grapes_global", "China CMA GRAPES", "China"),
-    # ECMWF AIFS — the data-driven (machine-learning) model, methodologically
-    # INDEPENDENT of the physics-based IFS above despite sharing an institution:
-    # a different forecasting paradigm is exactly the kind of orthogonal lineage
-    # the panel wants. Uses the `_single` feed (the plain ecmwf_aifs025 id serves
-    # no daily max/min). Earns blend weight only by its backtested skill like any
-    # other member; if it doesn't beat, the chair sets it aside.
-    MemberSpec("aifs", "ecmwf_aifs025_single", "ECMWF AIFS (AI)", "EU"),
 ]
 
 # Members that the Windy.com apps surface to end users. Windy is a *viewer* for
