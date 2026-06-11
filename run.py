@@ -76,25 +76,6 @@ ANCHOR_CROSS_REFERENCE: dict[str, dict[str, str]] = {
     },
 }
 
-# User-supplied PROVISIONAL observed records — official daily extracts the user
-# transcribed from the source's own published images (the Hong Kong Observatory
-# daily extract) for days the automated open-data API has NOT yet published (it
-# lags ~weeks). Surfaced ONLY as a cross-reference, never as settlement truth: the
-# verdict still settles on the reproducible API record once it catches up. Same
-# city-name-containment matching as the other reference registries.
-PROVISIONAL_EXTRACT: dict[str, dict[str, str]] = {
-    "hong kong": {
-        "path": "reports/hko_june2026_observed_provisional.csv",
-        "high_col": "abs_max_c",
-        "low_col": "abs_min_c",
-        "source_col": "source",
-        "label": ("Hong Kong Observatory daily extract — PROVISIONAL, transcribed "
-                  "from the HKO official daily-extract images; cross-reference only, "
-                  "NOT settlement truth (the verdict settles on the HKO open-data "
-                  "API once it publishes the month)."),
-    },
-}
-
 
 def _settlement_reference_for(place) -> dict[str, str] | None:
     """The user-declared settlement reference for this city, or None. Matched on
@@ -192,62 +173,6 @@ def _anchor_cross_reference_for(place) -> dict[str, str] | None:
     return None
 
 
-def _provisional_extract_for(place) -> dict[str, str] | None:
-    """The user-supplied provisional observed extract directive for this city, or
-    None. Matched on case-insensitive city-name containment, like the others."""
-    name = (getattr(place, "name", "") or "").strip().lower()
-    for key, ref in PROVISIONAL_EXTRACT.items():
-        if key in name or name in key:
-            return ref
-    return None
-
-
-def _load_provisional_observed(place, target, back_days: int = 12) -> dict | None:
-    """Load a city's user-supplied provisional observed daily record (e.g. the HKO
-    daily extract transcribed from official images) as a CROSS-REFERENCE only —
-    never settlement truth. Returns {label, source, target_date, target_record,
-    recent:[{date,high,low}]} for the window ending at the target, or None when the
-    city has no extract or the file can't be read. The target day itself is usually
-    absent (a future forecast), so this mainly surfaces recent observed ground
-    truth the lagging open-data API hasn't published yet."""
-    ref = _provisional_extract_for(place)
-    if ref is None:
-        return None
-    path = Path(__file__).resolve().parent / ref["path"]
-    if not path.exists():
-        return None
-    rows: dict[str, tuple[float, float]] = {}
-    source = None
-    try:
-        with open(path, newline="") as fh:
-            for r in csv.DictReader(fh):
-                d = (r.get("date") or "").strip()
-                if len(d) != 10:
-                    continue
-                try:
-                    hi = float(r[ref["high_col"]])
-                    lo = float(r[ref["low_col"]])
-                except (KeyError, ValueError, TypeError):
-                    continue
-                rows[d] = (hi, lo)
-                source = r.get(ref.get("source_col", "source")) or source
-    except OSError:
-        return None
-    if not rows:
-        return None
-    tgt = target.isoformat()
-    lo_bound = (target - dt.timedelta(days=back_days)).isoformat()
-    recent = [{"date": d, "high": rows[d][0], "low": rows[d][1]}
-              for d in sorted(rows) if lo_bound <= d <= tgt]
-    return {
-        "label": ref["label"],
-        "source": source,
-        "target_date": tgt,
-        "target_record": rows.get(tgt),     # usually None — a future target hasn't happened
-        "recent": recent[-back_days:],
-    }
-
-
 def _anchor_cross_reference(sources: Sources, place, target, v: Verdict) -> dict | None:
     """For a city anchored on a non-airport settlement station (e.g. Hong Kong ->
     Observatory), surface the nearby airport as a *cross-reference*: the measured
@@ -264,11 +189,6 @@ def _anchor_cross_reference(sources: Sources, place, target, v: Verdict) -> dict
     base = {"anchor_station": station.get("name"), "anchor_icao": station.get("icao"),
             "note": ref["note"], "verdict_high": v.high, "verdict_low": v.low,
             "data_source": ts.get("data_source")}
-    # Provisional observed cross-reference (the user's transcribed HKO daily
-    # extract) — attached to every return path below, shown but never settled on.
-    prov = _load_provisional_observed(place, target)
-    if prov is not None:
-        base["provisional_observed"] = prov
     if ts.get("kind") != "station" or not station.get("id"):
         return {**base, "error": "the verdict isn't anchored on a station this run"}
     token = ref.get("cross_ref_token", "airport")
@@ -588,9 +508,6 @@ def _anchor_cross_reference_lines(ref: dict) -> list[str]:
     if ref.get("data_source") == "hko_opendata":
         L.append(f"    feed     : Hong Kong Observatory open-data "
                  f"(data.weather.gov.hk) — the live settlement record")
-    prov = ref.get("provisional_observed")
-    if prov:
-        L.extend(_provisional_observed_lines(prov, ref.get("verdict_high")))
     if ref.get("error"):
         L.append(f"    x-ref    : cross-reference unavailable this run "
                  f"({ref['error']}); the verdict still stands on the {anchor} anchor.")
@@ -612,31 +529,6 @@ def _anchor_cross_reference_lines(ref: dict) -> list[str]:
                  f"anchor; keeping the old {xref} anchor would have biased the verdict "
                  f"by that much against the settlement record.")
     L.append("")
-    return L
-
-
-def _provisional_observed_lines(prov: dict, verdict_high=None) -> list[str]:
-    """Render the user-supplied provisional observed daily extract as a clearly
-    labeled cross-reference (NOT settlement truth)."""
-    L = ["    provisional x-ref (recent observed truth the lagging API hasn't "
-         "published yet — NOT settled on):"]
-    L.append(f"               {prov['label']}")
-    if prov.get("source"):
-        L.append(f"               source tag: {prov['source']}")
-    tr = prov.get("target_record")
-    if tr is not None:
-        th, tl = tr
-        L.append(f"      {prov['target_date']} provisional observed: "
-                 f"high {th:.1f}°  low {tl:.1f}°")
-        if isinstance(verdict_high, (int, float)):
-            L.append(f"      verdict high {verdict_high:.1f}° vs provisional "
-                     f"{th:.1f}° = {verdict_high - th:+.1f}° (context only)")
-    rec = prov.get("recent") or []
-    if rec:
-        L.append(f"      recent provisional observed (last {len(rec)} days, "
-                 f"high/low °C):")
-        for r in rec:
-            L.append(f"        {r['date']}  high {r['high']:.1f}°  low {r['low']:.1f}°")
     return L
 
 
