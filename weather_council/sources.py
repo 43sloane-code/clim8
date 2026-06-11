@@ -59,6 +59,17 @@ HKO_MATCH_RADIUS_KM = 15.0       # how close a station must sit to count as HKO
 # Open-Meteo grid-cell proxy that can sit ~2 °C away. Keyless JSON, whole-degree.
 HKO_RHRREAD_URL = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php"
 HKO_RHRREAD_PLACE = "Hong Kong Observatory"   # the station label inside rhrread
+# Hong Kong Observatory "Daily Extract of Meteorological Observations" — one JSON
+# file per civil month at the Observatory HQ. Its "Absolute Daily Maximum Air
+# Temperature" column IS the figure the Hong Kong market settles on, and it
+# publishes the prior day within ~a day (weeks fresher than the CLMMAXT/CLMMINT
+# monthly climate API). dayData rows are positional:
+#   [day, pressure, abs_max_c, mean_c, abs_min_c, dewpoint_c, rh, cloud, rainfall]
+# Served with a .xml suffix but a JSON body. {ym} is YYYYMM.
+HKO_DAILY_EXTRACT_URL = ("https://www.hko.gov.hk/cis/dailyExtract/"
+                         "dailyExtract_{ym}.xml")
+HKO_DX_ABS_MAX_COL = 2               # "Absolute Daily Maximum Air Temperature"
+HKO_DX_ABS_MIN_COL = 4               # "Absolute Daily Minimum Air Temperature"
 # Finer live feed: HKO's 1-minute mean air-temperature CSV reports the SAME
 # Observatory instrument to 0.1 °C at a ~1-minute cadence (rhrread above only
 # publishes whole degrees, so it reads e.g. 28 where the gauge is 28.4). Used to
@@ -681,16 +692,59 @@ class Sources:
         return _haversine_km(station.latitude, station.longitude,
                              HKO_HQ_LAT, HKO_HQ_LON) <= HKO_MATCH_RADIUS_KM
 
+    def hko_daily_extract_series(self, target: dt.date,
+                                 back_months: int = 1) -> DailySeries:
+        """Most-recent daily (high, low) at the Hong Kong Observatory HQ from the
+        official "Daily Extract of Meteorological Observations" — the table whose
+        "Absolute Daily Maximum" column the Hong Kong market settles on. One JSON
+        file per civil month; we read the target month plus `back_months` prior
+        for month-boundary coverage. Only days with BOTH a numeric abs-max and
+        abs-min are returned. Any fetch/parse failure for a month is skipped
+        silently so a missing file never aborts settlement (the open-data record
+        still backs the long history)."""
+        out: DailySeries = {}
+        y, m = target.year, target.month
+        for _ in range(back_months + 1):
+            try:
+                data = self.http.get_json(
+                    HKO_DAILY_EXTRACT_URL.format(ym=f"{y:04d}{m:02d}"), {})
+            except Exception:
+                data = None
+            for block in ((data or {}).get("stn") or {}).get("data", []):
+                month = block.get("month")
+                mo = int(month) if str(month).isdigit() else m
+                for row in block.get("dayData", []):
+                    if not row or not str(row[0]).isdigit() \
+                            or len(row) <= HKO_DX_ABS_MIN_COL:
+                        continue
+                    high = _clean_temp_cell(str(row[HKO_DX_ABS_MAX_COL]))
+                    low = _clean_temp_cell(str(row[HKO_DX_ABS_MIN_COL]))
+                    if high is None or low is None:
+                        continue
+                    out[f"{y:04d}-{mo:02d}-{int(row[0]):02d}"] = (high, low)
+            m -= 1
+            if m == 0:
+                m, y = 12, y - 1
+        return out
+
     def hko_truth_series(self, target: dt.date, back_years: int = 4) -> DailySeries:
-        """Modern daily (high, low) record at the Hong Kong Observatory HQ from the
-        HKO open-data API — the settlement-grade truth the council anchors a Hong
-        Kong verdict on. Daily high from CLMMAXT, low from CLMMINT; only dates with
-        BOTH a complete reading are returned. Refreshed monthly (lags real time by
-        ~weeks — fresher than the airport's Meteostat bulk file)."""
+        """Modern daily (high, low) record at the Hong Kong Observatory HQ — the
+        settlement-grade truth the council anchors a Hong Kong verdict on. The long
+        history comes from the HKO open-data API (daily high CLMMAXT, low CLMMINT;
+        only dates with BOTH complete). The official Daily Extract is then overlaid
+        on top so the most recent settled days — which the monthly climate API lags
+        by ~weeks — are present and carry the exact "Absolute Daily Maximum" the
+        market settles on. Fresher Daily-Extract days win; its fetch is best-effort
+        so a failure leaves the open-data record intact."""
         years = list(range(target.year - back_years, target.year + 1))
         highs = self._fetch_hko_dataset("CLMMAXT", years)
         lows = self._fetch_hko_dataset("CLMMINT", years)
-        return {d: (highs[d], lows[d]) for d in highs.keys() & lows.keys()}
+        series = {d: (highs[d], lows[d]) for d in highs.keys() & lows.keys()}
+        try:
+            extract = self.hko_daily_extract_series(target)
+        except Exception:
+            extract = {}
+        return {**series, **extract}
 
     def recent_station_series(self, station: Station, target: dt.date,
                               back_years: int = 3) -> DailySeries | None:

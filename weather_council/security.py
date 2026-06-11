@@ -65,6 +65,13 @@ ALLOWED_HOSTS = frozenset({
     # a *current* settlement-vs-airport offset; this is the only source of the
     # recent HKO daily record, used solely to make that offset modern. Read-only.
     "data.weather.gov.hk",
+    # Hong Kong Observatory official Daily Extract (www.hko.gov.hk): the same
+    # Observatory, served as the per-month "Daily Extract of Meteorological
+    # Observations" whose "Absolute Daily Maximum Air Temperature" column IS the
+    # figure the Hong Kong market settles on. Keyless, HTTPS, JSON. It publishes
+    # the prior day within ~a day — weeks fresher than the monthly open-data
+    # climate API above — so it supplies the most recent settled days. Read-only.
+    "www.hko.gov.hk",
     # Weatherbit daily forecast API: a non-Open-Meteo forecaster. It exposes NO
     # free archive of its PAST forecasts, so — unlike the council members — its
     # skill cannot be backtested instantly; it is added as a RECOMMEND-ONLY
