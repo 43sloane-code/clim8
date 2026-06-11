@@ -682,6 +682,8 @@ def main() -> int:
     status_regression = False
     status_cov = None                # 80% interval coverage (%) of the live variant
     status_cov_label = None
+    status_convergence = None        # mechanism-convergence tally (recommend-only)
+    status_c7 = None                 # realized-outcome edge state (read-only)
 
     lines = []
     lines.append(f"WEATHER COUNCIL — DAILY HEALTH CHECK  ({today.isoformat()})")
@@ -998,6 +1000,14 @@ def main() -> int:
                      f"{tally['AFFIRMED_NUDGE']} affirmed-with-nudge, "
                      f"{tally['CONTESTED']} contested, {tally['ABSTAIN']} abstained "
                      f"(per city-quantity).")
+        # Persist the tally for the live UI feed (recommend-only; MEASURED today).
+        status_convergence = {
+            "affirmed": tally["AFFIRMED"],
+            "affirmed_nudge": tally["AFFIRMED_NUDGE"],
+            "contested": tally["CONTESTED"],
+            "abstained": tally["ABSTAIN"],
+            "evaluated": sum(tally.values()),
+        }
         if contested:
             lines.append("  CONTESTED (headline not corroborated by independent baselines — "
                          "likely an unusual/event-driven day, treat as lower-confidence):")
@@ -1068,6 +1078,16 @@ def main() -> int:
         # indented; nest it one level deeper under this section).
         for el in edge_report_lines(report)[1:]:
             lines.append("  " + el.strip() if el.strip() else el)
+        # Persist the realized-edge state for the live UI feed (read-only). This is
+        # the SAME report whose is_edge_validated drives c7_validated above, so the
+        # bar's C7 chip can never disagree with the loop gate.
+        status_c7 = {
+            "settled_days": report.n,
+            "validated": bool(report.is_edge_validated),
+            "settled_this_run": len(settled),
+            "snapshots_logged": snapshots_logged,
+            "note": report.note,
+        }
     except Exception as exc:                       # never let C7 abort the health check
         lines.append(f"  C7 unavailable this run ({exc}); calibration unchanged.")
     lines.append("")
@@ -1181,6 +1201,17 @@ def main() -> int:
                 "applied": False,
             } if pc_eval is not None else None),
             "recommendations": status_reco,
+            # Realized-outcome edge state (read-only). This is the SAME flag the
+            # loop's deploy gate consumes: the council can only ever clear to LIVE
+            # once C7 validates a settled council-vs-market edge AND a human signs
+            # off. Persisted so the live UI can render the real gate, not a label.
+            "c7_validated": bool(c7_validated),
+            # Mechanism convergence — independent corroboration of each headline
+            # (recommend-only; MEASURED today). None when no city had enough support.
+            "convergence": status_convergence,
+            # Realized-outcome edge state (read-only). Mirrors the C7 report that
+            # drives c7_validated, so the UI can never show a divergent edge state.
+            "c7": status_c7,
             "cities_usable": usable_cities,
             "cities_total": len(BASKET),
             "data_freshness_max_gap_days": (max(gaps) if gaps else None),

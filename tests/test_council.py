@@ -16,7 +16,10 @@ from weather_council.scoring import crps_sample, crps_gaussian, interval_coverag
 from weather_council.compare import residual_calibration, compare_high, MIN_RESIDUALS
 from weather_council.market import WeatherMarket, MarketBucket
 from weather_council.agents import Vote, MemberSpec, Skill
-from weather_council.council import Council
+from weather_council.council import (
+    Council, _served_bias_halflife, RECENCY_HALFLIFE_DAYS)
+from weather_council.recency_bias import recency_weighted_bias
+from weather_council.sources import Place
 
 
 class TestValidateCRPS(unittest.TestCase):
@@ -542,6 +545,108 @@ class TestLondonEGLCMetarOverlay(unittest.TestCase):
         self.assertEqual(truth["kind"], "station")
         self.assertEqual(truth["data_source"], "iem_metar")
         self.assertEqual((truth["station"] or {}).get("icao"), "EGLC")
+
+
+class TestServedRecencyBias(unittest.TestCase):
+    """The recency-weighted bias is now SERVED (not just recommended) at the
+    stations the leak-free gate cleared — today Hong Kong. These tests pin the
+    per-station policy, the live re-correction, and validation coherence."""
+
+    def _hk(self):
+        return Place("Hong Kong", "HK", 22.30, 114.17, "Asia/Hong_Kong")
+
+    def _ldn(self):
+        return Place("London, United Kingdom", "GB", 51.505, -0.055, "Europe/London")
+
+    def test_policy_on_for_hk_off_elsewhere(self):
+        self.assertEqual(_served_bias_halflife(self._hk()), RECENCY_HALFLIFE_DAYS)
+        self.assertIsNone(_served_bias_halflife(self._ldn()))
+        self.assertIsNone(_served_bias_halflife(None))
+
+    def _drifting_votes(self, target):
+        # One member whose forecast bias DRIFTS warm over the window, so the
+        # recency-weighted bias (leans on recent, larger errors) differs clearly
+        # from the plain trailing mean. observed is constant; forecast = obs + bias.
+        start = target - dt.timedelta(days=60)
+        hh, hl = {}, {}
+        for i in range(60):
+            d = (start + dt.timedelta(days=i)).isoformat()
+            bias = 0.5 + 0.05 * i          # 0.5 °C warming to ~3.5 °C
+            hh[d] = (round(20.0 + bias, 2), 20.0)
+            hl[d] = (round(10.0 + bias, 2), 10.0)
+        spec = MemberSpec("ecmwf", "ecmwf", "ecmwf", "")
+        # Live raw forecast for the target day.
+        raw_h, raw_l = 23.5, 13.5
+        v = Vote(spec, target.isoformat(), raw_h, raw_l, raw_h, raw_l,
+                 Skill(0.0, 1.0, 1.0, 60), Skill(0.0, 1.0, 1.0, 60),
+                 True, hist_high=hh, hist_low=hl)
+        return [v]
+
+    def test_apply_recency_bias_recorrects_hk_member(self):
+        target = dt.date(2025, 7, 1)
+        votes = self._drifting_votes(target)
+        v = votes[0]
+        dated_h = [(d, f - o) for d, (f, o) in v.hist_high.items()]
+        plain_bias = st.mean(e for _, e in dated_h)
+        rec_bias, _ = recency_weighted_bias(dated_h, target.isoformat(),
+                                            RECENCY_HALFLIFE_DAYS)
+        c = Council.__new__(Council)
+        c._apply_recency_bias(votes, self._hk(), target, {"season_gap_days": 0})
+        # Member skill/bias is now the recency-weighted bias (precise oracle), and
+        # corrected = raw - that bias. Recency > plain on a warming drift, so the
+        # recency-corrected number is the cooler (more-corrected) one.
+        self.assertAlmostEqual(v.skill_high.bias, rec_bias, places=9)
+        self.assertAlmostEqual(v.corrected_high, v.raw_high - rec_bias, places=9)
+        self.assertGreater(rec_bias, plain_bias)
+        self.assertLess(v.corrected_high, v.raw_high - plain_bias)
+        self.assertTrue(any("recency-weighted bias" in n for n in v.notes))
+
+    def test_apply_recency_bias_noop_for_non_hk(self):
+        target = dt.date(2025, 7, 1)
+        votes = self._drifting_votes(target)
+        before = votes[0].corrected_high
+        Council.__new__(Council)._apply_recency_bias(
+            votes, self._ldn(), target, {"season_gap_days": 0})
+        self.assertEqual(votes[0].corrected_high, before)
+
+    def test_apply_recency_bias_noop_out_of_season(self):
+        target = dt.date(2025, 7, 1)
+        votes = self._drifting_votes(target)
+        before = votes[0].corrected_high
+        Council.__new__(Council)._apply_recency_bias(
+            votes, self._hk(), target, {"season_gap_days": 120})  # out of season
+        self.assertEqual(votes[0].corrected_high, before)
+
+    def test_validate_served_flag_and_coherence(self):
+        # The same votes/observed, validated plain vs served-recency. The served
+        # run must flag bias_halflife_served and (on a drifting panel) move the
+        # headline council MAE — proving the headline measures the SERVED method.
+        rng = random.Random(3)
+        start = dt.date(2025, 1, 1)
+        N = 140
+        dates = [(start + dt.timedelta(days=i)).isoformat() for i in range(N)]
+        observed = {d: (20.0 + rng.gauss(0, 1.5), 10.0 + rng.gauss(0, 1.5))
+                    for d in dates}
+        hh, hl = {}, {}
+        for i, d in enumerate(dates):
+            drift = 0.03 * i                 # member runs progressively warm
+            oh, ol = observed[d]
+            hh[d] = (round(oh + drift + rng.gauss(0, 0.4), 2), oh)
+            hl[d] = (round(ol + drift + rng.gauss(0, 0.4), 2), ol)
+        spec = MemberSpec("ecmwf", "ecmwf", "ecmwf", "")
+        votes = [Vote(spec, dates[-1], hh[dates[-1]][0], hl[dates[-1]][0],
+                      hh[dates[-1]][0], hl[dates[-1]][0],
+                      Skill(0.0, 1.0, 1.0, N), Skill(0.0, 1.0, 1.0, N),
+                      True, hist_high=hh, hist_low=hl)]
+        plain = Council.__new__(Council)._validate(votes, observed)
+        served = Council.__new__(Council)._validate(votes, observed, self._hk())
+        self.assertIsNone(plain.bias_halflife_served)
+        self.assertEqual(served.bias_halflife_served, RECENCY_HALFLIFE_DAYS)
+        # Drift => recency tracks it => served headline MAE is lower (and different).
+        self.assertNotAlmostEqual(plain.council_mae_high, served.council_mae_high,
+                                  places=6)
+        self.assertLess(served.council_mae_high, plain.council_mae_high)
+
 
 if __name__ == "__main__":
     unittest.main()

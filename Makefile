@@ -4,15 +4,21 @@
 #   make test     network-free unit suite (tests/)
 #   make selftest each module's standalone known-answer self-test
 #   make check    both of the above — the full regression gate
+#   make verify   plain-English black-box report (3 E2E scenarios + gate)
 #   make install-hooks  copy hooks/ into .git/hooks (activates the gate)
 
 PYTHON ?= python3
 # Modules that ship a standalone `if __name__ == "__main__": _self_test()`.
 SELFTEST_MODULES = scoring timescale loop quantum_kernel calibration
 
-.PHONY: check test selftest install-hooks
+.PHONY: check test selftest verify install-hooks
 
 check: test selftest
+
+# Human-readable verification harness. `make verify` for the offline report;
+# `make verify LIVE=1` to also hit the network across the full health-check basket.
+verify:
+	PYTHONPATH=. $(PYTHON) tools/verify.py $(if $(LIVE),--live,)
 
 test:
 	PYTHONPATH=. $(PYTHON) -m unittest discover -s tests

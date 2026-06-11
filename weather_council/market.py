@@ -79,22 +79,56 @@ def _bucket_edges(label: str) -> tuple[int | None, int | None]:
     return (None, None)
 
 
-def _native_reading_int(value_c: float, grain: str) -> int:
-    """The whole-degree reading a record settles on: convert °C to the market's
-    native unit and round half-up — the same convention the council's settlement
-    block uses, so bucket matching and the settlement bucket can never disagree."""
-    return _round_half_up(value_c * 9 / 5 + 32 if grain == "F" else value_c)
+def _native_reading_int(value_c: float, grain: str,
+                        sub_degree: bool = False) -> int:
+    """The whole-degree bucket a record settles into, in the market's native unit.
+
+    Two regimes, both verified against the live Polymarket contracts:
+
+      * **Whole-degree markets** (US °F ASOS, London City Airport whole °C): the
+        source reports an integer reading, so the bucket is round-half-up of the
+        converted value — `_round_half_up`. floor == round here (the value is
+        already integral), so this is unchanged.
+      * **Sub-degree markets** (HK Observatory at 0.1 °C): the contract resolves
+        to "the temperature RANGE that contains the highest temperature", and a
+        whole-degree bucket "N°C" is the half-open range [N, N+1). The reading is
+        therefore the FLOOR of the native value, not round-half-up — e.g. an
+        Observatory high of 28.6 °C settles the 28 °C bucket, NOT 29. Using
+        round-half-up here is exactly the bug that mis-settled HK by one bucket.
+    """
+    native = value_c * 9 / 5 + 32 if grain == "F" else value_c
+    return math.floor(native) if sub_degree else _round_half_up(native)
 
 
 @dataclass(frozen=True)
 class MarketBucket:
-    """One whole-degree outcome of a city/day temperature event."""
+    """One whole-degree outcome of a city/day temperature event.
+
+    The microstructure fields below are READ-ONLY market context, captured so a
+    snapshot can later be judged on *how real* the price was — they never feed a
+    verdict, a vote, or a trade. Two facts the bare Yes price hides:
+      * `volume` is CUMULATIVE traded notional over the market's whole life, so a
+        bucket can carry huge volume yet sit at ~0 now (it was in contention
+        earlier, then the day resolved away from it).
+      * `liquidity` is CURRENT resting order-book depth, and is often *lowest* on
+        the near-certain winning bucket (nobody posts two-sided orders on a 0.99
+        outcome). Depth therefore measures contestedness, not conviction.
+    `best_bid`/`best_ask`/`last_trade` are the live quote; a bucket with no bid
+    and a 0.001 ask is a stale placeholder, not a real price."""
     label: str                  # e.g. "19°C", "13°C or below"
     yes_price: float | None     # market-implied P(high lands in this bucket)
     no_price: float | None
     token_ids: tuple[str, ...]
     lo: int | None              # inclusive lower edge, native unit (None = open)
     hi: int | None              # inclusive upper edge, native unit (None = open)
+    # Read-only microstructure (USDC notionals; prices in [0,1]). Default None so
+    # existing constructors/tests build unchanged.
+    liquidity: float | None = None    # current resting depth, Gamma liquidityNum
+    volume: float | None = None       # cumulative traded notional, Gamma volumeNum
+    volume_24hr: float | None = None  # last-24h traded notional
+    best_bid: float | None = None     # top of book; None = no bid posted
+    best_ask: float | None = None
+    last_trade: float | None = None
 
     def contains(self, reading_int: int) -> bool:
         if self.lo is None and self.hi is None:
@@ -104,6 +138,18 @@ class MarketBucket:
         if self.hi is not None and reading_int > self.hi:
             return False
         return True
+
+    def has_two_sided_quote(self, max_spread: float = 0.10) -> bool:
+        """True when this bucket carries a GENUINE two-sided quote: a real bid
+        (>0) and an ask, with a spread tight enough that the price is informative.
+        A bucket with no bid and a 0.001 placeholder ask returns False — its
+        listed price is noise, and de-vigging across many such buckets inflates
+        the market distribution with mass nobody is actually trading."""
+        if self.best_bid is None or self.best_ask is None:
+            return False
+        if self.best_bid <= 0.0:
+            return False
+        return (self.best_ask - self.best_bid) <= max_spread
 
 
 @dataclass(frozen=True)
@@ -120,6 +166,19 @@ class WeatherMarket:
     end_date: str | None
     slug: str | None
     buckets: tuple[MarketBucket, ...]
+    # Event-level read-only totals (USDC). Default None so non-Gamma constructors
+    # and tests build unchanged.
+    volume: float | None = None        # whole-event cumulative traded notional
+    liquidity: float | None = None     # whole-event resting depth
+
+    def quote_quality(self, max_spread: float = 0.10) -> tuple[int, int]:
+        """(n_two_sided, n_total): how many buckets carry a genuine two-sided
+        quote out of all of them. A market where only one or two buckets are
+        really quoted is a thin, one-sided book — its de-vigged distribution is
+        dominated by placeholder asks and should be treated with suspicion."""
+        n = len(self.buckets)
+        live = sum(1 for b in self.buckets if b.has_two_sided_quote(max_spread))
+        return (live, n)
 
     def modal_bucket(self) -> MarketBucket | None:
         """The bucket the market currently favours most (highest Yes price).
@@ -159,15 +218,18 @@ class WeatherMarket:
         return not self.precision.lower().startswith("whole")
 
     def native_reading(self, verdict_high_c: float) -> int:
-        """The whole-degree, native-unit reading this verdict would settle as.
-        Only meaningful for whole-degree markets; see settles_sub_degree()."""
-        return _native_reading_int(verdict_high_c, self.grain)
+        """The whole-degree, native-unit bucket index this verdict settles as.
+        Round-half-up for whole-degree markets; floor (range-containment) for
+        sub-degree markets — see _native_reading_int and settles_sub_degree()."""
+        return _native_reading_int(verdict_high_c, self.grain,
+                                   self.settles_sub_degree())
 
     def bucket_for_high(self, verdict_high_c: float) -> MarketBucket | None:
-        """Which bucket a continuous °C high verdict settles into, by rounding it
-        to the market's native whole-degree reading and finding the containing
-        range. Returns None if no bucket matches (shouldn't happen for a
-        well-formed contiguous ladder)."""
+        """Which bucket a continuous °C high verdict settles into, by mapping it
+        to the market's native whole-degree bucket index (round-half-up for
+        whole-degree markets, floor/range-containment for sub-degree ones) and
+        finding the containing range. Returns None if no bucket matches
+        (shouldn't happen for a well-formed contiguous ladder)."""
         reading = self.native_reading(verdict_high_c)
         for b in self.buckets:
             if b.contains(reading):
@@ -182,16 +244,24 @@ class WeatherMarket:
         b = self.bucket_for_high(verdict_high_c)
         if b is None:
             return None
-        unit = 5 / 9 if self.grain == "F" else 1.0
-        # An edge sits halfway above the top / below the bottom integer of the
-        # bucket (round-half-up boundary), in native units, converted to °C.
+        # Where the bucket edges sit depends on the settlement rule:
+        #   * round-half-up (whole-degree markets): edges at the half-integers,
+        #     so bucket "N" spans [N-0.5, N+0.5).
+        #   * floor / range-containment (sub-degree markets, e.g. HK 0.1°C):
+        #     bucket "N" spans the half-open INTEGER range [N, N+1), so its edges
+        #     sit at N (lower) and N+1 (upper).
+        # Edges are in native units, converted to °C so the distance is comparable.
         dists = []
-        if b.hi is not None:
-            hi_edge_c = self._to_c(b.hi + 0.5)
-            dists.append(abs(hi_edge_c - verdict_high_c))
-        if b.lo is not None:
-            lo_edge_c = self._to_c(b.lo - 0.5)
-            dists.append(abs(verdict_high_c - lo_edge_c))
+        if self.settles_sub_degree():
+            if b.hi is not None:
+                dists.append(abs(self._to_c(b.hi + 1.0) - verdict_high_c))
+            if b.lo is not None:
+                dists.append(abs(verdict_high_c - self._to_c(b.lo)))
+        else:
+            if b.hi is not None:
+                dists.append(abs(self._to_c(b.hi + 0.5) - verdict_high_c))
+            if b.lo is not None:
+                dists.append(abs(verdict_high_c - self._to_c(b.lo - 0.5)))
         return min(dists) if dists else None
 
     def _bucket_label_for_reading(self, reading_int: int) -> str | None:
@@ -209,20 +279,22 @@ class WeatherMarket:
         (e.g. HK at 0.1 °C), test whether the chosen whole-degree bucket actually
         DEPENDS on the 0.1°→whole rounding rule the contract labels do not reveal.
 
-        Honest, not a fabricated rule: bucket_for_high commits to round-half-up,
-        but the contract might truncate instead ('the high was 30.7, settles 30').
-        This returns (robust, nearest_bucket, truncate_bucket): the bucket under
-        round-to-nearest (what the comparison assumes) and under truncation, and
-        whether they AGREE. Disagreement is the honest red flag that the displayed
-        single-bucket assignment rests on the unverified rule; agreement means the
-        gap is immaterial for this verdict. None for whole-degree markets, where
-        the labels ARE the settlement grain and no extra snap exists. Native °F is
-        handled in-unit (the snap happens on the °F reading the contract reads)."""
+        The settlement rule is now CONFIRMED from the live contract: it resolves
+        to "the temperature range that contains the high", i.e. truncation/floor
+        (a 28.6°C high settles the 28°C bucket). bucket_for_high commits to that
+        floor rule. This diagnostic still reports whether the OTHER reading of the
+        labels — round-half-up — would land the same bucket: it returns
+        (robust, nearest_bucket, truncate_bucket) where truncate_bucket is the one
+        actually settled and nearest_bucket is the round-half-up alternative.
+        Disagreement is the honest red flag that the verdict sits close enough to
+        an integer edge that the two rules diverge (fragile); agreement means the
+        gap is immaterial. None for whole-degree markets, where the reading is
+        already integral so floor == round. Native °F is handled in-unit."""
         if not self.settles_sub_degree():
             return None
         native = verdict_high_c * 9 / 5 + 32 if self.grain == "F" else verdict_high_c
-        nearest = _round_half_up(native)        # round-to-nearest (half up): the assumed rule
-        truncate = math.floor(native)           # drop the fraction: the plausible alternative
+        nearest = _round_half_up(native)        # round-half-up: the alternative label reading
+        truncate = math.floor(native)           # floor / range-containment: the CONFIRMED rule
         near_b = self._bucket_label_for_reading(nearest)
         trunc_b = self._bucket_label_for_reading(truncate)
         return (near_b == trunc_b, near_b, trunc_b)
@@ -252,6 +324,16 @@ def _price(raw) -> float | None:
     return p if 0.0 <= p <= 1.0 else None
 
 
+def _num(raw) -> float | None:
+    """A non-negative USDC notional (volume/liquidity). Unlike `_price` this is
+    not clamped to [0,1] — it can be thousands. Negatives/garbage become None."""
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return v if v >= 0.0 else None
+
+
 def _parse_bucket(m: dict) -> MarketBucket | None:
     outcomes = _loads_list(m.get("outcomes"))
     prices = _loads_list(m.get("outcomePrices"))
@@ -269,7 +351,13 @@ def _parse_bucket(m: dict) -> MarketBucket | None:
         return None
     lo, hi = _bucket_edges(label)
     return MarketBucket(
-        label=label, yes_price=yes, no_price=no, token_ids=tokens, lo=lo, hi=hi
+        label=label, yes_price=yes, no_price=no, token_ids=tokens, lo=lo, hi=hi,
+        liquidity=_num(m.get("liquidityNum")),
+        volume=_num(m.get("volumeNum")),
+        volume_24hr=_num(m.get("volume24hr")),
+        best_bid=_price(m.get("bestBid")),
+        best_ask=_price(m.get("bestAsk")),
+        last_trade=_price(m.get("lastTradePrice")),
     )
 
 
@@ -332,6 +420,8 @@ def _parse_event(e: dict) -> WeatherMarket | None:
         end_date=(str(e.get("endDate")) if e.get("endDate") else None),
         slug=(str(e.get("slug")) if e.get("slug") else None),
         buckets=buckets,
+        volume=_num(e.get("volume")),
+        liquidity=_num(e.get("liquidity")),
     )
 
 

@@ -24,13 +24,19 @@ from urllib.parse import parse_qs, urlparse
 from run import (_build_comparison, verdict_to_dict,
                  _settlement_reference, _anchor_cross_reference)
 from weather_council.council import Council
+from weather_council.edge import report_lines as edge_report_lines, score_snapshots
+from weather_council.loop import Experiment, gate_deploy
 from weather_council.security import RateLimitError, SecurityError
 from weather_council.sources import Sources
+from weather_council.storage import (fetch_settled_snapshots,
+                                     settle_market_snapshots, verify)
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8765"))
 HERE = Path(__file__).resolve().parent
 INDEX = HERE / "index.html"
+STATUS = HERE / "reports" / "healthcheck_status.json"
+STALE_HOURS = 36.0           # > ~1.5 daily cycles ⇒ the scheduled check missed a run
 MAX_LEAD = 15
 MIN_WINDOW, MAX_WINDOW = 15, 365
 
@@ -68,6 +74,77 @@ def _run_verdict(city: str, date_s: str, window_s: str, with_market: bool = Fals
                            settlement_ref, cross_reference)
 
 
+def _run_verify() -> dict:
+    """Score logged verdicts whose day has settled against the SAME anchored truth
+    they were issued on — the web-app twin of `run.py --verify`. State-changing
+    (fills realized columns) and network-bound, so it's a POST. Returns the
+    per-verdict settlement notes; an empty list means nothing is ready yet."""
+    lines = verify()
+    return {"lines": lines, "count": len(lines)}
+
+
+def _run_edge() -> dict:
+    """Settle logged market snapshots against their anchor station, then score the
+    C7 council-vs-market realized-outcome edge — the web-app twin of `run.py
+    --edge`. Read/recommend-only: it grades, it never trades. State-changing
+    (settles rows) and network-bound, so it's a POST."""
+    settled = settle_market_snapshots()
+    report = score_snapshots(fetch_settled_snapshots())
+    return {"settled": settled, "report": edge_report_lines(report)}
+
+
+def _load_status() -> dict:
+    """System-state feed for the UI: the daily health check's machine-readable
+    status PLUS the loop's deploy gate, run live over the health check's own
+    realized-edge determination.
+
+    Read fresh on every request — the file is rewritten by the scheduled health
+    check, so the feed is genuinely live, not cached. The loop action is COMPUTED
+    here by ``gate_deploy`` (never a hard-coded string): it consumes the health
+    check's persisted ``c7_validated`` and a ``human_signoff`` the server NEVER
+    asserts, so the gate reports the real reason the council stays recommend-only.
+    No autonomous path can flip this to LIVE.
+    """
+    try:
+        hc = json.loads(STATUS.read_text())
+    except OSError:
+        return {"available": False,
+                "reason": "no health check has run yet "
+                          "(reports/healthcheck_status.json absent)"}
+    except ValueError as exc:
+        return {"available": False, "reason": f"status file unreadable: {exc}"}
+
+    try:                                  # staleness from the file's own mtime
+        age_h = (dt.datetime.now().timestamp() - STATUS.stat().st_mtime) / 3600.0
+    except OSError:
+        age_h = None
+
+    c7 = bool(hc.get("c7_validated", False))
+    exp = Experiment(id="council-live", hypothesis="(deployed council)",
+                     c7_validated=c7, human_signoff=False)
+    gate = gate_deploy(exp)
+    action = "LIVE" if gate.reason.startswith("LIVE") else "RECOMMEND_ONLY"
+    return {
+        "available": True,
+        "healthcheck": hc,
+        "age_hours": (round(age_h, 1) if age_h is not None else None),
+        "stale": (age_h is not None and age_h > STALE_HOURS),
+        "loop": {
+            "action": action,
+            "reason": gate.reason,
+            "c7_validated": c7,
+            "human_signoff": False,
+            # The hard boundary, surfaced as a guarantee — all three MUST stay
+            # False; the loop's risk gate rejects any experiment that flips them.
+            "invariants": {
+                "places_trades": exp.places_trades,
+                "moves_funds": exp.moves_funds,
+                "autonomous_code_edit": exp.autonomous_code_edit,
+            },
+        },
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "WeatherCouncil/1.0"
 
@@ -86,6 +163,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, INDEX.read_bytes(), "text/html; charset=utf-8")
             except OSError:
                 self._send(500, b"index.html not found", "text/plain")
+            return
+
+        if parsed.path == "/api/status":
+            try:
+                self._send(200, json.dumps(_load_status()).encode(),
+                           "application/json")
+            except Exception as exc:
+                self._send(500, json.dumps({"error": str(exc)}).encode(),
+                           "application/json")
             return
 
         if parsed.path == "/api/verdict":
@@ -110,6 +196,27 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         self._send(404, b"not found", "text/plain")
+
+    def do_POST(self) -> None:
+        # State-changing, recommend-only ledger operations live behind POST so they
+        # are never triggered by a page load or a stray GET — only an explicit click.
+        routes = {"/api/verify": _run_verify, "/api/edge": _run_edge}
+        op = routes.get(urlparse(self.path).path)
+        if op is None:
+            self._send(404, b"not found", "text/plain")
+            return
+        length = int(self.headers.get("Content-Length") or 0)
+        if length:
+            self.rfile.read(length)                # drain any body, keep socket clean
+        try:
+            self._send(200, json.dumps(op()).encode(), "application/json")
+        except RateLimitError as exc:
+            self._send(503, json.dumps(
+                {"error": str(exc), "retryable": True}).encode(), "application/json")
+        except SecurityError as exc:
+            self._send(400, json.dumps({"error": str(exc)}).encode(), "application/json")
+        except Exception as exc:
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
 
     def log_message(self, *_args) -> None:  # keep the console quiet
         pass

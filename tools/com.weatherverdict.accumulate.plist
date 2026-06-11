@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Local C7 accumulation LaunchAgent for the weather-council.
+
+  Runs tools/accumulate.py, which logs ONE day-ahead (lead 1) council-vs-market
+  snapshot per city per day for London and Hong Kong, settles whatever is now
+  observable against each verdict's anchor station, and refreshes
+  reports/c7_status.txt. Read-only / recommend-only: it never edits source,
+  never auto-applies a bias, and never trades or moves funds.
+
+  This is SEPARATE from com.weatherverdict.healthcheck (06:00) — do not conflate.
+
+  It fires twice a day (12:00 and 20:00 local) only for robustness: if the
+  machine was asleep at one time the other still runs, and accumulate.py's
+  per-day idempotency guard ensures a SECOND fire the same day does not write a
+  duplicate snapshot (which would inflate C7's n with correlated rows).
+
+  INSTALL (runs on YOUR machine, where the code + network egress live):
+    cp "tools/com.weatherverdict.accumulate.plist" ~/Library/LaunchAgents/
+    launchctl load  ~/Library/LaunchAgents/com.weatherverdict.accumulate.plist
+
+  RUN NOW as a test:
+    launchctl start com.weatherverdict.accumulate
+
+  STOP / REMOVE:
+    launchctl unload ~/Library/LaunchAgents/com.weatherverdict.accumulate.plist
+    rm ~/Library/LaunchAgents/com.weatherverdict.accumulate.plist
+
+  INSPECT progress:
+    tail -f logs/accumulate.log
+    cat reports/c7_status.txt
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.weatherverdict.accumulate</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Frameworks/Python.framework/Versions/3.14/bin/python3</string>
+        <string>/Users/43slauson/Desktop/mock projects/weather-verdict/tools/accumulate.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/43slauson/Desktop/mock projects/weather-verdict</string>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>12</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>20</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/43slauson/Desktop/mock projects/weather-verdict/reports/accumulate.launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/43slauson/Desktop/mock projects/weather-verdict/reports/accumulate.launchd.err.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

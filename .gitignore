@@ -2,6 +2,10 @@
 __pycache__/
 *.py[cod]
 
+# Harness-optimizer gated-write backups and atomic-write temp files (transient)
+*.bak_*
+.harness_opt/*.tmp
+
 # Generated SQLite verdict store (runtime state, not source)
 *.db
 

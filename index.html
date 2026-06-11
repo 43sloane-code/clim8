@@ -58,6 +58,31 @@
   .bar{height:8px;background:var(--panel2);border-radius:6px;overflow:hidden;min-width:60px}
   .bar > i{display:block;height:100%;background:var(--accent)}
   .good{color:var(--green)} .meh{color:var(--amber)} .bad{color:var(--red)}
+  /* live system-status feed — the daily health check + the loop gate, wired live */
+  .sysbar{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:14px 16px;margin:0 0 22px}
+  .sysbar .row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
+  .sysbar .row + .row{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+  .sysbar .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+    min-width:96px}
+  .gate{display:inline-flex;align-items:center;gap:7px;font-weight:700;font-size:12px;
+    text-transform:uppercase;letter-spacing:.05em;padding:5px 12px;border-radius:999px}
+  .gate.rec{background:rgba(88,166,255,.16);color:var(--accent)}
+  .gate.live{background:rgba(63,185,80,.16);color:var(--green)}
+  .gate .dot{width:8px;height:8px;border-radius:50%;background:currentColor;
+    box-shadow:0 0 0 0 currentColor;animation:pulse 2.4s ease-out infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(88,166,255,.5)}70%{box-shadow:0 0 0 7px rgba(88,166,255,0)}100%{box-shadow:0 0 0 0 rgba(88,166,255,0)}}
+  .chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#cdd7e1;
+    background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:4px 9px}
+  .chip b{color:#fff;font-weight:600}
+  .chip.good{border-color:rgba(63,185,80,.4)} .chip.meh{border-color:rgba(210,153,34,.4)}
+  .chip.bad{border-color:rgba(248,81,73,.45)}
+  .chip[data-card]{cursor:pointer} .chip[data-card]:hover{border-color:var(--accent)}
+  .chip .v{font-size:11px}
+  .guard{font-size:12px;color:var(--green)}
+  .sysbar .stale{color:var(--amber);font-size:12px}
+  .sysbar .when{color:var(--muted);font-size:12px}
+  .sysbar.off{opacity:.75}
   footer{margin-top:26px;color:var(--muted);font-size:12px;text-align:center}
   .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   .chk{display:flex;align-items:center;gap:7px;font-size:13px;color:#cdd7e1;
@@ -70,6 +95,18 @@
   .legend{display:flex;gap:16px;align-items:center;font-size:12px;color:var(--muted);margin-top:4px}
   .legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:-1px}
   td.hit{color:var(--green)} td.miss{color:var(--amber)}
+  /* ledger maintenance tools — verify past verdicts + settle/score the C7 edge */
+  .tools{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:14px 16px;margin:0 0 22px}
+  .tools .row{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+  .tools .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);min-width:60px}
+  .tools .when{color:var(--muted);font-size:12px;flex:1;min-width:200px}
+  button.ghost{background:var(--panel2);color:var(--txt);border:1px solid var(--line);font-weight:600}
+  button.ghost:hover:not(:disabled){border-color:var(--accent)}
+  .toolsout{margin:12px 0 0;background:#0b0e13;border:1px solid var(--line);border-radius:8px;
+    padding:12px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;
+    line-height:1.5;color:#cdd7e1;white-space:pre-wrap;max-height:380px;overflow:auto}
+  .toolsout.err{color:var(--red)}
 </style>
 </head>
 <body>
@@ -77,6 +114,8 @@
   <h1>Weather Council</h1>
   <div class="sub">A panel of 8 independent national weather services + a perturbed ensemble,
     blended by backtested skill into one verdict. Every figure is fetched and validated — none is model-generated.</div>
+
+  <div id="sys" class="sysbar" hidden></div>
 
   <form id="f">
     <div class="field">
@@ -99,6 +138,17 @@
     <div class="hint">Ask e.g. “Tokyo highest temperature” for a date up to 15 days out.
       “Compare to Polymarket” adds a read-only price comparison when an open market matches.</div>
   </form>
+
+  <div id="tools" class="tools">
+    <div class="row">
+      <span class="lbl">Ledger</span>
+      <button id="verifyBtn" class="ghost" type="button">Verify past verdicts</button>
+      <button id="edgeBtn" class="ghost" type="button">Settle &amp; score edge (C7)</button>
+      <span class="when">Score logged verdicts against what actually happened, and settle market
+        snapshots for the C7 council-vs-market edge. Read/recommend-only — never trades.</span>
+    </div>
+    <pre id="toolsOut" class="toolsout" hidden></pre>
+  </div>
 
   <div id="status"></div>
   <div id="out"></div>
@@ -554,7 +604,7 @@ function render(d){
       return `<tr><td>${name}</td><td>${f1(m.high)}/${f1(m.low)}</td><td>${f1(sum)}</td><td>${tag}</td></tr>`;
     }).join("");
     const beatsAll = refs.slice(1).every(([_,m])=> !m||m.high==null || (m.high+m.low) >= council);
-    h += `<div class="card"><h3>Backtest validation — earned vs reference forecasts</h3>
+    h += `<div class="card" id="card-validation"><h3>Backtest validation — earned vs reference forecasts</h3>
       <table>
         <tr><th>Forecast</th><th>MAE H/L</th><th>sum</th><th>vs council</th></tr>
         ${rows}
@@ -569,9 +619,230 @@ function render(d){
     </div>`;
   }
 
+  // ensemble calibration — is the spread the right SIZE, and is the served cloud honest?
+  // (recommend-only; mirrors the CLI's ENSEMBLE-CALIBRATION + SPREAD–SKILL readout)
+  const rh=val.rank_histogram, pc=val.pit_calibration, ssk=val.spread_skill;
+  if(rh||pc||ssk){
+    const f2=x=>Number(x).toFixed(2), sz=x=>(x>=0?"+":"")+Number(x).toFixed(1),
+          s2=x=>(x>=0?"+":"")+Number(x).toFixed(2);
+    const vClass=x=> x==="CALIBRATED"?"good":(x==="OVER-DISPERSED"||x==="UNDER-CONFIDENT")?"meh":"bad";
+    const hist=bins=>{ if(!bins||!bins.length) return "";
+      const mx=Math.max(...bins,1);
+      return `<div style="display:flex;align-items:flex-end;gap:2px;height:32px;margin:8px 0 2px">`+
+        bins.map(b=>`<i style="flex:1;height:${Math.max(2,Math.round(b/mx*28))}px;background:var(--accent);border-radius:2px 2px 0 0"></i>`).join("")+`</div>`; };
+    const rankMean={ "CALIBRATED":"panel dispersion is the right size — observations fall uniformly across the member ranks.",
+      "UNDER-DISPERSED":"panel too tight — truth lands in the outer ranks more often than a calibrated panel allows.",
+      "OVER-DISPERSED":"panel too wide — truth clusters in the middle ranks.",
+      "BIASED COLD":"panel runs cold — observations pile into the upper ranks.",
+      "BIASED WARM":"panel runs warm — observations pile into the lower ranks." };
+    const pitMean={ "CALIBRATED":"the served bucket-probability cloud is honest — its quantiles match outcomes.",
+      "OVER-CONFIDENT":"served cloud too narrow — real outcomes exceed its tails.",
+      "UNDER-CONFIDENT":"served cloud too wide — outcomes cluster near its center." };
+    let eh = `<div class="card" id="card-calibration"><h3>Ensemble calibration — is the spread the right size, and the served cloud honest?</h3>`;
+    if(rh){
+      eh += `<div class="kv" style="margin-bottom:2px"><span>Rank histogram <span class="pill">raw NWP member panel · Talagrand</span></span>
+        <span class="${vClass(rh.verdict)}"><b>${rh.verdict}</b></span></div>
+        ${hist(rh.bins)}
+        <div class="kv"><span>shape <b>${rh.shape}</b></span><span>edge ratio <b>${f2(rh.edge_ratio)}</b></span><span>χ² z <b>${sz(rh.z)}</b></span><span>n=<b>${rh.n}</b></span></div>
+        ${rankMean[rh.verdict]?`<div class="kv" style="margin-top:4px"><span class="pill">${rankMean[rh.verdict]}</span></div>`:""}`;
+    }
+    if(pc){
+      eh += `<div class="kv" style="margin:14px 0 2px"><span>PIT of the served cloud <span class="pill">the distribution turned into bucket probabilities</span></span>
+        <span class="${vClass(pc.verdict)}"><b>${pc.verdict}</b></span></div>
+        ${hist(pc.bins)}
+        <div class="kv"><span>shape <b>${pc.shape}</b></span><span>edge ratio <b>${f2(pc.edge_ratio)}</b></span><span>χ² z <b>${sz(pc.z)}</b></span><span>n=<b>${pc.n}</b></span></div>
+        ${pitMean[pc.verdict]?`<div class="kv" style="margin-top:4px"><span class="pill">${pitMean[pc.verdict]}</span></div>`:""}`;
+    }
+    if(ssk){
+      const ok=ssk.tracks_error;
+      eh += `<div class="kv" style="margin:14px 0 2px"><span>Spread–skill <span class="pill">does member disagreement track per-day error?</span></span>
+        <span class="${ok?"good":"meh"}"><b>${ok?"TRACKS ERROR":"FLAT"}</b></span></div>
+        <div class="kv"><span>consistency r <b>${s2(ssk.consistency)}</b></span><span>relative-reliability gap <b>${Math.round(ssk.reliability_gap*100)}%</b></span><span>n=<b>${ssk.n}</b></span></div>
+        <div class="kv" style="margin-top:4px"><span class="pill">${ssk.label}.</span></div>`;
+    }
+    eh += `<div class="kv" style="margin-top:10px"><span class="pill">Recommend-only — these <b>verify</b> the panel spread and the served distribution on the same leak-free walk-forward; they never change the verdict.</span></div></div>`;
+    h += eh;
+  }
+
   $("#out").innerHTML = h;
   $("#foot").innerHTML = `Provenance: every figure came from a live API call (${d.requests_made} sandboxed requests). No values are model-generated.`;
 }
+
+/* ---- live system-status feed: the daily health check + the loop gate ----------
+   Polls /api/status, which reads reports/healthcheck_status.json fresh and runs
+   the loop's deploy gate over it. Every figure here is MEASURED by the scheduled
+   health check; the bar only displays them. */
+const sysEl = $("#sys");
+
+function renderSys(s){
+  if(!s || !s.available){
+    sysEl.hidden = false; sysEl.classList.add("off");
+    sysEl.innerHTML = `<div class="row"><span class="lbl">System</span>
+      <span class="when">${(s&&s.reason)||"health-check status unavailable"}.</span></div>
+      <div class="row"><span class="guard">✓ Recommend-only · ✓ no trades · ✓ no fund moves · ✓ no autonomous code edits</span></div>`;
+    return;
+  }
+  sysEl.classList.remove("off");
+  const lp = s.loop||{}, hc = s.healthcheck||{};
+  const live = lp.action === "LIVE";
+  const gateCls = live ? "live" : "rec";
+  const gateTxt = live ? "Live" : "Recommend-only";
+  // loop row — the real deploy gate + its reason, plus the hard invariants
+  const inv = lp.invariants||{};
+  const guard = `<span class="guard">✓ no trades · ✓ no fund moves · ✓ no autonomous code edits</span>`;
+  let html = `<div class="row">
+    <span class="lbl">Loop gate</span>
+    <span class="gate ${gateCls}"><span class="dot"></span>${gateTxt}</span>
+    <span class="when">${lp.reason||""}</span>
+  </div>
+  <div class="row" style="border-top:0;padding-top:0;margin-top:6px">${guard}</div>`;
+
+  // health-check row — drift, regression, calibration, freshness, recommendations
+  const chips = [];
+  const f1=x=>(x==null||Number.isNaN(x))?"–":(Math.round(x*10)/10).toFixed(1);
+  const f2s=x=>(x==null||Number.isNaN(x))?"–":(Math.round(x*100)/100).toFixed(2);
+  // basket MAE vs baseline (drift) — links to the per-city backtest validation card
+  const bm = hc.basket_mae, bl = hc.baseline_mae;
+  const vCard = ` data-card="card-validation"`;
+  if(bm!=null){
+    if(bl!=null){
+      const drift = bm - bl;                 // >0 ⇒ worse than baseline
+      const cls = hc.regression ? "bad" : (drift<=0 ? "good" : "meh");
+      const arrow = drift>0.0005 ? "▲" : drift<-0.0005 ? "▼" : "▬";
+      chips.push(`<span class="chip ${cls}"${vCard}>Basket MAE <b>${f2s(bm)}°</b> <span class="v">vs base ${f2s(bl)}° ${arrow}${(drift>=0?"+":"")+f2s(drift)}°</span></span>`);
+    } else {
+      chips.push(`<span class="chip"${vCard}>Basket MAE <b>${f2s(bm)}°</b> <span class="v">baseline pending</span></span>`);
+    }
+  }
+  if(hc.regression) chips.push(`<span class="chip bad"${vCard}>⚠ regression vs baseline</span>`);
+  // calibration verdicts (recommend-only diagnostics) — link to the calibration card
+  const cCard = ` data-card="card-calibration"`;
+  const calChip=(name,o)=>{ if(!o||!o.verdict) return null;
+    const cls = o.verdict==="CALIBRATED"?"good":(/OVER-DISPERSED|UNDER-CONFIDENT/.test(o.verdict)?"meh":"bad");
+    return `<span class="chip ${cls}"${cCard}>${name} <b>${o.verdict}</b></span>`; };
+  [calChip("Rank",hc.rank_histogram), calChip("PIT",hc.pit_calibration)].forEach(c=>c&&chips.push(c));
+  const ss = hc.spread_skill;
+  if(ss) chips.push(`<span class="chip ${ss.tracks_error?'good':'meh'}"${cCard}>Spread–skill <b>${ss.tracks_error?'TRACKS':'FLAT'}</b></span>`);
+  if(hc.calibration_coverage_pct!=null)
+    chips.push(`<span class="chip">80% band coverage <b>${hc.calibration_coverage_pct}%</b></span>`);
+  // C7 realized-outcome edge — the gate that can promote the loop to LIVE. Read-only.
+  const c7 = hc.c7;
+  if(c7){
+    if(c7.validated){
+      chips.push(`<span class="chip good">C7 edge <b>VALIDATED</b> <span class="v">${c7.settled_days} settled days</span></span>`);
+    } else {
+      chips.push(`<span class="chip">C7 edge <b>accumulating</b> <span class="v">${c7.settled_days} settled day(s) · need ≥20</span></span>`);
+    }
+  }
+  // Mechanism convergence — independent corroboration of each headline today
+  const cv = hc.convergence;
+  if(cv){
+    const bad = cv.contested>0;
+    chips.push(`<span class="chip ${bad?'bad':'good'}">Convergence <b>${cv.affirmed}/${cv.evaluated}</b> affirmed${cv.contested?` <span class="v">${cv.contested} contested</span>`:""}</span>`);
+  }
+  // data freshness
+  const gap = hc.data_freshness_max_gap_days;
+  if(gap!=null){ const cls = gap>31?"meh":"good";
+    chips.push(`<span class="chip ${cls}">Data freshness <b>${gap}d</b> <span class="v">max archive lag</span></span>`); }
+  // basket coverage
+  if(hc.cities_usable!=null && hc.cities_total!=null)
+    chips.push(`<span class="chip">Basket <b>${hc.cities_usable}/${hc.cities_total}</b> <span class="v">cities in-season</span></span>`);
+  // recommendations
+  const recs = hc.recommendations||[];
+  chips.push(`<span class="chip ${recs.length?'meh':'good'}">${recs.length?recs.length+" recommendation(s) for review":"no recommendations — constants hold"}</span>`);
+
+  const age = s.age_hours;
+  const ageTxt = age==null ? "" : age<1 ? "just now" : age<48 ? `${Math.round(age)}h ago` : `${Math.round(age/24)}d ago`;
+  const staleTxt = s.stale ? ` <span class="stale">⚠ stale — the scheduled check missed a cycle</span>` : "";
+  html += `<div class="row">
+    <span class="lbl">Health check</span>
+    <span class="when">${hc.date||"–"} · ${ageTxt}${staleTxt}</span>
+  </div>
+  <div class="row" style="border-top:0;padding-top:0;margin-top:6px">${chips.join("")}</div>`;
+
+  if(recs.length){
+    html += `<div class="row" style="margin-top:8px"><span class="lbl">Findings</span>
+      <span class="when" style="flex:1">${recs.map(r=>typeof r==="string"?r:(r.text||JSON.stringify(r))).join(" · ")}</span></div>`;
+  }
+  sysEl.hidden = false;
+  sysEl.innerHTML = html;
+}
+
+// Chips that mirror a per-verdict mechanism are click-linked to its card below.
+// The system bar reports the BASKET (London+Hong Kong) health check; the cards
+// report the single requested city — same mechanism, different scope — so the
+// link scrolls to "the same check for this verdict" once one is loaded.
+sysEl.addEventListener("click", (e)=>{
+  const chip = e.target.closest("[data-card]");
+  if(!chip) return;
+  const card = document.getElementById(chip.getAttribute("data-card"));
+  if(card){
+    card.scrollIntoView({behavior:"smooth", block:"center"});
+    card.style.transition = "box-shadow .25s"; card.style.boxShadow = "0 0 0 2px var(--accent)";
+    setTimeout(()=>{ card.style.boxShadow = ""; }, 1100);
+  } else {
+    const st = $("#status");
+    st.className = ""; st.textContent = "Run a verdict above to see this check for a specific city.";
+    setTimeout(()=>{ if(st.textContent.startsWith("Run a verdict")) st.textContent = ""; }, 3200);
+  }
+});
+
+async function loadSys(){
+  try{
+    const r = await fetch("/api/status", {cache:"no-store"});
+    renderSys(await r.json());
+  }catch(err){
+    renderSys({available:false, reason:"could not reach /api/status ("+err.message+")"});
+  }
+}
+loadSys();
+setInterval(loadSys, 60000);   // live refresh; the file is rewritten by the daily check
+
+/* ---- ledger maintenance tools — verify past verdicts + settle/score C7 edge ----
+   POST to /api/verify and /api/edge (state-changing, so explicit clicks only). The
+   backend twins of `run.py --verify` / `--edge`; output is plain text rendered in a
+   <pre>. Recommend-only — these grade the ledger, they never trade. */
+const toolBtns = [$("#verifyBtn"), $("#edgeBtn")];
+
+function formatTool(path, d){
+  if(path === "/api/verify"){
+    const lines = d.lines || [];
+    return lines.length ? lines.join("\n")
+      : "No past verdicts are ready to verify yet — a target day must be finished "
+        + "and its anchored truth available (station feeds lag real time by a few days).";
+  }
+  const parts = [];
+  const settled = d.settled || [];
+  parts.push(settled.length
+    ? "Settled this run:\n  " + settled.join("\n  ")
+    : "No new snapshots settled this run (none past the lag cutoff, or no truth yet).");
+  const report = d.report || [];
+  if(report.length){ parts.push(""); parts.push(report.join("\n")); }
+  return parts.join("\n");
+}
+
+async function runTool(path, busyMsg){
+  const out = $("#toolsOut");
+  toolBtns.forEach(b => b.disabled = true);
+  out.hidden = false; out.classList.remove("err");
+  out.textContent = busyMsg + "…";
+  try{
+    const r = await fetch(path, {method:"POST"});
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error || ("request failed ("+r.status+")"));
+    out.textContent = formatTool(path, d);
+  }catch(err){
+    out.classList.add("err");
+    out.textContent = "Error: " + err.message;
+  }finally{
+    toolBtns.forEach(b => b.disabled = false);
+  }
+}
+
+$("#verifyBtn").addEventListener("click",
+  () => runTool("/api/verify", "Scoring past verdicts against observed truth"));
+$("#edgeBtn").addEventListener("click",
+  () => runTool("/api/edge", "Settling snapshots and scoring the C7 edge"));
 </script>
 </body>
 </html>

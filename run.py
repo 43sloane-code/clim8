@@ -76,6 +76,25 @@ ANCHOR_CROSS_REFERENCE: dict[str, dict[str, str]] = {
     },
 }
 
+# User-supplied PROVISIONAL observed records — official daily extracts the user
+# transcribed from the source's own published images (the Hong Kong Observatory
+# daily extract) for days the automated open-data API has NOT yet published (it
+# lags ~weeks). Surfaced ONLY as a cross-reference, never as settlement truth: the
+# verdict still settles on the reproducible API record once it catches up. Same
+# city-name-containment matching as the other reference registries.
+PROVISIONAL_EXTRACT: dict[str, dict[str, str]] = {
+    "hong kong": {
+        "path": "reports/hko_june2026_observed_provisional.csv",
+        "high_col": "abs_max_c",
+        "low_col": "abs_min_c",
+        "source_col": "source",
+        "label": ("Hong Kong Observatory daily extract — PROVISIONAL, transcribed "
+                  "from the HKO official daily-extract images; cross-reference only, "
+                  "NOT settlement truth (the verdict settles on the HKO open-data "
+                  "API once it publishes the month)."),
+    },
+}
+
 
 def _settlement_reference_for(place) -> dict[str, str] | None:
     """The user-declared settlement reference for this city, or None. Matched on
@@ -173,6 +192,62 @@ def _anchor_cross_reference_for(place) -> dict[str, str] | None:
     return None
 
 
+def _provisional_extract_for(place) -> dict[str, str] | None:
+    """The user-supplied provisional observed extract directive for this city, or
+    None. Matched on case-insensitive city-name containment, like the others."""
+    name = (getattr(place, "name", "") or "").strip().lower()
+    for key, ref in PROVISIONAL_EXTRACT.items():
+        if key in name or name in key:
+            return ref
+    return None
+
+
+def _load_provisional_observed(place, target, back_days: int = 12) -> dict | None:
+    """Load a city's user-supplied provisional observed daily record (e.g. the HKO
+    daily extract transcribed from official images) as a CROSS-REFERENCE only —
+    never settlement truth. Returns {label, source, target_date, target_record,
+    recent:[{date,high,low}]} for the window ending at the target, or None when the
+    city has no extract or the file can't be read. The target day itself is usually
+    absent (a future forecast), so this mainly surfaces recent observed ground
+    truth the lagging open-data API hasn't published yet."""
+    ref = _provisional_extract_for(place)
+    if ref is None:
+        return None
+    path = Path(__file__).resolve().parent / ref["path"]
+    if not path.exists():
+        return None
+    rows: dict[str, tuple[float, float]] = {}
+    source = None
+    try:
+        with open(path, newline="") as fh:
+            for r in csv.DictReader(fh):
+                d = (r.get("date") or "").strip()
+                if len(d) != 10:
+                    continue
+                try:
+                    hi = float(r[ref["high_col"]])
+                    lo = float(r[ref["low_col"]])
+                except (KeyError, ValueError, TypeError):
+                    continue
+                rows[d] = (hi, lo)
+                source = r.get(ref.get("source_col", "source")) or source
+    except OSError:
+        return None
+    if not rows:
+        return None
+    tgt = target.isoformat()
+    lo_bound = (target - dt.timedelta(days=back_days)).isoformat()
+    recent = [{"date": d, "high": rows[d][0], "low": rows[d][1]}
+              for d in sorted(rows) if lo_bound <= d <= tgt]
+    return {
+        "label": ref["label"],
+        "source": source,
+        "target_date": tgt,
+        "target_record": rows.get(tgt),     # usually None — a future target hasn't happened
+        "recent": recent[-back_days:],
+    }
+
+
 def _anchor_cross_reference(sources: Sources, place, target, v: Verdict) -> dict | None:
     """For a city anchored on a non-airport settlement station (e.g. Hong Kong ->
     Observatory), surface the nearby airport as a *cross-reference*: the measured
@@ -189,6 +264,11 @@ def _anchor_cross_reference(sources: Sources, place, target, v: Verdict) -> dict
     base = {"anchor_station": station.get("name"), "anchor_icao": station.get("icao"),
             "note": ref["note"], "verdict_high": v.high, "verdict_low": v.low,
             "data_source": ts.get("data_source")}
+    # Provisional observed cross-reference (the user's transcribed HKO daily
+    # extract) — attached to every return path below, shown but never settled on.
+    prov = _load_provisional_observed(place, target)
+    if prov is not None:
+        base["provisional_observed"] = prov
     if ts.get("kind") != "station" or not station.get("id"):
         return {**base, "error": "the verdict isn't anchored on a station this run"}
     token = ref.get("cross_ref_token", "airport")
@@ -304,7 +384,16 @@ def _market_lines(c: VerdictMarketComparison) -> list[str]:
     # and we must NOT assert a model edge over the market — the market is pricing
     # the live settlement sensor we have no current data for.
     stale_transfer = c.settles_sub_degree and c.settlement_offset_modern is False
-    if c.settles_sub_degree and c.settlement_offset_c is not None:
+    if c.settles_sub_degree and c.settlement_same_station:
+        # No cross-station transfer: the market settles on the SAME station the
+        # council backtests on, so the verdict already lives on the settlement
+        # scale and the offset is 0 °C by identity (one instrument), not assumed.
+        L.append(f"    scale    : settles 0.1° on the SAME station the council backtests on; "
+                 f"the verdict is already on the settlement scale, so the offset is 0 °C by "
+                 f"identity (one instrument) — no cross-station transfer is made.")
+        if c.settlement_offset_note:
+            L.append(f"               {c.settlement_offset_note}")
+    elif c.settles_sub_degree and c.settlement_offset_c is not None:
         L.append(f"    transfer : settles sub-degree on a different station than the backtest; "
                  f"verdict moved onto that scale by a measured offset.")
         if c.settlement_offset_note:
@@ -418,6 +507,8 @@ def _market_lines(c: VerdictMarketComparison) -> list[str]:
         L.append(f"    {b.label:>14}{mp:>10}{kp:>9}{d:>9}")
     if c.largest_gap is not None:
         L.append(f"    largest model-vs-market gap: {c.largest_gap*100:.1f} pts")
+    if c.liquidity_note:
+        L.append(f"    depth    : {c.liquidity_note}")
     if c.unmatched_fraction:
         L.append(f"    note: {c.unmatched_fraction*100:.0f}% of resampled draws fell outside the ladder")
     cal = c.calibration
@@ -497,6 +588,9 @@ def _anchor_cross_reference_lines(ref: dict) -> list[str]:
     if ref.get("data_source") == "hko_opendata":
         L.append(f"    feed     : Hong Kong Observatory open-data "
                  f"(data.weather.gov.hk) — the live settlement record")
+    prov = ref.get("provisional_observed")
+    if prov:
+        L.extend(_provisional_observed_lines(prov, ref.get("verdict_high")))
     if ref.get("error"):
         L.append(f"    x-ref    : cross-reference unavailable this run "
                  f"({ref['error']}); the verdict still stands on the {anchor} anchor.")
@@ -518,6 +612,31 @@ def _anchor_cross_reference_lines(ref: dict) -> list[str]:
                  f"anchor; keeping the old {xref} anchor would have biased the verdict "
                  f"by that much against the settlement record.")
     L.append("")
+    return L
+
+
+def _provisional_observed_lines(prov: dict, verdict_high=None) -> list[str]:
+    """Render the user-supplied provisional observed daily extract as a clearly
+    labeled cross-reference (NOT settlement truth)."""
+    L = ["    provisional x-ref (recent observed truth the lagging API hasn't "
+         "published yet — NOT settled on):"]
+    L.append(f"               {prov['label']}")
+    if prov.get("source"):
+        L.append(f"               source tag: {prov['source']}")
+    tr = prov.get("target_record")
+    if tr is not None:
+        th, tl = tr
+        L.append(f"      {prov['target_date']} provisional observed: "
+                 f"high {th:.1f}°  low {tl:.1f}°")
+        if isinstance(verdict_high, (int, float)):
+            L.append(f"      verdict high {verdict_high:.1f}° vs provisional "
+                     f"{th:.1f}° = {verdict_high - th:+.1f}° (context only)")
+    rec = prov.get("recent") or []
+    if rec:
+        L.append(f"      recent provisional observed (last {len(rec)} days, "
+                 f"high/low °C):")
+        for r in rec:
+            L.append(f"        {r['date']}  high {r['high']:.1f}°  low {r['low']:.1f}°")
     return L
 
 
@@ -805,6 +924,18 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
             tag = "" if name == "council" else (f"  {delta:+.2f} °C ({'better' if delta > 0 else 'worse'})")
             L.append(f"    {name:12}{hh:8.2f} °C{ll:7.2f} °C{hh+ll:8.2f} °C{tag}")
         L.append("    (council must beat all three reference forecasts to justify itself)")
+        if (val.council_rmse_high is not None and val.council_mae_high
+                and val.council_mae_low):
+            rh, rl = val.council_rmse_high, val.council_rmse_low
+            rath = rh / val.council_mae_high
+            ratl = rl / val.council_mae_low
+            # Gaussian errors give RMSE/MAE ≈ 1.25; markedly higher means a fat,
+            # bust-prone tail — the structure that makes a single widening factor a
+            # bad fix even when the 80% band under-covers.
+            note = ("  — heavy tail: occasional big busts (a constant band-widening "
+                    "would lift coverage but cost CRPS)" if max(rath, ratl) >= 1.35 else "")
+            L.append(f"    council RMSE high {rh:.2f} / low {rl:.2f} °C "
+                     f"(RMSE/MAE {rath:.2f}/{ratl:.2f}){note}")
         if val.council_win_rate is not None:
             L.append(f"    council closer than naive on {val.council_win_rate*100:.0f}% of held-out predictions")
         if val.hit_rate_2c is not None:
@@ -826,6 +957,100 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
                          f"(width {val.sharpness_80:.1f} °C) — {cal}")
             L.append("      (the verdict's bucket probabilities are this distribution, "
                      "now scored — not asserted)")
+        bv_pairs = [("high", val.bucket_verdict_high), ("low", val.bucket_verdict_low)]
+        if any(ev is not None for _, ev in bv_pairs):
+            L.append("")
+            L.append("    MARKET-BUCKET VERDICT (scored on the whole-degree bucket the "
+                     "market settles on — measure-only)")
+            for tag, ev in bv_pairs:
+                if ev is None:
+                    continue
+                L.append(f"      {tag:5}names the settling bucket on "
+                         f"{ev.hit_rate*100:.0f}% of held-out days "
+                         f"(point verdict alone {ev.point_hit_rate*100:.0f}%; n={ev.n_scored})")
+                # Localize the misses: a directional off-by-one (cloud centre lags
+                # a moving bias — drift) vs boundary-driven (verdict right to within
+                # rounding but on the wrong side of a settlement edge) vs gross error.
+                directional = abs(ev.signed_bias) >= 0.15
+                boundary = ev.fragility >= 0.05
+                if directional:
+                    lean = "COOL" if ev.signed_bias < 0 else "WARM"
+                    L.append(f"            misses lean {lean} "
+                             f"(under {ev.frac_under*100:.0f}% / over {ev.frac_over*100:.0f}%, "
+                             f"bias {ev.signed_bias:+.2f} bucket) — directional; the residual "
+                             f"cloud centre lags (lever: recency/trend-weight the residuals)")
+                elif boundary:
+                    L.append(f"            misses sit nearer a settlement edge than hits "
+                             f"(edge {ev.mean_edge_miss:.2f} vs {ev.mean_edge_hit:.2f} °C) — "
+                             f"boundary-driven (lever: sharpen the cloud / flag "
+                             f"boundary-pinned verdicts)")
+                else:
+                    L.append(f"            misses are gross errors, not off-by-one "
+                             f"(bias {ev.signed_bias:+.2f}, edge miss {ev.mean_edge_miss:.2f} vs "
+                             f"hit {ev.mean_edge_hit:.2f} °C) — point accuracy is the limit")
+            L.append("      (MEASURE-ONLY: the served verdict is unchanged; this scores "
+                     "what the market pays on, not what CRPS measures)")
+        rb = val.recency_bias
+        if rb is not None:
+            served = val.bias_halflife_served is not None
+            L.append("")
+            tag = ("APPLIED — this station serves recency-weighted bias"
+                   if served else "recommend-only")
+            L.append(f"    RECENCY-BIAS CHECK (does recency-weighting each member's bias "
+                     f"sharpen the verdict? half-life {rb.halflife_days:.0f}d — {tag})")
+            mae_delta = rb.mae_incumbent - rb.mae_candidate
+            if served:
+                # Recency is the served bias here; the audit confirms it still pays.
+                verb = ("CONFIRMED" if rb.recommend
+                        else "WARNING — served but no longer clears the floor")
+                L.append(f"      ⮕ {verb}: the SERVED recency-weighted bias beats the "
+                         f"plain trailing mean — held-out CRPS {rb.crps_candidate:.3f} vs "
+                         f"{rb.crps_incumbent:.3f} ({rb.improvement_pct*100:+.1f}%, "
+                         f"{rb.z:+.1f}σ past noise), bucket-hit "
+                         f"{rb.bucket_hit_candidate*100:.0f}% vs "
+                         f"{rb.bucket_hit_incumbent*100:.0f}%, point MAE "
+                         f"{rb.mae_candidate:.3f} vs {rb.mae_incumbent:.3f} °C "
+                         f"({-mae_delta:+.3f} °C; n={rb.n_paired}). The headline MAE/CRPS/"
+                         f"bucket above already reflect this served correction.")
+            elif rb.recommend:
+                L.append(f"      ⮕ RECOMMEND: recency-weight the member bias. held-out CRPS "
+                         f"{rb.crps_candidate:.3f} vs current {rb.crps_incumbent:.3f} "
+                         f"({rb.improvement_pct*100:+.1f}%, {rb.z:+.1f}σ past noise), "
+                         f"bucket-hit {rb.bucket_hit_candidate*100:.0f}% vs "
+                         f"{rb.bucket_hit_incumbent*100:.0f}%, point MAE "
+                         f"{rb.mae_candidate:.3f} vs {rb.mae_incumbent:.3f} °C "
+                         f"({-mae_delta:+.3f} °C; n={rb.n_paired}). Surface for human review.")
+            else:
+                L.append(f"      no change recommended: recency bias does not beat the served "
+                         f"plain-mean bias on the SERVED distribution past the noise floor "
+                         f"(CRPS {rb.crps_candidate:.3f} vs {rb.crps_incumbent:.3f}, "
+                         f"{rb.z:+.1f}σ; bucket-hit {rb.bucket_hit_candidate*100:.0f}% vs "
+                         f"{rb.bucket_hit_incumbent*100:.0f}%; n={rb.n_paired}).")
+                if mae_delta > 0.01:
+                    L.append(f"        note: point MAE IS lower ({rb.mae_candidate:.3f} vs "
+                             f"{rb.mae_incumbent:.3f} °C, {-mae_delta:+.3f} °C) — the headline °C "
+                             f"verdict sharpens, but the cloud already absorbs that constant "
+                             f"offset so the bucket the market settles on is unchanged.")
+            # Per-attribute split: high and low settle as separate markets, so a
+            # pooled recommend can hide an attribute on which recency does nothing.
+            # When this station SERVES recency (applied to both attributes), an
+            # attribute whose own audit does NOT clear the gate is recency applied
+            # without its own justification — a tighten-to-this-attribute flag.
+            per_attr = [("high", val.recency_bias_high), ("low", val.recency_bias_low)]
+            if any(e is not None for _, e in per_attr):
+                L.append("      per-attribute (each settles separately):")
+                for name, e in per_attr:
+                    if e is None:
+                        L.append(f"        {name}: (too few paired days to score)")
+                        continue
+                    status = "RECOMMEND" if e.recommend else "no edge"
+                    flag = ""
+                    if served and not e.recommend:
+                        flag = "  ⚠ SERVED here without its own justification"
+                    L.append(f"        {name}: {status} — CRPS {e.crps_candidate:.3f} vs "
+                             f"{e.crps_incumbent:.3f} ({e.improvement_pct*100:+.1f}%, "
+                             f"{e.z:+.1f}σ), bucket-hit {e.bucket_hit_candidate*100:.0f}% vs "
+                             f"{e.bucket_hit_incumbent*100:.0f}% (n={e.n_paired}).{flag}")
         cb = val.calibration
         if cb is not None:
             L.append("")
@@ -864,8 +1089,8 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
                      "served distribution honest? — recommend-only)")
             if rh is not None:
                 d = rh.diag
-                L.append(f"      rank histogram (raw {v.ensemble.member_count or 8}-member "
-                         f"panel — Talagrand): {rh.verdict} [{d.shape}], "
+                L.append(f"      rank histogram (raw NWP member panel — Talagrand): "
+                         f"{rh.verdict} [{d.shape}], "
                          f"edge ratio {d.edge_ratio:.2f}, χ² z={d.z:+.1f}, n={d.n}.")
                 L.append(f"        {rh.meaning}.")
             if pc is not None:
@@ -881,6 +1106,42 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
              f"({v.requests_made} sandboxed requests). No values are model-generated.")
     L.extend(_healthcheck_banner())          # read-only monitor status; never moves the verdict
     return "\n".join(L)
+
+
+def _bucket_verdict_json(ev) -> dict | None:
+    """Serialize a BucketVerdictEval for the report. None passes through."""
+    if ev is None:
+        return None
+    return {
+        "hit_rate": ev.hit_rate,
+        "point_hit_rate": ev.point_hit_rate,
+        "signed_bias_buckets": ev.signed_bias,
+        "frac_over": ev.frac_over,
+        "frac_under": ev.frac_under,
+        "mean_edge_hit": ev.mean_edge_hit,
+        "mean_edge_miss": ev.mean_edge_miss,
+        "fragility": ev.fragility,
+        "scored_days": ev.n_scored,
+        "applied": False,
+    }
+
+
+def _recency_eval_json(ev) -> dict | None:
+    """Serialize one RecencyBiasEval (pooled or single-attribute). None passes
+    through. The per-attribute objects use this so a reader can see whether the
+    pooled recommend is carried by one market or both."""
+    if ev is None:
+        return None
+    return {
+        "recommend": ev.recommend,
+        "crps_incumbent": ev.crps_incumbent,
+        "crps_candidate": ev.crps_candidate,
+        "improvement_pct": ev.improvement_pct,
+        "sigma_past_noise": ev.z,
+        "bucket_hit_incumbent": ev.bucket_hit_incumbent,
+        "bucket_hit_candidate": ev.bucket_hit_candidate,
+        "paired_days": ev.n_paired,
+    }
 
 
 def verdict_to_dict(
@@ -940,6 +1201,7 @@ def verdict_to_dict(
         "validation": {
             "test_days": val.test_days,
             "council_mae": {"high": val.council_mae_high, "low": val.council_mae_low},
+            "council_rmse": {"high": val.council_rmse_high, "low": val.council_rmse_low},
             "naive_mae": {"high": val.naive_mae_high, "low": val.naive_mae_low},
             "persistence_mae": {"high": val.persistence_mae_high, "low": val.persistence_mae_low},
             "climatology_mae": {"high": val.climatology_mae_high, "low": val.climatology_mae_low},
@@ -999,6 +1261,58 @@ def verdict_to_dict(
                 "n": val.pit_calibration.n,
                 "applied": False,
             } if val.pit_calibration is not None else None),
+            "coverage_calibration": ({
+                "method": "constant inflation factor on the served residual cloud, "
+                          "scored per attribute (high and low clouds separately, the "
+                          "same objects compare_high/compare_low resample), learned "
+                          "online from realized out-of-sample coverage (split conformal)",
+                "recommend": val.coverage_calibration.recommend,
+                "candidate_factor": val.coverage_calibration.final_factor,
+                "coverage_incumbent": val.coverage_calibration.coverage_incumbent,
+                "coverage_calibrated": val.coverage_calibration.coverage_calibrated,
+                "target": val.coverage_calibration.target,
+                "under_sigma": val.coverage_calibration.under_sigma,
+                "crps_calibrated": val.coverage_calibration.crps_calibrated,
+                "crps_incumbent": val.coverage_calibration.crps_incumbent,
+                "improvement_pct": val.coverage_calibration.improvement_pct,
+                "sigma_past_noise": val.coverage_calibration.z,
+                "scored_days": val.coverage_calibration.n_scored,
+                "applied": False,
+            } if val.coverage_calibration is not None else None),
+            "bucket_verdict": {
+                "method": "modal whole-degree settlement bucket (point verdict dressed "
+                          "with the strictly-earlier residual cloud, rounded half-up) vs "
+                          "the realized bucket, leak-free over the same walk-forward; "
+                          "scored per attribute (high/low are separate markets); "
+                          "measure-only, never moves the served verdict",
+                "high": _bucket_verdict_json(val.bucket_verdict_high),
+                "low": _bucket_verdict_json(val.bucket_verdict_low),
+            },
+            "recency_bias": ({
+                "method": "recency-weight each member's bias with an exponential "
+                          "half-life (vs the served plain training-mean bias), re-run "
+                          "the SAME leak-free blend, score the candidate vs incumbent "
+                          "prediction streams on paired per-day CRPS (SE-gated) AND the "
+                          "whole-degree bucket hit-rate; recommend-only",
+                "halflife_days": val.recency_bias.halflife_days,
+                "recommend": val.recency_bias.recommend,
+                "mae_incumbent": val.recency_bias.mae_incumbent,
+                "mae_candidate": val.recency_bias.mae_candidate,
+                "crps_incumbent": val.recency_bias.crps_incumbent,
+                "crps_candidate": val.recency_bias.crps_candidate,
+                "crps_improvement": val.recency_bias.crps_improvement,
+                "improvement_pct": val.recency_bias.improvement_pct,
+                "sigma_past_noise": val.recency_bias.z,
+                "bucket_hit_incumbent": val.recency_bias.bucket_hit_incumbent,
+                "bucket_hit_candidate": val.recency_bias.bucket_hit_candidate,
+                "paired_days": val.recency_bias.n_paired,
+                "halflife_served": val.bias_halflife_served,
+                "applied": val.bias_halflife_served is not None,
+                "per_attribute": {
+                    "high": _recency_eval_json(val.recency_bias_high),
+                    "low": _recency_eval_json(val.recency_bias_low),
+                },
+            } if val.recency_bias is not None else None),
         },
         "observation": {
             "current": v.observation.current,

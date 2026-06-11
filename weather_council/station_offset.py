@@ -120,6 +120,44 @@ def _doy_in_window(day: str, target: dt.date, window: int) -> bool:
     return min(diff, 366 - diff) <= window
 
 
+def _same_station_offset(
+    sources: Sources,
+    station: Station,
+    target: dt.date,
+    season_window: int,
+    min_season_days: int,
+) -> StationOffset | None:
+    """A zero offset for the case where the market's settlement station IS the
+    council's backtest station. The shift is exactly 0 °C *by identity* (one
+    instrument, one quantity), never a measured cross-station transfer — but we
+    keep the same in-season support floor and report the real overlap vintage so
+    the disclosure stays honest (n same-season days, recency)."""
+    series = sources.fetch_station_daily(station)
+    in_season = sorted(
+        d for d in series
+        if series[d][0] is not None and _doy_in_window(d, target, season_window)
+    )
+    if len(in_season) < min_season_days:
+        return None
+    overlap_end = in_season[-1]
+    try:
+        is_modern = (target - dt.date.fromisoformat(overlap_end)).days <= MODERN_RECENCY_DAYS
+    except ValueError:
+        is_modern = False
+    return StationOffset(
+        settlement_station_id=station.id,
+        settlement_station_name=station.name,
+        settlement_distance_km=0.0,
+        backtest_station_id=station.id,
+        backtest_station_name=station.name,
+        high_mean=0.0, high_median=0.0, high_sd=0.0,
+        n_season=len(in_season), n_all=len(series),
+        season_window_days=season_window,
+        overlap_start=in_season[0], overlap_end=overlap_end,
+        is_modern=is_modern,
+    )
+
+
 def measure_settlement_offset(
     sources: Sources,
     place: Place,
@@ -164,6 +202,20 @@ def measure_settlement_offset(
                                   and best is not None
                                   and s.distance_km < best.distance_km):
             best, best_score = s, score
+
+    # Same-station case. The council may already anchor its backtest on the
+    # market's OWN settlement station (Hong Kong is the canonical case: once the
+    # modern HKO open-data record is overlaid, the council backtests on the Hong
+    # Kong Observatory — exactly what the contract resolves on). The backtest
+    # station's name then matches the settlement name at least as well as any
+    # neighbour, so there is no cross-station transfer to make: the verdict already
+    # lives on the settlement scale and the offset is 0 °C by identity, earned not
+    # assumed. Take this path BEFORE declining for want of a *second* station.
+    back_score = len(_tokens(backtest.name, place_stop) & want)
+    if back_score >= 1 and back_score >= best_score:
+        return _same_station_offset(sources, backtest, target,
+                                    season_window, min_season_days)
+
     if best is None or best_score < 1:
         return None
 

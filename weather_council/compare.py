@@ -117,6 +117,15 @@ class BucketComparison:
     model_prob: float            # empirical P(high settles in this bucket)
     market_yes: float | None     # raw "Yes" price (vig still in it)
     market_prob: float | None    # de-vigged market probability (C6)
+    # Read-only market microstructure for this bucket (see market.MarketBucket).
+    # Captured so C7 can later judge whether a price was real depth or a stale
+    # placeholder; never feeds the model probability. Defaulted for back-compat.
+    market_liquidity: float | None = None   # current resting depth (USDC)
+    market_volume: float | None = None      # cumulative traded notional (USDC)
+    best_bid: float | None = None
+    best_ask: float | None = None
+    last_trade: float | None = None
+    two_sided: bool | None = None           # genuine two-sided quote on this bucket?
 
 
 @dataclass(frozen=True)
@@ -147,6 +156,20 @@ class VerdictMarketComparison:
     settlement_bias_note: str | None # truth-vs-settlement caveat, if measurable
     calibration: Calibration | None  # how trustworthy the model probs are (C7)
     largest_gap: float | None        # max |model_prob − market_prob| over buckets
+    # True when the market settles on the SAME station the council backtests on
+    # (e.g. HK on the Observatory): the verdict already lives on the settlement
+    # scale and the offset above is 0 °C by identity, not a measured cross-station
+    # transfer. Defaulted so non-offset callers/tests construct unchanged.
+    settlement_same_station: bool | None = None
+    # Read-only market microstructure (event totals + a quote-quality read), so a
+    # snapshot records HOW REAL the market it was scored against was. Never feeds
+    # the verdict; defaulted for back-compat.
+    market_volume: float | None = None            # whole-event traded notional (USDC)
+    market_liquidity: float | None = None         # whole-event resting depth (USDC)
+    market_buckets_two_sided: int | None = None   # # buckets with a genuine quote
+    market_buckets_total: int | None = None
+    market_modal_two_sided: bool | None = None    # is the market's modal bucket really quoted?
+    liquidity_note: str | None = None             # plain-language thin-market caveat
 
 
 def compare_high(
@@ -202,6 +225,12 @@ def compare_high(
             model_prob=counts[b.label] / n,
             market_yes=b.yes_price,
             market_prob=devigged.get(b.label),
+            market_liquidity=b.liquidity,
+            market_volume=b.volume,
+            best_bid=b.best_bid,
+            best_ask=b.best_ask,
+            last_trade=b.last_trade,
+            two_sided=b.has_two_sided_quote(),
         )
         for b in market.buckets
     )
@@ -226,6 +255,29 @@ def compare_high(
             + (f" (with {tail} day(s) ≥3°C apart — hot-day clipping)" if tail else "")
             + ". Shift not applied here."
         )
+
+    # Read-only market-quality diagnostic (item 5): how real was the market this
+    # snapshot is being scored against? Surfaces thin/one-sided books and whether
+    # the market's own modal bucket carries a genuine quote — so a "model lost to
+    # the market" result can be read as edge vs. just late-day settlement
+    # certainty. Never alters the model probabilities above.
+    n_two_sided, n_total = market.quote_quality()
+    modal_b = next((b for b in market.buckets if b.label == market_modal), None)
+    modal_two_sided = modal_b.has_two_sided_quote() if modal_b is not None else None
+    liq_note = None
+    if market.volume is not None or market.liquidity is not None:
+        vol_s = f"{market.volume:,.0f}" if market.volume is not None else "?"
+        liq_s = f"{market.liquidity:,.0f}" if market.liquidity is not None else "?"
+        liq_note = (
+            f"market depth: event volume {vol_s} / resting liquidity {liq_s} USDC; "
+            f"{n_two_sided}/{n_total} buckets carry a genuine two-sided quote"
+        )
+        if modal_two_sided is False:
+            liq_note += (
+                "; the market's modal bucket has NO live two-sided quote — its "
+                "price may be a stale placeholder or a near-settled (late-day) "
+                "outcome the lead-time model cannot match"
+            )
 
     return VerdictMarketComparison(
         market_title=market.title,
@@ -254,6 +306,15 @@ def compare_high(
         settlement_bias_note=note,
         calibration=calibration,
         largest_gap=(round(largest_gap, 3) if largest_gap is not None else None),
+        settlement_same_station=(
+            station_offset is not None
+            and station_offset.settlement_station_id == station_offset.backtest_station_id),
+        market_volume=market.volume,
+        market_liquidity=market.liquidity,
+        market_buckets_two_sided=n_two_sided,
+        market_buckets_total=n_total,
+        market_modal_two_sided=modal_two_sided,
+        liquidity_note=liq_note,
     )
 
 
@@ -350,12 +411,19 @@ def comparison_to_dict(c: VerdictMarketComparison) -> dict:
         "settlement_high_c": c.settlement_high_c,
         "settlement_offset_note": c.settlement_offset_note,
         "settlement_offset_modern": c.settlement_offset_modern,
+        "settlement_same_station": c.settlement_same_station,
         "model_modal": c.model_modal,
         "market_modal": c.market_modal,
         "market_overround": c.market_overround,
         "unmatched_fraction": c.unmatched_fraction,
         "largest_gap": c.largest_gap,
         "settlement_bias_note": c.settlement_bias_note,
+        "market_volume": c.market_volume,
+        "market_liquidity": c.market_liquidity,
+        "market_buckets_two_sided": c.market_buckets_two_sided,
+        "market_buckets_total": c.market_buckets_total,
+        "market_modal_two_sided": c.market_modal_two_sided,
+        "liquidity_note": c.liquidity_note,
         "is_edge_validated": bool(cal and cal.is_edge_validated),
         "calibration": (
             {
@@ -372,6 +440,12 @@ def comparison_to_dict(c: VerdictMarketComparison) -> dict:
                 "model_prob": b.model_prob,
                 "market_yes": b.market_yes,
                 "market_prob": b.market_prob,
+                "market_liquidity": b.market_liquidity,
+                "market_volume": b.market_volume,
+                "best_bid": b.best_bid,
+                "best_ask": b.best_ask,
+                "last_trade": b.last_trade,
+                "two_sided": b.two_sided,
             }
             for b in c.buckets
         ],

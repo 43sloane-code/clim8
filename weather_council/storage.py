@@ -105,12 +105,27 @@ def _connect() -> sqlite3.Connection:
     # truth overlays gate on these fields (EGLC by icao, the HKO Observatory by a
     # name token + geography). Without them settlement saw only the stale bulk
     # Meteostat file and never settled. Additive/nullable: never alters a score.
+    # sub_degree persists whether the market settles FINER than its whole-degree
+    # bucket labels (HK Observatory, 0.1°C). Its settlement rule is range-
+    # containment (floor: 28.6°C -> the 28°C bucket), NOT round-half-up, so the
+    # realized-bucket map must know it at settle time. Additive/nullable; legacy
+    # rows are backfilled below from the anchor identity (only the HKO Observatory
+    # settles sub-degree among the basket cities).
     ms_existing = {row[1] for row in conn.execute("PRAGMA table_info(market_snapshots)")}
     ms_added = {"market_volume": "REAL", "market_liquidity": "REAL",
-                "station_icao": "TEXT", "station_name": "TEXT"}
+                "station_icao": "TEXT", "station_name": "TEXT",
+                "sub_degree": "INTEGER"}
     for col, typ in ms_added.items():
         if col not in ms_existing:
             conn.execute(f"ALTER TABLE market_snapshots ADD COLUMN {col} {typ}")
+    if "sub_degree" not in ms_existing:
+        # One-time backfill for rows logged before this column existed: the HK
+        # Observatory (id 45005 / name carrying "Observatory") is the only basket
+        # anchor that settles at 0.1°C; everything else settles whole-degree.
+        conn.execute(
+            "UPDATE market_snapshots SET sub_degree = "
+            "CASE WHEN station_id = '45005' OR station_name LIKE '%Observatory%' "
+            "THEN 1 ELSE 0 END")
     # Tracked-forecaster ledger: one row per (source, place, target_date) logging
     # a NON-council forecaster's predicted high/low ALONGSIDE the council's own
     # forecast for the identical day, so the two can be graded head-to-head once
@@ -305,15 +320,16 @@ def log_market_snapshot(v: Verdict, comparison) -> None:
             "INSERT OR REPLACE INTO market_snapshots "
             "(issued_at, place, target_date, market_title, grain, buckets_json, "
             " truth_kind, station_id, station_icao, station_name, fc_lat, fc_lon, "
-            " market_volume, market_liquidity) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " market_volume, market_liquidity, sub_degree) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (dt.datetime.now().isoformat(timespec="seconds"),
              v.place.label(), v.target, comparison.market_title, comparison.grain,
              json.dumps(buckets), ts.get("kind"), station.get("id") or None,
              station.get("icao") or None, station.get("name") or None,
              v.place.latitude, v.place.longitude,
              getattr(comparison, "market_volume", None),
-             getattr(comparison, "market_liquidity", None)),
+             getattr(comparison, "market_liquidity", None),
+             int(bool(getattr(comparison, "settles_sub_degree", False)))),
         )
     conn.close()
 
@@ -349,7 +365,7 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
     rows = conn.execute(
         "SELECT issued_at, place, target_date, grain, buckets_json, "
         "       truth_kind, station_id, station_icao, station_name, "
-        "       fc_lat, fc_lon FROM market_snapshots "
+        "       fc_lat, fc_lon, sub_degree FROM market_snapshots "
         "WHERE realized_label IS NULL AND target_date <= ?",
         (cutoff,),
     ).fetchall()
@@ -358,7 +374,7 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
     report: list[str] = []
     for (issued_at, place_label, target, grain, buckets_json,
          truth_kind, station_id, station_icao, station_name,
-         fc_lat, fc_lon) in rows:
+         fc_lat, fc_lon, sub_degree) in rows:
         actual = None
         if truth_kind == "station" and station_id:
             series = station_cache.get(station_id)
@@ -387,7 +403,10 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
             continue                       # anchor truth not yet available — retry later
         realized_high = actual[0]
         buckets = json.loads(buckets_json)
-        reading = _native_reading_int(realized_high, grain)
+        # Sub-degree markets (HK Observatory, 0.1°C) settle by range-containment
+        # (floor: 28.6°C -> 28°C bucket), not round-half-up. _native_reading_int
+        # applies the right rule given the persisted sub_degree flag.
+        reading = _native_reading_int(realized_high, grain, bool(sub_degree))
         label = _bucket_for_reading(buckets, reading)
         if label is None:
             continue                       # realized high outside the ladder — leave open
