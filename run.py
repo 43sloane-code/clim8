@@ -36,6 +36,7 @@ from weather_council.market import MarketData
 from weather_council.security import RateLimitError, SecurityError
 from weather_council.sources import Sources, place_today
 from weather_council.tc_gate import tc_halt
+from weather_council.intraday import intraday_floor
 from weather_council.station_offset import measure_settlement_offset
 from weather_council.storage import (fetch_settled_snapshots, log_market_snapshot,
                                      log_verdict, settle_market_snapshots, verify)
@@ -1283,6 +1284,65 @@ def to_json(
                         cross_reference), indent=2)
 
 
+def _intraday_verdict_bucket(f, v: Verdict) -> int | None:
+    """The whole-degree bucket the verdict's own high settles into, under the
+    SAME quantizer the intraday floor uses — so the two are directly comparable."""
+    from weather_council.market import _native_reading_int
+    if v.high is None:
+        return None
+    return _native_reading_int(v.high, "C", f.sub_degree)
+
+
+def _intraday_lines(f, v: Verdict) -> list[str]:
+    """Human-readable read-only block for the intraday dead-bucket annotation."""
+    L = ["", "  INTRADAY DEAD-BUCKET ELIMINATION (read-only; today only)"]
+    if f.kind == "not_basket":
+        L.append(f"    {f.city} is not a configured settlement city — skipped.")
+        return L
+    if f.kind == "not_today":
+        L.append(f"    {f.note}.")
+        return L
+    if f.kind == "unverified":
+        L.append("    UNVERIFIED — live settlement feed gave no usable reading; "
+                 "NO buckets eliminated.")
+        if f.note:
+            L.append(f"    reason: {f.note}")
+        return L
+    # kind == "floor"
+    L.append(f"    running max so far: {f.running_max_c:.1f}°C "
+             f"({f.n_obs} obs, {f.source}"
+             + (f", {f.record_time}" if f.record_time else "") + ")")
+    L.append(f"    settlement rule: {f.label}")
+    L.append(f"    => the {f.floor_bucket}°C bucket is already GUARANTEED reached; "
+             f"every bucket below {f.floor_bucket}°C is mechanically impossible.")
+    vb = _intraday_verdict_bucket(f, v)
+    if vb is not None and f.is_dead(vb):
+        L.append(f"    !! the verdict's {vb}°C bucket is ALREADY DEAD — observed "
+                 f"reality has overtaken the central pick (verdict not changed; "
+                 f"investigate).")
+    elif vb is not None:
+        L.append(f"    verdict bucket {vb}°C is still live (consistent).")
+    return L
+
+
+def _intraday_to_dict(f, v: Verdict) -> dict:
+    vb = _intraday_verdict_bucket(f, v)
+    return {
+        "kind": f.kind,
+        "city": f.city,
+        "target": f.target,
+        "settlement_rule": f.label,
+        "running_max_c": f.running_max_c,
+        "record_time": f.record_time,
+        "source": f.source,
+        "n_obs": f.n_obs,
+        "floor_bucket": f.floor_bucket,
+        "verdict_bucket": vb,
+        "verdict_bucket_dead": (vb is not None and f.is_dead(vb)),
+        "note": f.note,
+    }
+
+
 def _build_comparison(
     sources: Sources, v: Verdict, place, target
 ) -> tuple[VerdictMarketComparison | None, str | None]:
@@ -1366,6 +1426,11 @@ def main(argv=None) -> int:
                     help="settle logged market snapshots against the anchor station "
                          "and print the C7 council-vs-market calibration verdict "
                          "(read-only, recommend-only)")
+    ap.add_argument("--intraday", action="store_true",
+                    help="annotate which whole-degree buckets today's observed "
+                         "running max has already ruled out, read off the live "
+                         "settlement instrument (HKO / EGLC). Read-only, today only; "
+                         "never moves the verdict.")
     ap.add_argument("--dump-stream", metavar="DIR",
                     help="write the leak-free per-day walk-forward stream "
                          "({city}_high.csv / {city}_low.csv, columns "
@@ -1466,9 +1531,22 @@ def main(argv=None) -> int:
         # nearby airport as a measured cross-reference to the anchor.
         cross_reference = _anchor_cross_reference(sources, place, target, verdict)
 
+        # Read-only intraday dead-bucket annotation (today only); never mutates
+        # the verdict — observed reality only ever RULES OUT low buckets.
+        intraday = None
+        if args.intraday:
+            try:
+                intraday = intraday_floor(place, target, sources=sources)
+            except Exception as exc:
+                print(f"intraday annotation errored (verdict unaffected): {exc}",
+                      file=sys.stderr)
+
         if args.json:
-            print(to_json(verdict, comparison, market_note, settlement_ref,
-                          cross_reference))
+            d = verdict_to_dict(verdict, comparison, market_note, settlement_ref,
+                                cross_reference)
+            if intraday is not None:
+                d["intraday"] = _intraday_to_dict(intraday, verdict)
+            print(json.dumps(d, indent=2))
         else:
             print(render(verdict, comparison, settlement_ref, cross_reference,
                          c7_validated=c7_validated))
@@ -1478,6 +1556,8 @@ def main(argv=None) -> int:
                 else:
                     print("\n  (no open Polymarket market matched this city/day — "
                           "nothing to compare)")
+            if intraday is not None:
+                print("\n".join(_intraday_lines(intraday, verdict)))
         # A blind TC gate is reported loudly alongside the verdict so the
         # operator knows the HK risk control could not confirm safety this run.
         if tc_unverified_note:
