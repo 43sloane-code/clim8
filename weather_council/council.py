@@ -370,6 +370,13 @@ class Validation:
     # depends on the point's fraction. Measure-only; never feeds the live verdict.
     wf_high: list[tuple[str, float, float]] = field(default_factory=list)
     wf_low: list[tuple[str, float, float]] = field(default_factory=list)
+    # Per-day leak-free CRPS stream: ordered (iso_date, attr, crps_council_day,
+    # crps_climatology_day) tuples, one per held-out day per attribute. The mean
+    # of crps_council_day over all entries reproduces crps_council exactly; the
+    # per-day grain lets an A/B split the held-out window into DISJOINT folds and
+    # test sign-stability of a config change below the run-to-run noise floor
+    # (ledger candidate 47). Measure-only; never feeds the live verdict.
+    wf_crps: list[tuple[str, str, float, float]] = field(default_factory=list)
     # Probabilistic skill, scored on the SAME held-out days with a strictly
     # proper rule (CRPS, °C) so the predictive distribution the council sells as
     # bucket probabilities is itself verified — not just its point error. Each
@@ -1734,6 +1741,7 @@ class Council:
         # per-day stream for an external bucket-calibration backtest. Measure-only.
         wf_high: list[tuple[str, float, float]] = []
         wf_low: list[tuple[str, float, float]] = []
+        wf_crps: list[tuple[str, str, float, float]] = []
         # Per-attribute ordered (incumbent_point, candidate_point, observed) triples
         # for the recency-weighted-bias evaluation. The candidate re-runs the SAME
         # leak-free blend with an exponential recency half-life on each member's
@@ -1814,6 +1822,7 @@ class Council:
                     crps_c_sum += step["crps_c"]
                     crps_clim_sum += step["crps_cl"]
                     crps_count += 1
+                    wf_crps.append((d, attr, step["crps_c"], step["crps_cl"]))
                     cover_hits += 1 if step["covered"] else 0
                     width_sum += step["width"]
                     cover_count += 1
@@ -1875,6 +1884,7 @@ class Council:
             residuals_low=resid_l,
             wf_high=wf_high,
             wf_low=wf_low,
+            wf_crps=wf_crps,
             crps_council=crps_c,
             crps_climatology=crps_clim,
             crps_skill=crps_skill,

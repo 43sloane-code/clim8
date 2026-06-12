@@ -31,6 +31,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import math
 import pickle
 import sys
 from pathlib import Path
@@ -99,6 +100,79 @@ def _validation(sources: Sources, place, target: dt.date, window: int, arm: str)
     return Council(sources).deliberate(place, target, window).validation
 
 
+# --- disjoint-fold sign-stability gate --------------------------------------
+#
+# A single member's true effect (<=0.01 CRPS) sits BELOW the run-to-run noise
+# floor, so an aggregate delta can be an artifact of which days fall in the
+# window. Splitting the held-out window into >=2 DISJOINT folds and requiring the
+# candidate to beat the incumbent ON EVERY FOLD (CRPS and whole-degree bucket
+# hit) is the sign-stability test that separates a real edge from a lucky draw.
+# (This is what closed candidate 47: AIFS-for-HK helped in aggregate but a w60
+# disjoint fold FLIPPED sign.) Uses Validation.wf_crps (per-day CRPS) and
+# Validation.wf_high (per-day point/realized).
+
+
+def _round_half_up(x: float) -> int:
+    return math.floor(x + 0.5)
+
+
+def _fold_dates(dates: list[str], n_folds: int) -> list[set]:
+    uniq = sorted(set(dates))
+    k = len(uniq)
+    return [set(uniq[(i * k) // n_folds:((i + 1) * k) // n_folds])
+            for i in range(n_folds)]
+
+
+def _fold_crps(wf_crps, fold: set) -> float | None:
+    vals = [cc for (d, _attr, cc, _cl) in wf_crps if d in fold]
+    return sum(vals) / len(vals) if vals else None
+
+
+def _fold_bucket_hit(wf_high, fold: set) -> float | None:
+    hit = tot = 0
+    for d, point, realized in wf_high:
+        if d not in fold or point is None or realized is None:
+            continue
+        tot += 1
+        hit += 1 if _round_half_up(point) == _round_half_up(realized) else 0
+    return (hit / tot) if tot else None
+
+
+def _print_fold_gate(va, vb, n_folds: int) -> bool:
+    """Print the per-fold table; return True iff candidate B is sign-stable
+    (CRPS <= A and bucket hit >= A) on every fold."""
+    dates = [d for (d, _a, _c, _cl) in va.wf_crps]
+    folds = _fold_dates(dates, n_folds)
+    print("-" * 70)
+    print(f"  DISJOINT-FOLD SIGN-STABILITY GATE ({n_folds} folds)")
+    print(f"  {'fold':5s} {'days':>5s} {'A CRPS':>8s} {'B CRPS':>8s} "
+          f"{'dCRPS':>8s} {'A hit':>6s} {'B hit':>6s}  verdict")
+    all_pass = True
+    for i, fold in enumerate(folds):
+        ca, cb = _fold_crps(va.wf_crps, fold), _fold_crps(vb.wf_crps, fold)
+        ra, rb = _fold_bucket_hit(va.wf_high, fold), _fold_bucket_hit(vb.wf_high, fold)
+        crps_ok = (ca is not None and cb is not None and cb <= ca + 1e-12)
+        hit_ok = (ra is not None and rb is not None and rb >= ra - 1e-12)
+        ok = crps_ok and hit_ok
+        all_pass = all_pass and ok
+        d = None if (ca is None or cb is None) else cb - ca
+        print(f"  {i:<5d} {len(fold):>5d} "
+              f"{('None' if ca is None else f'{ca:.4f}'):>8s} "
+              f"{('None' if cb is None else f'{cb:.4f}'):>8s} "
+              f"{('None' if d is None else f'{d:+.4f}'):>8s} "
+              f"{('None' if ra is None else f'{ra:.2f}'):>6s} "
+              f"{('None' if rb is None else f'{rb:.2f}'):>6s}  "
+              f"{'PASS' if ok else 'FAIL'}")
+    print("-" * 70)
+    if all_pass:
+        print("  -> SIGN-STABLE on every fold: a real per-fold edge, not a window "
+              "artifact.")
+    else:
+        print("  -> a fold FLIPPED sign: the aggregate delta is a window artifact; "
+              "CLOSE the candidate (do not relitigate).")
+    return all_pass
+
+
 def _row(v) -> dict:
     return {
         "crps": v.crps_council, "crps_skill": v.crps_skill, "crps_n": v.crps_n,
@@ -122,6 +196,10 @@ def main() -> int:
                     help="cache file (default reports/ab_cache_<city>_<window>.pkl)")
     ap.add_argument("--refresh", action="store_true",
                     help="ignore any existing cache and re-record the frozen snapshot")
+    ap.add_argument("--folds", type=int, default=0,
+                    help="also run the disjoint-fold sign-stability gate with this "
+                         "many folds (>=2). A below-noise-floor aggregate gain is "
+                         "only believed if it holds on EVERY disjoint fold.")
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
@@ -153,9 +231,10 @@ def main() -> int:
               file=sys.stderr)
 
     # Controlled comparison on byte-identical data.
-    a = _row(_validation(sources, place, target, args.window, "A"))
-    b = _row(_validation(sources, place, target, args.window, "B"))
-    a2 = _row(_validation(sources, place, target, args.window, "A"))
+    va = _validation(sources, place, target, args.window, "A")
+    vb = _validation(sources, place, target, args.window, "B")
+    va2 = _validation(sources, place, target, args.window, "A")
+    a, b, a2 = _row(va), _row(vb), _row(va2)
 
     det_ok = (a["crps"] == a2["crps"] and a["mae_sum"] == a2["mae_sum"])
 
@@ -192,6 +271,9 @@ def main() -> int:
             print(f"  -> candidate WORSENS CRPS by {dc:.3f} on frozen data — do NOT ship.")
         else:
             print(f"  -> candidate is within ±0.003 CRPS — no demonstrable edge; abstain.")
+
+    if det_ok and args.folds and args.folds >= 2:
+        _print_fold_gate(va, vb, args.folds)
     return 0
 
 
