@@ -72,6 +72,13 @@ ALLOWED_HOSTS = frozenset({
     # the prior day within ~a day — weeks fresher than the monthly open-data
     # climate API above — so it supplies the most recent settled days. Read-only.
     "www.hko.gov.hk",
+    # Japan Meteorological Agency `bosai` typhoon feed (www.jma.go.jp): keyless,
+    # HTTPS, JSON. The same machine-readable active-TC list and per-storm forecast
+    # tracks that drive the official JMA typhoon site. Read-only, consumed solely
+    # by the tropical-cyclone halt gate (weather_council/tc_gate.py) to ABSTAIN on
+    # the Hong Kong verdict when a TC's 5-day forecast cone threatens HK — a risk
+    # control, never a forecast input. No funds or writes ever touch this.
+    "www.jma.go.jp",
     # Weatherbit daily forecast API: a non-Open-Meteo forecaster. It exposes NO
     # free archive of its PAST forecasts, so — unlike the council members — its
     # skill cannot be backtested instantly; it is added as a RECOMMEND-ONLY

@@ -35,6 +35,7 @@ from weather_council.convergence import report_lines as convergence_report_lines
 from weather_council.market import MarketData
 from weather_council.security import RateLimitError, SecurityError
 from weather_council.sources import Sources, place_today
+from weather_council.tc_gate import tc_halt
 from weather_council.station_offset import measure_settlement_offset
 from weather_council.storage import (fetch_settled_snapshots, log_market_snapshot,
                                      log_verdict, settle_market_snapshots, verify)
@@ -1401,6 +1402,39 @@ def main(argv=None) -> int:
         # forecast feed actually carries for that city (e.g. Hong Kong is already
         # "tomorrow" relative to a UTC-1 host). See sources.place_today.
         target = place_today(place) + dt.timedelta(days=args.lead)
+
+        # Tropical-cyclone halt gate (HK only; no-op elsewhere). A risk control,
+        # checked BEFORE verdict assembly: when a named TC's 5-day forecast cone
+        # threatens Hong Kong the harness refuses a bucket rather than serve a
+        # falsely confident one. A feed/parse failure is surfaced loudly and
+        # never silently treated as all-clear (see weather_council/tc_gate.py).
+        tc_unverified_note = None
+        try:
+            tc = tc_halt(place)
+        except Exception as exc:  # defensive: the gate must never crash a verdict
+            tc = None
+            tc_unverified_note = f"TC GATE UNVERIFIED — gate errored: {exc}"
+        if tc is not None and tc.is_halt:
+            km = f"{tc.closest_km:.0f} km" if tc.closest_km is not None else "n/a"
+            hrs = f"+{tc.within_hours}h" if tc.within_hours is not None else "n/a"
+            line = (f"VERDICT: ABSTAIN — TC {tc.name} inside 5-day cone "
+                    f"({tc.source}, asof {tc.asof_utc}); closest approach "
+                    f"{km} at {hrs}")
+            if args.json:
+                print(json.dumps({"city": place.label(), "target": str(target),
+                                  "verdict": "ABSTAIN", "reason": "tc_halt",
+                                  "tc": {"name": tc.name, "source": tc.source,
+                                         "asof_utc": tc.asof_utc,
+                                         "closest_km": tc.closest_km,
+                                         "within_hours": tc.within_hours}},
+                                 indent=2))
+            else:
+                print(line)
+            return 5
+        if tc is not None and tc.is_unverified:
+            tc_unverified_note = (f"TC GATE UNVERIFIED — could not confirm Hong "
+                                  f"Kong is clear of tropical cyclones: {tc.name}")
+
         verdict = Council(sources).deliberate(place, target, args.window)
         log_verdict(verdict)
 
@@ -1444,6 +1478,12 @@ def main(argv=None) -> int:
                 else:
                     print("\n  (no open Polymarket market matched this city/day — "
                           "nothing to compare)")
+        # A blind TC gate is reported loudly alongside the verdict so the
+        # operator knows the HK risk control could not confirm safety this run.
+        if tc_unverified_note:
+            banner = "!" * 60
+            print(f"\n{banner}\n  {tc_unverified_note}\n{banner}",
+                  file=sys.stderr)
         return 0
     except RateLimitError as exc:
         print(f"upstream rate-limited (transient — retry shortly): {exc}",
