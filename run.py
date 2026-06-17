@@ -1687,16 +1687,21 @@ def main(argv=None) -> int:
         # Read-only intraday dead-bucket annotation (today only); never mutates
         # the verdict — observed reality only ever RULES OUT low buckets.
         intraday = ceiling = None
+        # On the settlement day (lead 0) the intraday running max is the trustworthy,
+        # backtest-immune signal, so compute the ceiling automatically — the BUCKET
+        # CALL auto-upgrades to the high-conviction intraday bucket as the peak nears,
+        # even without --intraday. The verbose intraday blocks stay opt-in (--intraday).
+        if args.intraday or args.lead == 0:
+            try:
+                ceiling = intraday_ceiling(place, target, sources=sources)
+            except Exception as exc:
+                print(f"intraday-ceiling errored (verdict unaffected): {exc}",
+                      file=sys.stderr)
         if args.intraday:
             try:
                 intraday = intraday_floor(place, target, sources=sources)
             except Exception as exc:
                 print(f"intraday annotation errored (verdict unaffected): {exc}",
-                      file=sys.stderr)
-            try:
-                ceiling = intraday_ceiling(place, target, sources=sources)
-            except Exception as exc:
-                print(f"intraday-ceiling errored (verdict unaffected): {exc}",
                       file=sys.stderr)
 
         if args.json:
@@ -1719,7 +1724,7 @@ def main(argv=None) -> int:
                           "nothing to compare)")
             if intraday is not None:
                 print("\n".join(_intraday_lines(intraday, verdict)))
-            if ceiling is not None:
+            if args.intraday and ceiling is not None:
                 print("\n".join(_ceiling_lines(ceiling)))
         # A blind TC gate is reported loudly alongside the verdict so the
         # operator knows the HK risk control could not confirm safety this run.
