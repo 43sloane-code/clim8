@@ -37,7 +37,7 @@ import sqlite3
 import sys
 
 from weather_council.market import _native_reading_int
-from weather_council.storage import (DB_PATH, _bucket_for_reading,
+from weather_council.storage import (_bucket_for_reading, _connect,
                                       backfill_pm_resolutions)
 
 
@@ -73,7 +73,7 @@ def main() -> int:
         for line in backfill_pm_resolutions():
             print("  backfilled:", line, file=sys.stderr)
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()        # guarantees the schema exists (fresh checkout -> empty, not a crash)
     rows = _rows(conn, args.since)
     if not rows:
         print("no settled snapshots with an authoritative resolution yet "
