@@ -618,10 +618,68 @@ def _healthcheck_banner(today: dt.date | None = None,
     return L
 
 
+def _bucket_call(v: Verdict, ceiling=None) -> dict:
+    """The decision-relevant answer: which whole-degree bucket the market settles on,
+    and the conviction IN THAT BUCKET (its own probability) — not the ±2°C point
+    reliability that `Confidence` reports. Uses the intraday lever when it is sharpened
+    and confident (same-day, post-peak — London ~89–99%), else the day-ahead bucket
+    distribution (the modal of the residual cloud resampled through the settlement
+    quantizer). So a day-ahead coin-flip honestly reads LOW, not HIGH."""
+    from weather_council.market import _native_reading_int
+    sub = "hong kong" in v.place.label().lower()
+    rule = "floor / 0.1°C" if sub else "round-half-up / whole °C"
+    resid = (getattr(v.validation, "residuals_high", None) if v.validation else None) or []
+    da_bucket = _native_reading_int(v.high, "C", sub)
+    da_prob = None
+    if len(resid) >= 12:
+        cnt: dict[int, int] = {}
+        for e in resid:
+            b = _native_reading_int(v.high + e, "C", sub)
+            cnt[b] = cnt.get(b, 0) + 1
+        da_bucket = max(cnt, key=cnt.get)          # modal of the settlement-bucket pmf
+        da_prob = cnt[da_bucket] / len(resid)
+    use_intra = (ceiling is not None and getattr(ceiling, "is_sharpened", False)
+                 and ceiling.modal_prob is not None and ceiling.modal_prob >= 0.70)
+    if use_intra:
+        bucket, prob = ceiling.modal_bucket, ceiling.modal_prob
+        source = (f"intraday — running max {ceiling.running_max_c:.1f}°C by "
+                  f"{ceiling.hour:02d}:00, σ collapsed near the peak")
+    else:
+        bucket, prob = da_bucket, da_prob
+        source = "day-ahead distribution"
+    tier = ("HIGH" if (prob or 0) >= 0.70 else
+            "MODERATE" if (prob or 0) >= 0.50 else "LOW")
+    return {"bucket": bucket, "prob": prob, "tier": tier, "source": source,
+            "rule": rule, "used_intraday": use_intra,
+            "day_ahead_bucket": da_bucket, "day_ahead_prob": da_prob}
+
+
+def _bucket_call_lines(v: Verdict, ceiling=None) -> list[str]:
+    c = _bucket_call(v, ceiling)
+    L = ["", f"  BUCKET CALL — the {c['rule']} bucket the market settles on"]
+    if c["prob"] is None:
+        L.append(f"    => {c['bucket']}°C  (conviction unavailable — too little "
+                 f"held-out history)")
+        return L
+    L.append(f"    => {c['bucket']}°C  —  {c['tier']} conviction {c['prob']*100:.0f}%   "
+             f"[{c['source']}]")
+    if not c["used_intraday"] and c["tier"] == "LOW":
+        hk = "hong kong" in v.place.label().lower()
+        if hk:
+            L.append("    day-ahead HK bucket is information-limited (σ ≈ bucket width, "
+                     "floor rule) — no hourly settlement record yet, so no intraday "
+                     "sharpening; treat as a distribution, not a confident call")
+        else:
+            L.append("    day-ahead bucket is information-limited (σ ≈ bucket width) — a "
+                     "confident single-bucket call comes intraday as the peak nears "
+                     "(run with --intraday on the settlement day)")
+    return L
+
+
 def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
            settlement_ref: dict | None = None,
            cross_reference: dict | None = None,
-           c7_validated: bool = False) -> str:
+           c7_validated: bool = False, ceiling=None) -> str:
     L = []
     L.append(f"COUNCIL VERDICT  —  {v.place.label()}  ({v.target})")
     L.append("=" * 64)
@@ -637,6 +695,7 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
     if ts.get("kind") == "station":
         L.append(f"    anchored on: {ts.get('label','')}")
     L.append(f"    of: {v.target_basis}")
+    L.extend(_bucket_call_lines(v, ceiling))
     cd = v.confidence_detail
     hr = cd.get("hit_rate_within_2c")
     hr_s = f"{hr*100:.0f}% held-out hits -> {cd.get('backtest_tier','?')}" if hr is not None \
@@ -656,7 +715,7 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
     eff_s = (f"effective σ {eff:.1f} °C [{', '.join(parts)}] "
              f"({'routine, no downgrade' if pen == 0 else f'elevated, -{pen} tier'})"
              ) if eff is not None else "no dispersion data"
-    L.append(f"  Confidence: {v.confidence.upper()}")
+    L.append(f"  Point reliability (±2°C, NOT the bucket): {v.confidence.upper()}")
     L.append(f"    earned base : {hr_s}")
     L.append(f"    today's risk: {eff_s}")
     if cd.get("seasonal_downgrade"):
@@ -1598,10 +1657,11 @@ def main(argv=None) -> int:
                 d["intraday"] = _intraday_to_dict(intraday, verdict)
             if ceiling is not None:
                 d["intraday_ceiling"] = _ceiling_to_dict(ceiling)
+            d["bucket_call"] = _bucket_call(verdict, ceiling)
             print(json.dumps(d, indent=2))
         else:
             print(render(verdict, comparison, settlement_ref, cross_reference,
-                         c7_validated=c7_validated))
+                         c7_validated=c7_validated, ceiling=ceiling))
             if args.market and comparison is None:
                 if market_note:
                     print("\n  MARKET COMPARISON (withheld)\n    " + market_note)
