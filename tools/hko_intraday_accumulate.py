@@ -30,7 +30,7 @@ from pathlib import Path
 
 from weather_council.sources import Sources
 
-LEDGER = Path(__file__).resolve().parent.parent / "reports" / "hko_intraday.csv"
+LEDGER = Path(__file__).resolve().parent.parent / "data" / "hko_intraday.csv"
 _FIELDS = ("date", "hour", "temp_c", "record_time", "logged_at")
 
 
