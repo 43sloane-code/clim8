@@ -15,8 +15,8 @@ import statistics
 import unittest
 
 from weather_council.recency_bias import (
-    recency_weighted_bias, evaluate, RECENCY_HALFLIFE_DAYS,
-    MIN_PAIRED, Z_THRESHOLD, _self_test,
+    recency_weighted_bias, evaluate, MIN_PAIRED,
+    Z_THRESHOLD, _self_test,
 )
 
 

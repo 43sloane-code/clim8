@@ -468,11 +468,11 @@ def _self_test() -> None:
     assert analog_shrink_eval(thin, weight_power=2) is None
 
     print("analog_shrink self-test PASSED")
-    print(f"  estimator    : pooling cut member bias-MSE (mean λ<0.6 shared/noisy, >0.85 separated)")
-    print(f"  gate logic   : _decide fires iff improvement>=floor AND bootstrap CI>0")
+    print("  estimator    : pooling cut member bias-MSE (mean λ<0.6 shared/noisy, >0.85 separated)")
+    print("  gate logic   : _decide fires iff improvement>=floor AND bootstrap CI>0")
     print(f"  blend verdict: {ev.summary()}")
-    print(f"                 -> the inverse-variance blend already damps per-member bias noise;")
-    print(f"                    member-level shrinkage does not survive the blend (HOLD).")
+    print("                 -> the inverse-variance blend already damps per-member bias noise;")
+    print("                    member-level shrinkage does not survive the blend (HOLD).")
 
 
 if __name__ == "__main__":

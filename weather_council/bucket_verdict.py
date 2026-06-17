@@ -55,7 +55,6 @@ __all__ = [
     'BucketVerdictEval', 'bucket_verdict_eval', 'bucket_verdict_eval_grouped',
 ]
 
-import statistics
 from dataclasses import dataclass
 
 from .sources import _round_half_up

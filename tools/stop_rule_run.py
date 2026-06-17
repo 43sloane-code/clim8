@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from weather_council.stop_rule import (                                      # noqa: E402
-    load_config, loop_state, consecutive_negative_streak, classify_verdict,
+    load_config, loop_state, classify_verdict,
     reaudit_falsified, format_state,
 )
 

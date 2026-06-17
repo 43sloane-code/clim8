@@ -5,18 +5,11 @@ Stdlib unittest only. Run with:
 """
 from __future__ import annotations
 
-import datetime as dt
-import math
 import random
-import statistics as st
 import unittest
 
-from weather_council import scoring
-from weather_council.scoring import crps_sample, crps_gaussian, interval_coverage, quantile, pit
-from weather_council.compare import residual_calibration, compare_high, MIN_RESIDUALS
+from weather_council.compare import compare_high
 from weather_council.market import WeatherMarket, MarketBucket
-from weather_council.agents import Vote, MemberSpec, Skill
-from weather_council.council import Council
 
 
 class TestSubDegreeSettlementRendering(unittest.TestCase):

@@ -121,7 +121,7 @@ class TestDecompositionOrthogonality(unittest.TestCase):
 
 class TestNormalisedRank(unittest.TestCase):
     def test_rank_is_in_unit_interval_and_uses_strict_below(self):
-        rng = random.Random(0)
+        random.Random(0)
         # obs above all 4 members: rank=4, value=(4+V)/5 in [0.8,1.0).
         v = _normalised_rank([0.0, 1.0, 2.0, 3.0], 9.0, random.Random(0))
         self.assertTrue(0.8 <= v < 1.0)

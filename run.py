@@ -310,23 +310,23 @@ def _market_lines(c: VerdictMarketComparison) -> list[str]:
         # No cross-station transfer: the market settles on the SAME station the
         # council backtests on, so the verdict already lives on the settlement
         # scale and the offset is 0 °C by identity (one instrument), not assumed.
-        L.append(f"    scale    : settles 0.1° on the SAME station the council backtests on; "
-                 f"the verdict is already on the settlement scale, so the offset is 0 °C by "
-                 f"identity (one instrument) — no cross-station transfer is made.")
+        L.append("    scale    : settles 0.1° on the SAME station the council backtests on; "
+                 "the verdict is already on the settlement scale, so the offset is 0 °C by "
+                 "identity (one instrument) — no cross-station transfer is made.")
         if c.settlement_offset_note:
             L.append(f"               {c.settlement_offset_note}")
     elif c.settles_sub_degree and c.settlement_offset_c is not None:
-        L.append(f"    transfer : settles sub-degree on a different station than the backtest; "
-                 f"verdict moved onto that scale by a measured offset.")
+        L.append("    transfer : settles sub-degree on a different station than the backtest; "
+                 "verdict moved onto that scale by a measured offset.")
         if c.settlement_offset_note:
             L.append(f"               {c.settlement_offset_note}")
         L.append(f"               settlement-scale high {c.settlement_high_c:.2f} °C "
                  f"(verdict {c.verdict_high_c:.1f} {c.settlement_offset_c:+.2f} offset)")
         if stale_transfer:
-            L.append(f"               ⚠ STALE TRANSFER: this offset is climatological, not live — "
-                     f"the settlement and backtest stations may have diverged since the overlap "
-                     f"ended, so the settlement-scale number above is unreliable and no model "
-                     f"edge over the market is asserted (see below).")
+            L.append("               ⚠ STALE TRANSFER: this offset is climatological, not live — "
+                     "the settlement and backtest stations may have diverged since the overlap "
+                     "ended, so the settlement-scale number above is unreliable and no model "
+                     "edge over the market is asserted (see below).")
     # How the verdict settles depends on the record's GRAIN. A sub-degree record
     # (Hong Kong on the HKO Observatory, 0.1 °C) keeps the tenths — 30.7 °C settles
     # as 30.7 °C, NOT a whole-degree "31". Only whole-degree airport-METAR records
@@ -508,8 +508,8 @@ def _anchor_cross_reference_lines(ref: dict) -> list[str]:
     L = [f"  ANCHOR & CROSS-REFERENCE — anchored on {anchor_disp} [user-pinned]"]
     L.append(f"    anchor   : {ref['note']}")
     if ref.get("data_source") == "hko_opendata":
-        L.append(f"    feed     : Hong Kong Observatory open-data "
-                 f"(data.weather.gov.hk) — the live settlement record")
+        L.append("    feed     : Hong Kong Observatory open-data "
+                 "(data.weather.gov.hk) — the live settlement record")
     if ref.get("error"):
         L.append(f"    x-ref    : cross-reference unavailable this run "
                  f"({ref['error']}); the verdict still stands on the {anchor} anchor.")
@@ -950,8 +950,8 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
             L.append("")
             L.append("    SELF-IMPROVEMENT CHECK (recommend-only — never auto-applied)")
             if cb.recommend:
-                L.append(f"      ⮕ RECOMMEND: scale the predictive spread by per-day "
-                         f"member dispersion (conditional distribution).")
+                L.append("      ⮕ RECOMMEND: scale the predictive spread by per-day "
+                         "member dispersion (conditional distribution).")
                 L.append(f"        held-out CRPS {cb.crps_conditional:.3f} vs current "
                          f"{cb.crps_incumbent:.3f} ({cb.improvement_pct*100:+.1f}%, "
                          f"{cb.z:+.1f}σ past noise, disp↔|err| r={cb.disp_corr:+.2f}, "

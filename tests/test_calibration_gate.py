@@ -25,8 +25,7 @@ import unittest
 
 from weather_council.calibration_gate import (
     chisq_sf, pit_histogram, pit_flatness_test, consistency_bars,
-    log_gaps, calibration_tier, SMALL_N, MAX_GAP_DAYS, DEFAULT_BINS,
-    _self_test,
+    log_gaps, calibration_tier, MAX_GAP_DAYS, DEFAULT_BINS, _self_test,
 )
 from weather_council.scoring import pit
 from weather_council.bucket_contract import daily_contract

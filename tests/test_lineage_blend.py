@@ -22,14 +22,12 @@ Stdlib unittest only. Run with:
 from __future__ import annotations
 
 import csv
-import math
 import os
 import random
 import unittest
 
 from weather_council.lineage_blend import (
-    LINEAGES, WARMUP, CRPS_MIN, WEIGHT_WINDOW, MIN_WEIGHT_DAYS,
-    build_lineages, inverse_crps_weights, blend_moments, mixture_sample,
+    LINEAGES, build_lineages, inverse_crps_weights, blend_moments, mixture_sample,
     walk_forward_blend, _trailing_compare, _self_test,
 )
 from tools.daily_healthcheck import _paired_bootstrap_ci

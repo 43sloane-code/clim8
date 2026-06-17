@@ -208,7 +208,6 @@ def walk_forward_blend(rows, *, window: int = WEIGHT_WINDOW) -> dict:
 
         # build observation-space clouds for day t (μ_i + strictly-earlier residuals)
         clouds = {}
-        eligible = True
         for k in LINEAGES:
             if fc[k][t] is None or len(clouds_running[k]) < CRPS_MIN:
                 clouds[k] = None

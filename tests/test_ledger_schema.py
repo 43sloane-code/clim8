@@ -19,7 +19,7 @@ import os
 import unittest
 
 from tools.ledger_schema import (
-    V2_REQUIRED, V2_CI_ONEOF, classify_entry, validate_v2, audit,
+    classify_entry, validate_v2, audit,
 )
 
 LEDGER = os.path.join(os.path.dirname(__file__), "..", ".harness_opt", "ledger.json")

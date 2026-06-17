@@ -32,7 +32,6 @@ __all__ = [
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 # Required keys for an in-scope (candidate) entry. Value may be null where N/A; the

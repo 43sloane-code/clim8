@@ -270,7 +270,7 @@ def main() -> int:
         elif dc > 0.003:
             print(f"  -> candidate WORSENS CRPS by {dc:.3f} on frozen data — do NOT ship.")
         else:
-            print(f"  -> candidate is within ±0.003 CRPS — no demonstrable edge; abstain.")
+            print("  -> candidate is within ±0.003 CRPS — no demonstrable edge; abstain.")
 
     if det_ok and args.folds and args.folds >= 2:
         _print_fold_gate(va, vb, args.folds)

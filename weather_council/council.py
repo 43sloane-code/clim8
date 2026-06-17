@@ -41,7 +41,7 @@ from .spread_skill import spread_skill_eval, SpreadSkill
 from .ensemble_verification import (
     rank_histogram_eval, pit_calibration_eval, RankHistogram, PITCalibration)
 from .convergence import ConvergenceInputs, Mechanism
-from .observation import Observation, RECENT_OBS_DAYS, observe
+from .observation import Observation, observe
 from .security import RateLimitError
 from .sources import (DailySeries, Place, Sources, Station, place_today,
                       quantize_to_grain)

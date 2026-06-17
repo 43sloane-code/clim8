@@ -27,7 +27,7 @@ import unittest
 
 from weather_council.residual_kalman import (
     kalman_local_level, fit_qs, kalman_one_step, walk_forward_kalman,
-    WARMUP, CRPS_MIN, _self_test,
+    _self_test,
 )
 from tools.daily_healthcheck import _paired_bootstrap_ci
 

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import os
 import sys
 from pathlib import Path
 
@@ -20,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from weather_council.scoring import pit                              # noqa: E402
-from weather_council.calibration_gate import calibration_tier, consistency_bars  # noqa: E402
+from weather_council.calibration_gate import calibration_tier  # noqa: E402
 
 REPORTS = ROOT / "reports"
 PIT_DIR = ROOT / ".harness_opt" / "pit"

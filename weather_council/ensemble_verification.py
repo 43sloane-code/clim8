@@ -61,7 +61,6 @@ __all__ = [
 
 import math
 import random
-import statistics
 from dataclasses import dataclass
 
 # Ten bins is the usual rank/PIT-histogram resolution: fine enough to see a U or

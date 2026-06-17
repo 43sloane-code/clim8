@@ -5,18 +5,9 @@ Stdlib unittest only. Run with:
 """
 from __future__ import annotations
 
-import datetime as dt
 import math
-import random
-import statistics as st
 import unittest
 
-from weather_council import scoring
-from weather_council.scoring import crps_sample, crps_gaussian, interval_coverage, quantile, pit
-from weather_council.compare import residual_calibration, compare_high, MIN_RESIDUALS
-from weather_council.market import WeatherMarket, MarketBucket
-from weather_council.agents import Vote, MemberSpec, Skill
-from weather_council.council import Council
 
 
 class TestC7EdgeScoring(unittest.TestCase):
@@ -264,11 +255,6 @@ class TestC7Settlement(unittest.TestCase):
         orig = storage.DB_PATH
         storage.DB_PATH = tmp
         try:
-            place = types.SimpleNamespace(
-                latitude=22.3, longitude=114.2, label=lambda: "Hong Kong, HK")
-            verdict = types.SimpleNamespace(
-                place=place, target="2026-06-01",
-                truth_source={"kind": "station", "station": {"id": "HKO"}})
             bucket = types.SimpleNamespace
 
             def comp(modal_prob):

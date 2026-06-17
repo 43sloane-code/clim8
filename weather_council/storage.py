@@ -27,8 +27,7 @@ import sqlite3
 from pathlib import Path
 
 from .council import Verdict
-from .market import (MarketData, Resolution, _native_reading_int,
-                     resolved_event_slug)
+from .market import MarketData, _native_reading_int, resolved_event_slug
 from .sources import Place, Sources, Station
 
 DB_PATH = Path(__file__).resolve().parent.parent / "verdicts.db"

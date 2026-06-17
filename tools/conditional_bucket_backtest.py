@@ -61,7 +61,7 @@ sys.path.insert(0, str(ROOT))
 from weather_council.agents import MIN_SAMPLES                       # noqa: E402
 from weather_council.analog_shrink import _paired_bootstrap_ci       # noqa: E402
 from weather_council.calibration import (                            # noqa: E402
-    DISP_EPS, MIN_DISP_CORR, WARMUP, _conditional_cloud, _pearson,
+    MIN_DISP_CORR, WARMUP, _conditional_cloud, _pearson,
     conditional_spread_eval,
 )
 from weather_council.council import Council                          # noqa: E402
