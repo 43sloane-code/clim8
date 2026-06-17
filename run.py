@@ -37,6 +37,7 @@ from weather_council.security import RateLimitError, SecurityError
 from weather_council.sources import Sources, place_today
 from weather_council.tc_gate import tc_halt
 from weather_council.intraday import intraday_floor
+from weather_council.intraday_ceiling import intraday_ceiling
 from weather_council.station_offset import measure_settlement_offset
 from weather_council.storage import (fetch_settled_snapshots, log_market_snapshot,
                                      log_verdict, settle_market_snapshots, verify)
@@ -1343,6 +1344,50 @@ def _intraday_to_dict(f, v: Verdict) -> dict:
     }
 
 
+def _ceiling_lines(c) -> list[str]:
+    """Read-only block for the intraday-ceiling sharpening (lead-0 conviction)."""
+    L = ["", "  INTRADAY-CEILING SHARPENING (read-only; today only — the conviction lever)"]
+    if c.kind == "not_basket":
+        L.append(f"    {c.city} is not a configured settlement city — skipped.")
+        return L
+    if c.kind == "not_today":
+        L.append(f"    {c.note}.")
+        return L
+    if c.kind == "unavailable":
+        L.append(f"    UNAVAILABLE — {c.note}.")
+        return L
+    # kind == "sharpened"
+    L.append(f"    running max by {c.hour:02d}:00 local: {c.running_max_c:.1f}°C "
+             f"({c.source})")
+    L.append(f"    remaining-rise learned from {c.n_rise} strictly-earlier days "
+             f"(leak-free, resampled through the settlement quantizer)")
+    top = "  ".join(f"{b}°C {p*100:.0f}%" for b, p in c.pmf[:4])
+    L.append(f"    sharpened final-max pmf: {top}")
+    # Conviction is honest about the hour: early in the day the remaining rise is
+    # large and the pmf stays diffuse; it concentrates only as the peak nears.
+    pct = c.modal_prob * 100
+    if c.modal_prob >= 0.70:
+        L.append(f"    => HIGH-CONVICTION call: {c.modal_bucket}°C at {pct:.0f}% "
+                 f"(vs ~56% day-ahead — σ has collapsed near/after the peak)")
+    elif c.modal_prob >= 0.40:
+        L.append(f"    => leaning {c.modal_bucket}°C at {pct:.0f}% — firming up as "
+                 f"the peak nears (not yet high-conviction)")
+    else:
+        L.append(f"    => still diffuse ({c.modal_bucket}°C at {pct:.0f}%) — too "
+                 f"early; conviction rises through the afternoon as the peak nears")
+    return L
+
+
+def _ceiling_to_dict(c) -> dict:
+    return {
+        "kind": c.kind, "city": c.city, "target": c.target, "hour": c.hour,
+        "running_max_c": c.running_max_c, "n_rise": c.n_rise,
+        "modal_bucket": c.modal_bucket, "modal_prob": c.modal_prob,
+        "pmf": [{"bucket": b, "prob": p} for b, p in c.pmf],
+        "source": c.source, "note": c.note,
+    }
+
+
 def _build_comparison(
     sources: Sources, v: Verdict, place, target
 ) -> tuple[VerdictMarketComparison | None, str | None]:
@@ -1533,12 +1578,17 @@ def main(argv=None) -> int:
 
         # Read-only intraday dead-bucket annotation (today only); never mutates
         # the verdict — observed reality only ever RULES OUT low buckets.
-        intraday = None
+        intraday = ceiling = None
         if args.intraday:
             try:
                 intraday = intraday_floor(place, target, sources=sources)
             except Exception as exc:
                 print(f"intraday annotation errored (verdict unaffected): {exc}",
+                      file=sys.stderr)
+            try:
+                ceiling = intraday_ceiling(place, target, sources=sources)
+            except Exception as exc:
+                print(f"intraday-ceiling errored (verdict unaffected): {exc}",
                       file=sys.stderr)
 
         if args.json:
@@ -1546,6 +1596,8 @@ def main(argv=None) -> int:
                                 cross_reference)
             if intraday is not None:
                 d["intraday"] = _intraday_to_dict(intraday, verdict)
+            if ceiling is not None:
+                d["intraday_ceiling"] = _ceiling_to_dict(ceiling)
             print(json.dumps(d, indent=2))
         else:
             print(render(verdict, comparison, settlement_ref, cross_reference,
@@ -1558,6 +1610,8 @@ def main(argv=None) -> int:
                           "nothing to compare)")
             if intraday is not None:
                 print("\n".join(_intraday_lines(intraday, verdict)))
+            if ceiling is not None:
+                print("\n".join(_ceiling_lines(ceiling)))
         # A blind TC gate is reported loudly alongside the verdict so the
         # operator knows the HK risk control could not confirm safety this run.
         if tc_unverified_note:
