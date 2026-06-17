@@ -92,9 +92,25 @@ Supporting work so the settlement view is trustworthy.
   integral per unit).
 - [x] Keep the headline verdict as the backtested continuous value; the
   settlement bucket is additive, never a silent relabel.
-- [ ] **B1. Round-trip the bucket through backtest.** Score the *quantized*
-  verdict against the *settlement source's* own integer record (not Meteostat)
-  to report a settlement-accuracy hit rate distinct from the continuous skill.
+- [x] **B1. Round-trip the bucket through backtest.** The walk-forward
+  bucket-verdict simulation (`bucket_verdict.py`, wired in `council._validate`)
+  scores the council's settlement bucket against the *realized* bucket leak-free
+  over the same rolling origin, reporting a settlement-accuracy hit rate
+  (modal + bare-point) distinct from the continuous CRPS/MAE skill — surfaced as
+  the CLI "MARKET-BUCKET VERDICT" block and under `validation.bucket_verdict` in
+  `--json`. For the two pinned cities the truth it scores against IS the
+  settlement source (HKO Observatory / EGLC METAR), not Meteostat (A5).
+  **Honesty fix (this pass):** the simulation rounds to a *whole-degree*
+  settlement integer, so for a SUB-DEGREE settlement instrument (the HK
+  Observatory at 0.1°C, whose 0.1°→bucket rule is unknown — A3) a whole-degree
+  hit-rate is not that market's settlement object. `council._settles_sub_degree`
+  now withholds the bucket-verdict for such anchors (None + an honest note,
+  rendered "MARKET-BUCKET VERDICT (withheld)"), exactly as the market COMPARISON
+  is already withheld — never a fabricated number. *Deferred to A1:* scoring the
+  bucket in a station's native °F grain for whole-degree US ASOS markets needs
+  the generic per-station grain at validate time (no °F city is pinned yet, and
+  re-fetching the METAR grain mid-validation would burn the request budget), so
+  whole-degree anchors are scored in °C until A1 resolves the station→grain map.
 - [x] **B2. Tail-day diagnostics.** The settlement source-check now names the
   specific days where raw METAR diverges ≥3°C from the Meteostat truth we
   backtest on — `source_check.tail_days` = `[{date, metar_high, observed_high,

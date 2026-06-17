@@ -183,6 +183,16 @@ def _wants_hko_anchor(place) -> bool:
     return any(key in name or name in key for key in PINNED_ANCHOR_HKO)
 
 
+def _settles_sub_degree(truth_source: dict | None) -> bool:
+    """True when the anchor's settlement instrument reads finer than a whole
+    degree, so a whole-degree bucket hit-rate is NOT the object the market
+    settles on. The HK Observatory (`hko_opendata`) reads 0.1°C; its 0.1°→bucket
+    convention is unknown (ROADMAP A3), so the bucket-verdict — like the market
+    comparison — is withheld rather than fabricated. Whole-degree airport METAR
+    anchors (Meteostat / EGLC) settle whole and are scored normally."""
+    return (truth_source or {}).get("data_source") == "hko_opendata"
+
+
 def _served_bias_halflife(place) -> float | None:
     """The recency half-life (days) the SERVED member-bias correction uses at this
     station, or None for the plain trailing-window mean.
@@ -427,6 +437,13 @@ class Validation:
     # days. MEASURE-ONLY — never moves the served verdict. See bucket_verdict.py.
     bucket_verdict_high: BucketVerdictEval | None = None
     bucket_verdict_low: BucketVerdictEval | None = None
+    # Why the whole-degree bucket-verdict is WITHHELD, when it is. The simulation
+    # rounds to a whole-degree settlement integer; for a station that settles
+    # SUB-DEGREE (the HK Observatory at 0.1°C, whose 0.1°→bucket rule we don't
+    # have — see ROADMAP A3) a whole-degree hit-rate is NOT that market's
+    # settlement object, so we withhold it rather than assert a number that
+    # doesn't describe how the contract pays. None => not withheld (shown).
+    bucket_verdict_note: str | None = None
     # Recency-weighted-bias candidate evaluation: does recency-weighting each
     # member's bias (vs the served plain training mean) sharpen the held-out
     # distribution? Scored leak-free on paired CRPS (SE-gated) and bucket-hit, per
@@ -837,7 +854,7 @@ class Council:
         low, inc_l, spread_l, wts_l = self._blend(votes, "low")
         naive_h = self._naive(votes, "high")
         naive_l = self._naive(votes, "low")
-        validation = self._validate(votes, observed, fp)
+        validation = self._validate(votes, observed, fp, truth_source)
         interpretation = self._interpret(votes, inc_h, window)
         diurnal = self._diurnal(fp, target, w_start, w_end,
                                 round(high, 1), round(low, 1), window)
@@ -1684,7 +1701,8 @@ class Council:
         return out
 
     def _validate(self, votes: list[Vote], observed: DailySeries,
-                  fp: Place | None = None) -> Validation:
+                  fp: Place | None = None,
+                  truth_source: dict | None = None) -> Validation:
         dates = sorted(observed.keys())
         if len(dates) < 15:
             return Validation(None, None, None, None, None, 0)
@@ -1861,6 +1879,20 @@ class Council:
         # scored leak-free against its own expanding residual cloud. Measure-only.
         bucket_verdict_high = bucket_verdict_eval(bucket_pairs_h)
         bucket_verdict_low = bucket_verdict_eval(bucket_pairs_l)
+        # B1 honesty: the simulation above rounds to a whole-degree settlement
+        # integer. If this city's settlement instrument reads SUB-DEGREE (the HK
+        # Observatory at 0.1°C), that whole-degree hit-rate is NOT the object the
+        # market settles on — the 0.1°→bucket rule is unknown (ROADMAP A3), and
+        # the market COMPARISON is already withheld for exactly this reason. So
+        # withhold the bucket-verdict too rather than assert a number that
+        # mis-describes how the contract pays.
+        bucket_verdict_note = None
+        if _settles_sub_degree(truth_source):
+            bucket_verdict_high = bucket_verdict_low = None
+            bucket_verdict_note = (
+                "withheld — this station settles sub-degree (HK Observatory, "
+                "0.1°C); a whole-degree bucket hit-rate is not the market's "
+                "settlement object and the 0.1°→bucket rule is unknown (A3)")
         # Recency-weighted-bias candidate vs the served plain-mean bias, scored
         # leak-free on paired per-day CRPS (with a standard-error gate) AND the
         # whole-degree bucket-hit rate. Recommend-only: a positive verdict here is
@@ -1910,6 +1942,7 @@ class Council:
             coverage_calibration=coverage_calibration,
             bucket_verdict_high=bucket_verdict_high,
             bucket_verdict_low=bucket_verdict_low,
+            bucket_verdict_note=bucket_verdict_note,
             recency_bias=recency_bias,
             recency_bias_high=recency_bias_high,
             recency_bias_low=recency_bias_low,

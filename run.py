@@ -918,7 +918,11 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
             L.append("      (the verdict's bucket probabilities are this distribution, "
                      "now scored — not asserted)")
         bv_pairs = [("high", val.bucket_verdict_high), ("low", val.bucket_verdict_low)]
-        if any(ev is not None for _, ev in bv_pairs):
+        if getattr(val, "bucket_verdict_note", None):
+            L.append("")
+            L.append("    MARKET-BUCKET VERDICT (withheld)")
+            L.append(f"      {val.bucket_verdict_note}")
+        elif any(ev is not None for _, ev in bv_pairs):
             L.append("")
             L.append("    MARKET-BUCKET VERDICT (scored on the whole-degree bucket the "
                      "market settles on — measure-only)")
@@ -1247,6 +1251,7 @@ def verdict_to_dict(
                           "measure-only, never moves the served verdict",
                 "high": _bucket_verdict_json(val.bucket_verdict_high),
                 "low": _bucket_verdict_json(val.bucket_verdict_low),
+                "withheld": getattr(val, "bucket_verdict_note", None),
             },
             "recency_bias": ({
                 "method": "recency-weight each member's bias with an exponential "

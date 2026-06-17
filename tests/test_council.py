@@ -461,6 +461,59 @@ class TestSettlementTailDays(unittest.TestCase):
         self.assertEqual(out["grain_confidence"], "low")
 
 
+class TestBucketVerdictSubDegreeWithheld(unittest.TestCase):
+    """B1: the whole-degree bucket-verdict is the object whole-degree markets
+    settle on — but the HK Observatory settles SUB-DEGREE (0.1°C, A3). For that
+    anchor the whole-degree hit-rate is withheld (not fabricated), exactly as the
+    market comparison already is; whole-degree anchors are scored normally."""
+
+    def _data(self, seed=7, N=140):
+        rng = random.Random(seed)
+        start = dt.date(2025, 1, 1)
+        dates = [(start + dt.timedelta(days=i)).isoformat() for i in range(N)]
+        observed = {}
+        for i, d in enumerate(dates):
+            h = 18.0 + 9.0 * math.sin(2 * math.pi * (i + 10) / 365.0) + rng.gauss(0, 2.2)
+            l = 9.0 + 7.0 * math.sin(2 * math.pi * (i + 10) / 365.0) + rng.gauss(0, 1.8)
+            observed[d] = (round(h, 1), round(min(l, h - 1), 1))
+        votes = []
+        for mid, bias, nz in (("ecmwf", 0.4, 1.4), ("gfs", -0.8, 2.0),
+                              ("icon", 1.1, 1.7), ("gem", 0.0, 2.4)):
+            hh, hl = {}, {}
+            for d in dates:
+                oh, ol = observed[d]
+                hh[d] = (round(oh + bias + rng.gauss(0, nz), 1), oh)
+                hl[d] = (round(ol + bias + rng.gauss(0, nz), 1), ol)
+            spec = MemberSpec(mid, mid, mid, "")
+            votes.append(Vote(spec, dates[-1], hh[dates[-1]][0], hl[dates[-1]][0],
+                              hh[dates[-1]][0], hl[dates[-1]][0],
+                              Skill(bias, nz, nz, N), Skill(bias, nz, nz, N),
+                              True, hist_high=hh, hist_low=hl))
+        return votes, observed
+
+    def test_whole_degree_anchor_scored(self):
+        votes, observed = self._data()
+        val = Council.__new__(Council)._validate(
+            votes, observed, None, {"kind": "station", "data_source": "iem_metar"})
+        self.assertIsNone(val.bucket_verdict_note)
+        self.assertIsNotNone(val.bucket_verdict_high)   # whole-degree => scored
+
+    def test_sub_degree_anchor_withheld(self):
+        votes, observed = self._data()
+        val = Council.__new__(Council)._validate(
+            votes, observed, None, {"kind": "station", "data_source": "hko_opendata"})
+        self.assertIsNone(val.bucket_verdict_high)
+        self.assertIsNone(val.bucket_verdict_low)
+        self.assertIsNotNone(val.bucket_verdict_note)
+        self.assertIn("sub-degree", val.bucket_verdict_note)
+
+    def test_predicate(self):
+        from weather_council.council import _settles_sub_degree
+        self.assertTrue(_settles_sub_degree({"data_source": "hko_opendata"}))
+        self.assertFalse(_settles_sub_degree({"data_source": "iem_metar"}))
+        self.assertFalse(_settles_sub_degree(None))
+
+
 class TestStrictEGLCAnchor(unittest.TestCase):
     """London is pinned to London City Airport (EGLC) as a STRICT anchor — the
     same rule as the Hong Kong Observatory. It is tried first, and no other
