@@ -21,9 +21,10 @@ def _v(label, high, resid):
 
 
 def _ceiling(modal_bucket, modal_prob, sharpened=True):
+    pmf = ((modal_bucket, modal_prob), (modal_bucket - 1, round(1 - modal_prob, 4)))
     return types.SimpleNamespace(
         is_sharpened=sharpened, modal_bucket=modal_bucket, modal_prob=modal_prob,
-        running_max_c=25.4, hour=15)
+        pmf=pmf, running_max_c=25.4, hour=15)
 
 
 # A spread residual cloud around a boundary -> day-ahead is a coin-flip (LOW).
@@ -38,6 +39,19 @@ class TestBucketCall(unittest.TestCase):
         self.assertLess(c["prob"], 0.70)            # a spread cloud is not HIGH
         self.assertIn(c["tier"], ("LOW", "MODERATE"))
         self.assertEqual(c["rule"], "round-half-up / whole °C")
+
+    def test_span_is_high_conviction_when_single_bucket_is_not(self):
+        c = _bucket_call(_v("London, United Kingdom", 24.5, _SPREAD), ceiling=None)
+        # a single bucket is a coin-flip, but the span clears the high bar
+        self.assertGreaterEqual(c["span_prob"], 0.80)
+        self.assertGreaterEqual(len(c["span"]), 2)
+        self.assertGreater(c["span_prob"], c["prob"])
+
+    def test_confident_intraday_span_is_single_bucket(self):
+        c = _bucket_call(_v("London, United Kingdom", 24.5, _SPREAD), ceiling=_ceiling(26, 0.92))
+        self.assertTrue(c["used_intraday"])
+        self.assertEqual(c["span"], [26])           # σ collapsed -> one confident bucket
+        self.assertGreaterEqual(c["span_prob"], 0.80)
 
     def test_confident_intraday_overrides_day_ahead(self):
         v = _v("London, United Kingdom", 24.5, _SPREAD)

@@ -618,61 +618,95 @@ def _healthcheck_banner(today: dt.date | None = None,
     return L
 
 
+# A single 1°C bucket is a near-coin-flip day-ahead (σ ≈ bucket width), and the
+# market itself spreads across 2-3 buckets — so the ACTIONABLE high-conviction call
+# is the smallest bucket SPAN that clears this bar, not one bucket. Backtest: a
+# 2-bucket span covers the settled bucket ~93% (London); a 3-bucket span ~90% (HK).
+_SPAN_TARGET = 0.80
+
+
 def _bucket_call(v: Verdict, ceiling=None) -> dict:
-    """The decision-relevant answer: which whole-degree bucket the market settles on,
-    and the conviction IN THAT BUCKET (its own probability) — not the ±2°C point
-    reliability that `Confidence` reports. Uses the intraday lever when it is sharpened
-    and confident (same-day, post-peak — London ~89–99%), else the day-ahead bucket
-    distribution (the modal of the residual cloud resampled through the settlement
-    quantizer). So a day-ahead coin-flip honestly reads LOW, not HIGH."""
+    """The decision-relevant answer: which bucket(s) the market settles on, with
+    conviction IN THE BUCKET (its own probability) — not the ±2°C point reliability
+    `Confidence` reports. Returns BOTH the best single guess AND the smallest
+    high-conviction SPAN (>= _SPAN_TARGET), because day-ahead a single 1°C bucket is
+    a coin-flip while a tight range is genuinely confident. Uses the intraday pmf when
+    it is sharpened and confident (same-day, post-peak — London collapses to a single
+    bucket at HIGH), else the day-ahead residual-cloud pmf."""
     from weather_council.market import _native_reading_int
     sub = "hong kong" in v.place.label().lower()
     rule = "floor / 0.1°C" if sub else "round-half-up / whole °C"
     resid = (getattr(v.validation, "residuals_high", None) if v.validation else None) or []
+    da_pmf: dict[int, float] = {}
     da_bucket = _native_reading_int(v.high, "C", sub)
-    da_prob = None
     if len(resid) >= 12:
         cnt: dict[int, int] = {}
         for e in resid:
             b = _native_reading_int(v.high + e, "C", sub)
             cnt[b] = cnt.get(b, 0) + 1
-        da_bucket = max(cnt, key=cnt.get)          # modal of the settlement-bucket pmf
-        da_prob = cnt[da_bucket] / len(resid)
+        da_pmf = {b: c / len(resid) for b, c in cnt.items()}
+        da_bucket = max(da_pmf, key=da_pmf.get)
+
     use_intra = (ceiling is not None and getattr(ceiling, "is_sharpened", False)
                  and ceiling.modal_prob is not None and ceiling.modal_prob >= 0.70)
     if use_intra:
-        bucket, prob = ceiling.modal_bucket, ceiling.modal_prob
+        pmf = {b: p for b, p in ceiling.pmf}
         source = (f"intraday — running max {ceiling.running_max_c:.1f}°C by "
                   f"{ceiling.hour:02d}:00, σ collapsed near the peak")
     else:
-        bucket, prob = da_bucket, da_prob
+        pmf = da_pmf
         source = "day-ahead distribution"
+
+    bucket = max(pmf, key=pmf.get) if pmf else da_bucket
+    prob = pmf.get(bucket) if pmf else None
     tier = ("HIGH" if (prob or 0) >= 0.70 else
             "MODERATE" if (prob or 0) >= 0.50 else "LOW")
+
+    # smallest top-k bucket span reaching the high-conviction bar
+    span = span_prob = None
+    if pmf:
+        cum = 0.0
+        chosen: list[int] = []
+        for b, p in sorted(pmf.items(), key=lambda t: -t[1]):
+            chosen.append(b)
+            cum += p
+            if cum >= _SPAN_TARGET:
+                break
+        span = sorted(chosen)
+        span_prob = cum
     return {"bucket": bucket, "prob": prob, "tier": tier, "source": source,
             "rule": rule, "used_intraday": use_intra,
-            "day_ahead_bucket": da_bucket, "day_ahead_prob": da_prob}
+            "day_ahead_bucket": da_bucket, "day_ahead_prob": da_pmf.get(da_bucket),
+            "span": span, "span_prob": span_prob}
 
 
 def _bucket_call_lines(v: Verdict, ceiling=None) -> list[str]:
     c = _bucket_call(v, ceiling)
     L = ["", f"  BUCKET CALL — the {c['rule']} bucket the market settles on"]
     if c["prob"] is None:
-        L.append(f"    => {c['bucket']}°C  (conviction unavailable — too little "
-                 f"held-out history)")
+        L.append(f"    best single guess : {c['bucket']}°C  (conviction unavailable — "
+                 f"too little held-out history)")
         return L
-    L.append(f"    => {c['bucket']}°C  —  {c['tier']} conviction {c['prob']*100:.0f}%   "
-             f"[{c['source']}]")
-    if not c["used_intraday"] and c["tier"] == "LOW":
+    L.append(f"    best single guess     : {c['bucket']}°C  —  {c['tier']} "
+             f"{c['prob']*100:.0f}%   [{c['source']}]")
+    span = c["span"]
+    if span:
+        if len(span) == 1:
+            L.append(f"    HIGH-CONVICTION CALL  : {span[0]}°C  ({c['span_prob']*100:.0f}%)"
+                     f"  ← σ collapsed; single bucket is now confident")
+        else:
+            verb = "HIGH-CONVICTION CALL " if c["span_prob"] >= _SPAN_TARGET else "best range          "
+            L.append(f"    {verb} : {span[0]}–{span[-1]}°C  "
+                     f"({c['span_prob']*100:.0f}%)  ← the actionable call ({len(span)} buckets)")
+    if not c["used_intraday"]:
         hk = "hong kong" in v.place.label().lower()
         if hk:
-            L.append("    day-ahead HK bucket is information-limited (σ ≈ bucket width, "
-                     "floor rule) — no hourly settlement record yet, so no intraday "
-                     "sharpening; treat as a distribution, not a confident call")
+            L.append("    (single-bucket HK is information-limited day-ahead — the range "
+                     "is the tradeable call; a single confident bucket needs intraday, "
+                     "pending HK's hourly archive)")
         else:
-            L.append("    day-ahead bucket is information-limited (σ ≈ bucket width) — a "
-                     "confident single-bucket call comes intraday as the peak nears "
-                     "(run with --intraday on the settlement day)")
+            L.append("    (single-bucket collapses to HIGH intraday as the peak nears — "
+                     "run with --intraday on the settlement day)")
     return L
 
 
