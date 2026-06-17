@@ -30,6 +30,7 @@ __all__ = [
     'SecurityError', 'RateLimitError', 'validate_city', 'SafeHTTPClient'
 ]
 
+import hashlib
 import ipaddress
 import json
 import re
@@ -40,6 +41,23 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
+from pathlib import Path
+
+
+def _canonical_url(base_url: str, params: dict | None) -> str:
+    """Stable string for one request: the URL with its params sorted, so the
+    same logical request always maps to the same fixture regardless of dict
+    ordering. Used for record/replay keying and the auditable index."""
+    parts = urllib.parse.urlsplit(base_url)
+    query = urllib.parse.urlencode(sorted((params or {}).items()), doseq=True)
+    return urllib.parse.urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, query, ""))
+
+
+def _fixture_key(base_url: str, params: dict | None, accept: str) -> str:
+    """Deterministic on-disk key for a (request, accept) pair."""
+    canon = f"{_canonical_url(base_url, params)}\n{accept}"
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:32]
 
 # The only hosts this program is ever allowed to contact.
 ALLOWED_HOSTS = frozenset({
@@ -197,10 +215,20 @@ class _GuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
 class SafeHTTPClient:
     """A minimal HTTP/JSON client locked to the sandbox policy."""
 
-    def __init__(self, timeout: int = DEFAULT_TIMEOUT) -> None:
+    def __init__(self, timeout: int = DEFAULT_TIMEOUT,
+                 record_dir: str | Path | None = None,
+                 replay_dir: str | Path | None = None) -> None:
         self._ctx = _build_ssl_context()
         self._timeout = timeout
         self._count = 0
+        # Record/replay fixtures (offline reproducibility). record_dir: every
+        # successful response is written to disk keyed by its canonical request,
+        # so a networked run can be captured and committed. replay_dir: requests
+        # are served from those files with NO network — the exact recorded verdict
+        # reproduces in a sandbox that cannot reach the APIs. Mutually exclusive in
+        # practice; replay wins if both are set.
+        self._record_dir = Path(record_dir) if record_dir else None
+        self._replay_dir = Path(replay_dir) if replay_dir else None
         # A minimal, HTTPS-only opener built by hand rather than the bare
         # urlopen default. We register ONLY the handlers we want:
         #   * HTTPSHandler bound to our verified (certifi) TLS context;
@@ -222,6 +250,9 @@ class SafeHTTPClient:
         """Apply the full sandbox policy and return (hostname, capped body).
         Shared by the JSON and gzip fetchers so the guard can never be bypassed
         by adding a second entrypoint."""
+        if self._replay_dir is not None:
+            return self._replay(base_url, params, accept)
+
         parts = urllib.parse.urlsplit(base_url)
         host = _validate_url(base_url)   # https + allowlist + SSRF; returns hostname
 
@@ -267,7 +298,44 @@ class SafeHTTPClient:
 
         if len(body) > MAX_BYTES:
             raise SecurityError("response exceeded size cap — aborting")
+        if self._record_dir is not None:
+            self._save_fixture(base_url, params, accept, parts.hostname, body)
         return parts.hostname, body
+
+    def _replay(self, base_url: str, params: dict | None, accept: str) -> tuple[str, bytes]:
+        """Serve a recorded response from replay_dir with NO network. The
+        allowlist/HTTPS invariant is still enforced (without a DNS lookup, so it
+        works fully offline); a missing fixture is a loud error, never a silent
+        empty body."""
+        parts = urllib.parse.urlsplit(base_url)
+        if parts.scheme != "https" or parts.hostname not in ALLOWED_HOSTS:
+            raise SecurityError(f"replay refused for non-allowlisted URL: {base_url}")
+        self._count += 1
+        key = _fixture_key(base_url, params, accept)
+        try:
+            return parts.hostname, (self._replay_dir / f"{key}.resp").read_bytes()
+        except FileNotFoundError:
+            raise SecurityError(
+                f"no replay fixture for {base_url} (key {key}); record the run "
+                f"with --record on a networked machine first") from None
+
+    def _save_fixture(self, base_url: str, params: dict | None, accept: str,
+                      host: str | None, body: bytes) -> None:
+        """Persist one response under record_dir, keyed by its canonical request,
+        plus an auditable _index.json (key -> url/accept/host/bytes)."""
+        self._record_dir.mkdir(parents=True, exist_ok=True)
+        key = _fixture_key(base_url, params, accept)
+        (self._record_dir / f"{key}.resp").write_bytes(body)
+        idx_path = self._record_dir / "_index.json"
+        idx: dict = {}
+        if idx_path.exists():
+            try:
+                idx = json.loads(idx_path.read_text())
+            except (ValueError, OSError):
+                idx = {}
+        idx[key] = {"url": _canonical_url(base_url, params),
+                    "accept": accept, "host": host, "bytes": len(body)}
+        idx_path.write_text(json.dumps(idx, indent=2, sort_keys=True))
 
     def get_json(self, base_url: str, params: dict) -> dict:
         host, body = self._fetch(base_url, params, "application/json")

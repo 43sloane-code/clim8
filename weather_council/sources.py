@@ -15,7 +15,7 @@ an empty result, never a fabricated number.
 from __future__ import annotations
 
 __all__ = [
-    'Place', 'Station', 'place_today', 'quantize_to_grain', 'Sources'
+    'Place', 'Station', 'place_today', 'pin_today', 'quantize_to_grain', 'Sources'
 ]
 
 import datetime as dt
@@ -173,9 +173,24 @@ class Station:
         return f"{self.name} ({ident})"
 
 
+_PINNED_TODAY: dt.date | None = None
+
+
+def pin_today(day: dt.date | None) -> None:
+    """Pin (or clear) what `place_today` returns, so a recorded run can be
+    replayed on a later calendar date and still reconstruct the exact same
+    date-parametrised API requests (and therefore hit its fixtures). Set from the
+    fixture's recorded `as_of` in replay mode; None restores the live clock."""
+    global _PINNED_TODAY
+    _PINNED_TODAY = day
+
+
 def place_today(place: Place) -> dt.date:
     """The current civil date in the *place's own* timezone — the anchor for
     "today" and forecast lead.
+
+    A record/replay run pins this (see pin_today) so the verdict's target and
+    window are reproducible across calendar days.
 
     Open-Meteo indexes its forecast grid by the place's local day, not the
     host's. Anchoring the target to the machine clock makes a same-day verdict
@@ -185,6 +200,8 @@ def place_today(place: Place) -> dt.date:
     comes back None, collapsing the whole verdict. Resolving "today" in the
     place's zone keeps the target, the lead, and the returned grid aligned.
     Falls back to the host date when the timezone is unknown/unset."""
+    if _PINNED_TODAY is not None:
+        return _PINNED_TODAY
     tz = getattr(place, "timezone", None)
     if tz and tz != "auto":
         try:

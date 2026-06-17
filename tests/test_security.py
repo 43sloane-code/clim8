@@ -214,6 +214,86 @@ class TestFetchGuards(unittest.TestCase):
         self.assertEqual(client.requests_made, 2)
 
 
+class TestRecordReplay(unittest.TestCase):
+    """Offline reproducibility: a networked run can be RECORDED to disk and then
+    REPLAYED with no network, returning byte-identical responses. The
+    allowlist/HTTPS invariant still holds on replay, and a missing fixture is a
+    loud error, never a silent empty body."""
+
+    def setUp(self):
+        import tempfile
+        self._dns = mock.patch.object(security, "_assert_public_host", lambda h: None)
+        self._dns.start()
+        self.addCleanup(self._dns.stop)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+
+    def test_record_then_replay_roundtrips_without_network(self):
+        # Record via the fake opener (no real network), then replay from disk
+        # with an opener that would EXPLODE if touched — proving replay is offline.
+        rec = SafeHTTPClient(record_dir=self.dir)
+        rec._opener = _FakeOpener(b'{"hello":"world"}')
+        out = rec.get_json(_ALLOWED_URL, {"b": "2", "a": "1"})
+        self.assertEqual(out, {"hello": "world"})
+
+        rep = SafeHTTPClient(replay_dir=self.dir)
+        def _boom(*a, **k):
+            raise AssertionError("replay must not hit the network")
+        rep._opener = mock.Mock(open=_boom)
+        # param order differs from how it was recorded — canonical key still hits
+        self.assertEqual(rep.get_json(_ALLOWED_URL, {"a": "1", "b": "2"}),
+                         {"hello": "world"})
+
+    def test_missing_fixture_raises(self):
+        rep = SafeHTTPClient(replay_dir=self.dir)
+        with self.assertRaises(SecurityError):
+            rep.get_text(_ALLOWED_URL, {"x": "1"})
+
+    def test_replay_enforces_allowlist_offline(self):
+        rep = SafeHTTPClient(replay_dir=self.dir)
+        with self.assertRaises(SecurityError):
+            rep._fetch("https://evil.example/x", None, "text/plain")
+        with self.assertRaises(SecurityError):
+            rep._fetch("http://api.open-meteo.com/x", None, "text/plain")
+
+    def test_index_written_for_audit(self):
+        import json as _json
+        from pathlib import Path
+        rec = SafeHTTPClient(record_dir=self.dir)
+        rec._opener = _FakeOpener(b"csv,body")
+        rec.get_text(_ALLOWED_URL, {"q": "z"})
+        idx = _json.loads((Path(self.dir) / "_index.json").read_text())
+        self.assertEqual(len(idx), 1)
+        (entry,) = idx.values()
+        self.assertIn("api.open-meteo.com", entry["url"])
+        self.assertEqual(entry["bytes"], len(b"csv,body"))
+
+    def test_canonical_url_is_param_order_independent(self):
+        a = security._fixture_key(_ALLOWED_URL, {"a": "1", "b": "2"}, "x")
+        b = security._fixture_key(_ALLOWED_URL, {"b": "2", "a": "1"}, "x")
+        self.assertEqual(a, b)
+        self.assertNotEqual(
+            a, security._fixture_key(_ALLOWED_URL, {"a": "1", "b": "2"}, "y"))
+
+
+class TestPinToday(unittest.TestCase):
+    """pin_today makes place_today deterministic so a recorded run replays to the
+    same date-parametrised requests on any later calendar day."""
+
+    def test_pin_and_clear(self):
+        import datetime as dt
+        from weather_council.sources import Place, pin_today, place_today
+        p = Place("X", "XX", 0.0, 0.0, "Asia/Hong_Kong")
+        try:
+            pin_today(dt.date(2026, 6, 17))
+            self.assertEqual(place_today(p), dt.date(2026, 6, 17))
+        finally:
+            pin_today(None)
+        # cleared -> live clock again (just assert it's a real date, not the pin)
+        self.assertIsInstance(place_today(p), dt.date)
+
+
 # --------------------------------------------------------------------------- #
 #  JSON / array / text / gzip shape + decompression-bomb guard                  #
 # --------------------------------------------------------------------------- #

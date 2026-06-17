@@ -33,8 +33,8 @@ from weather_council.council import (Council, Verdict, applied_bias_correction,
 from weather_council.edge import report_lines as edge_report_lines, score_snapshots
 from weather_council.convergence import report_lines as convergence_report_lines
 from weather_council.market import MarketData
-from weather_council.security import RateLimitError, SecurityError
-from weather_council.sources import Sources, place_today
+from weather_council.security import RateLimitError, SafeHTTPClient, SecurityError
+from weather_council.sources import Sources, pin_today, place_today
 from weather_council.tc_gate import tc_halt
 from weather_council.intraday import intraday_floor
 from weather_council.intraday_ceiling import intraday_ceiling
@@ -1551,6 +1551,13 @@ def main(argv=None) -> int:
                          "({city}_high.csv / {city}_low.csv, columns "
                          "date,point,realized) to DIR for external bucket-calibration "
                          "backtesting (monte-carlo/backtest_mc.py). Measure-only.")
+    ap.add_argument("--record", metavar="DIR",
+                    help="record every API response into DIR (run on a networked "
+                         "machine) so the EXACT verdict can be replayed offline.")
+    ap.add_argument("--replay", metavar="DIR",
+                    help="replay a --record-ed run from DIR with no network — "
+                         "deterministic, pins the recorded run date. Lets a "
+                         "sandbox that can't reach the APIs reproduce the verdict.")
     args = ap.parse_args(argv)
 
     try:
@@ -1575,13 +1582,35 @@ def main(argv=None) -> int:
         if not (15 <= args.window <= 365):
             ap.error("--window must be between 15 and 365")
 
-        sources = Sources()
+        if args.replay and args.record:
+            ap.error("--replay and --record are mutually exclusive")
+        http = None
+        if args.replay:
+            meta_path = Path(args.replay) / "_meta.json"
+            if not meta_path.exists():
+                ap.error(f"--replay dir has no _meta.json ({meta_path}); "
+                         "record it with --record first")
+            meta = json.loads(meta_path.read_text())
+            pin_today(dt.date.fromisoformat(meta["as_of"]))   # reproduce the run date
+            http = SafeHTTPClient(replay_dir=args.replay)
+        elif args.record:
+            http = SafeHTTPClient(record_dir=args.record)
+        sources = Sources(http) if http is not None else Sources()
         place = sources.geocode(args.city)
         # "today" is the place's own civil date, not the host's: a same-day
         # (lead 0) verdict for a city in another timezone must target the day the
         # forecast feed actually carries for that city (e.g. Hong Kong is already
         # "tomorrow" relative to a UTC-1 host). See sources.place_today.
         target = place_today(place) + dt.timedelta(days=args.lead)
+        if args.record:
+            # Persist the resolved run date + args so a later replay reconstructs
+            # the same date-parametrised requests (and hits these fixtures).
+            Path(args.record).mkdir(parents=True, exist_ok=True)
+            (Path(args.record) / "_meta.json").write_text(json.dumps({
+                "as_of": place_today(place).isoformat(),
+                "city": args.city, "lead": args.lead, "window": args.window,
+                "market": bool(args.market), "intraday": bool(args.intraday),
+            }, indent=2))
 
         # Tropical-cyclone halt gate (HK only; no-op elsewhere). A risk control,
         # checked BEFORE verdict assembly: when a named TC's 5-day forecast cone

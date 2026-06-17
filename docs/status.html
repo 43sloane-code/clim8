@@ -109,6 +109,20 @@ PYTHONPATH=. python3 tools/settlement_audit.py --backfill
 # run the gate
 PYTHONPATH=. python3 -m unittest discover -s tests</pre>
 
+  <h2>Offline replay (sandboxes with no network)</h2>
+  <p class="sub">Web/iOS sandbox sessions can't reach the weather/market APIs (network
+  policy). Capture the run once on a networked machine, commit the fixtures, then
+  replay the EXACT verdict anywhere — deterministic, zero network (it pins the
+  recorded run date):</p>
+<pre># on a networked machine (e.g. the Mac):
+PYTHONPATH=. python3 run.py "Hong Kong" --lead 0 --market --intraday \
+    --record fixtures/hk
+git add fixtures/hk && git commit -m "fixtures: HK verdict snapshot"
+
+# in any sandbox session, offline:
+PYTHONPATH=. python3 run.py "Hong Kong" --lead 0 --market --intraday \
+    --replay fixtures/hk</pre>
+
   <p class="foot">clim8 · github.com/43sloane-code/clim8 · main @ honest-bucket-call</p>
 
 </div></body></html>
