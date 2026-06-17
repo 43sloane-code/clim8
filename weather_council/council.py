@@ -1182,6 +1182,16 @@ class Council:
         if common:
             dh = [metar[d][0] - observed[d][0] for d in common]
             dl = [metar[d][1] - observed[d][1] for d in common]
+            # B2: name the specific tail days (raw METAR vs the Meteostat truth
+            # we backtest on) so the divergence is auditable, not just counted.
+            tail_days = [
+                {"date": d,
+                 "metar_high": round(metar[d][0], 1),
+                 "observed_high": round(observed[d][0], 1),
+                 "delta": round(metar[d][0] - observed[d][0], 1)}
+                for d in common if abs(metar[d][0] - observed[d][0]) >= 3.0
+            ]
+            tail_days.sort(key=lambda r: abs(r["delta"]), reverse=True)
             check = {
                 "n": len(common),
                 "high_mean": round(statistics.mean(dh), 2),
@@ -1189,12 +1199,14 @@ class Council:
                 "high_max": round(max(dh, key=abs), 2),
                 "low_mean": round(statistics.mean(dl), 2),
                 "low_median": round(statistics.median(dl), 2),
-                "tail_days_ge3": sum(1 for x in dh if abs(x) >= 3.0),
+                "tail_days_ge3": len(tail_days),
+                "tail_days": tail_days,
             }
         return {
             "source": "raw airport METAR (IEM ASOS archive)",
             "grain": grain,
             "grain_evidence": md["grain_evidence"],
+            "grain_confidence": md.get("grain_confidence", "high"),
             "high_settle": round(high_settle, 1),
             "low_settle": round(low_settle, 1),
             "high_native": high_native,

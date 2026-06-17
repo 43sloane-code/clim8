@@ -400,12 +400,15 @@ function render(d){
           <span>High Δ: mean <b>${chk.high_mean>0?'+':''}${f1(chk.high_mean)}</b>, median <b>${chk.high_median>0?'+':''}${f1(chk.high_median)}</b>, largest <b class="${tailCls}">${chk.high_max>0?'+':''}${f1(chk.high_max)} °C</b> (<b class="${tailCls}">${tail}</b> day(s) ≥3 °C apart)</span>
           <span>Low Δ: mean <b>${chk.low_mean>0?'+':''}${f1(chk.low_mean)}</b>, median <b>${chk.low_median>0?'+':''}${f1(chk.low_median)}</b></span>
         </div>` +
-        (tail>0 ? `<div class="kv" style="margin-top:8px"><span class="pill">Meteostat clips the daily high on hot days vs the raw METAR the record settles on — bias-correcting on it under-reads peaks. The settlement source above is what a market actually pays out on.</span></div>` : "");
+        (tail>0 ? `<div class="kv" style="margin-top:8px"><span class="pill">Meteostat clips the daily high on hot days vs the raw METAR the record settles on — bias-correcting on it under-reads peaks. The settlement source above is what a market actually pays out on.</span></div>` : "") +
+        // B2: name the worst few tail days (METAR vs Meteostat) so the divergence is auditable.
+        ((chk.tail_days||[]).length ? `<div class="kv" style="margin-top:8px"><span>${(chk.tail_days||[]).slice(0,5).map(t=>`${t.date}: METAR <b>${f1(t.metar_high)}</b> vs Meteostat <b>${f1(t.observed_high)}</b> °C (${t.delta>0?'+':''}${f1(t.delta)})`).join("<br>")}</span></div>` : "");
     }
+    const lowGrain = st.grain_confidence === "low";
     h += `<div class="card"><h3>Settlement alignment — how this resolves against the market's record</h3>
       <div class="kv">
         <span>Settles as: high <b class="good">${st.high_native}</b>  low <b class="good">${st.low_native}</b></span>
-        <span>Native grain: <b>${unit}</b>${ev!=null?` (${ev}% of raw METAR obs integral in ${st.grain})`:""}</span>
+        <span>Native grain: <b>${unit}</b>${ev!=null?` (${ev}% of raw METAR obs integral in ${st.grain})`:""}${lowGrain?` <b class="bad">⚠ low confidence — evidence thin/ambiguous</b>`:""}</span>
       </div>
       <div class="kv" style="margin-top:8px"><span>The continuous verdict <b>${f1(v.high)}/${f1(v.low)} °C</b> snapped onto the airport sensor's integer record — the value a whole-degree contract reads. Source: ${st.source||"raw airport METAR"}.</span></div>
       ${checkHtml}

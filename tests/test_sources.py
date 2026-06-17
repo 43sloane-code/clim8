@@ -152,5 +152,71 @@ class TestEGLCCurrent(unittest.TestCase):
         s.fetch_metar_observations = _boom
         self.assertIsNone(s.eglc_current())   # caller then keeps the grid 'now'
 
+
+class TestGrainDetection(unittest.TestCase):
+    """fetch_metar_daily detects the native reporting grain from the integral
+    fraction, and (B3) flags low confidence when that evidence is thin/ambiguous
+    rather than silently asserting a whole-degree grain."""
+
+    @staticmethod
+    def _src(csv_text):
+        from weather_council.sources import Sources
+
+        class _FakeHTTP:
+            def get_text(self, url, params=None): return csv_text
+        s = Sources()
+        s.http = _FakeHTTP()
+        return s
+
+    @staticmethod
+    def _csv(rows):
+        # columns the parser reads: station, valid, tmpf, tmpc
+        out = ["station,valid,tmpf,tmpc"]
+        out += [f"TEST,{ts},{tf},{tc}" for ts, tf, tc in rows]
+        return "\n".join(out)
+
+    def _two_days(self, tf, tc):
+        # 12 obs/day across two days -> daily entries populate AND total >= 24
+        rows = []
+        for day in ("2026-06-01", "2026-06-02"):
+            for hh in range(12):
+                rows.append((f"{day} {hh:02d}:00", tf, tc))
+        return self._csv(rows)
+
+    def test_celsius_native_high_confidence(self):
+        import datetime as dt
+        s = self._src(self._two_days(tf="87.8", tc="31"))  # whole °C, non-integral °F
+        md = s.fetch_metar_daily("TEST", dt.date(2026, 6, 1), dt.date(2026, 6, 2), "Etc/UTC")
+        self.assertEqual(md["grain"], "C")
+        self.assertEqual(md["grain_confidence"], "high")
+
+    def test_fahrenheit_native_high_confidence(self):
+        import datetime as dt
+        # whole °F, non-integral °C (55°F ≈ 12.8°C). NB the parser screens each
+        # raw cell through a °C plausibility band, so the °F column is exercised
+        # here with a value inside that band — a deliberately cool day.
+        s = self._src(self._two_days(tf="55", tc="12.8"))
+        md = s.fetch_metar_daily("TEST", dt.date(2026, 6, 1), dt.date(2026, 6, 2), "Etc/UTC")
+        self.assertEqual(md["grain"], "F")
+        self.assertEqual(md["grain_confidence"], "high")
+
+    def test_ambiguous_evidence_flagged_low(self):
+        import datetime as dt
+        # half-degree °C, non-integral °F -> neither unit clearly integral
+        s = self._src(self._two_days(tf="86.9", tc="30.5"))
+        md = s.fetch_metar_daily("TEST", dt.date(2026, 6, 1), dt.date(2026, 6, 2), "Etc/UTC")
+        self.assertEqual(md["grain"], "C")              # defaults to °C
+        self.assertEqual(md["grain_confidence"], "low") # ...but not asserted
+
+    def test_thin_window_flagged_low(self):
+        import datetime as dt
+        # clearly whole °C but only a handful of obs -> fraction not trustworthy
+        rows = [(f"2026-06-01 {hh:02d}:00", "87.8", "31") for hh in range(6)]
+        s = self._src(self._csv(rows))
+        md = s.fetch_metar_daily("TEST", dt.date(2026, 6, 1), dt.date(2026, 6, 1), "Etc/UTC")
+        self.assertEqual(md["grain"], "C")
+        self.assertEqual(md["grain_confidence"], "low")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -42,6 +42,12 @@ STATION_DAILY_URL = "https://bulk.meteostat.net/v2/daily/{id}.csv.gz"
 # Weather Underground (and thus market settlement) ultimately reads. Returned
 # in the sensor's native unit (whole °F for US ASOS, whole °C internationally).
 METAR_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
+# Native-grain detection guardrail (B3): a grain is only asserted with
+# confidence when the chosen unit's integral fraction clearly dominates on
+# enough obs. Sparse or ambiguous evidence (a half-degree / 0.1° station) is
+# flagged low rather than silently claimed as a confident whole-degree grain.
+GRAIN_DOMINANT_FRAC = 0.9        # share of obs that must be integral in the unit
+GRAIN_MIN_OBS = 24               # min obs before the fraction is trustworthy
 # Hong Kong Observatory official open data — recent daily climate records direct
 # from the Observatory. The Meteostat archive for the HKO station ends in 1992,
 # far too old to measure a *current* settlement-vs-airport offset; this API is
@@ -884,10 +890,13 @@ class Sources:
         station's timezone is required; an unknown zone falls back to UTC.
 
         Returns {"daily": {date -> (high_c, low_c)}, "grain": "C"|"F",
-        "grain_evidence": {"C": frac_integral, "F": frac_integral}}. The native
-        reporting grain is *detected*, not assumed: whichever unit the sensor
-        emits as whole integers is its native one (US ASOS → °F, most of the
-        world → °C). Daily extremes are reconstructed from hourly + special
+        "grain_evidence": {"C": frac_integral, "F": frac_integral},
+        "grain_confidence": "high"|"low"}. The native reporting grain is
+        *detected*, not assumed: whichever unit the sensor emits as whole
+        integers is its native one (US ASOS → °F, most of the world → °C).
+        `grain_confidence` is "low" when that evidence is thin or ambiguous (B3)
+        so a caller never asserts a confident grain off it. Daily extremes are
+        reconstructed from hourly + special
         reports, so a peak between routine obs that fell in a SPECI is captured;
         a sub-minute spike that produced no report is not (a known limitation,
         the same one the public record has)."""
@@ -927,9 +936,17 @@ class Sources:
             daily[day] = (max(cs), min(cs))
         frac_c = n_c / total if total else 0.0
         frac_f = n_f / total if total else 0.0
-        grain = "F" if (frac_f >= 0.9 and frac_f > frac_c) else "C"
+        grain = "F" if (frac_f >= GRAIN_DOMINANT_FRAC and frac_f > frac_c) else "C"
+        # B3 guardrail: trust the grain only when the chosen unit's integral
+        # fraction is clearly dominant on enough obs; otherwise flag it low so a
+        # caller never asserts a confident whole-degree grain off thin/ambiguous
+        # evidence (e.g. a half-degree or 0.1° station, or a near-empty window).
+        chosen_frac = frac_f if grain == "F" else frac_c
+        grain_confidence = ("high" if total >= GRAIN_MIN_OBS
+                            and chosen_frac >= GRAIN_DOMINANT_FRAC else "low")
         return {"daily": daily, "grain": grain,
-                "grain_evidence": {"C": round(frac_c, 3), "F": round(frac_f, 3)}}
+                "grain_evidence": {"C": round(frac_c, 3), "F": round(frac_f, 3)},
+                "grain_confidence": grain_confidence}
 
     # -- Climatological records: how this date compares historically ---------
     def fetch_climatology(self, place: Place, start: dt.date,

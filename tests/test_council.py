@@ -410,6 +410,57 @@ class TestStrictHKOAnchor(unittest.TestCase):
         # And emphatically NOT the airport.
         self.assertNotEqual((truth.get("station") or {}).get("id"), "45007")
 
+class TestSettlementTailDays(unittest.TestCase):
+    """B2/B3: the settlement source-check names the specific days where the raw
+    METAR diverges ≥3°C from the Meteostat truth we backtest on (auditable, not
+    just a count), and carries the detected grain's confidence flag."""
+
+    class _Src:
+        def __init__(self, daily, conf="high"):
+            self._daily, self._conf = daily, conf
+
+        def fetch_metar_daily(self, icao, s, e, tz):
+            return {"daily": self._daily, "grain": "C",
+                    "grain_evidence": {"C": 1.0, "F": 0.0},
+                    "grain_confidence": self._conf}
+
+    def _settle(self, metar, observed, conf="high"):
+        c = Council.__new__(Council)
+        c.sources = self._Src(metar, conf)
+        fp = Place("Testville", "XX", 0.0, 0.0, "Etc/UTC")
+        truth = {"kind": "station", "station": {"icao": "TEST"}}
+        return c._settlement(fp, truth, observed, 30.0, 20.0,
+                             dt.date(2026, 6, 10), dt.date(2026, 6, 12))
+
+    def test_tail_days_named_and_sorted_by_magnitude(self):
+        metar = {"2026-06-10": (35.0, 25.0),   # +4.0 high -> tail
+                 "2026-06-11": (33.0, 24.0),   # +3.0 high -> tail (boundary)
+                 "2026-06-12": (28.0, 20.0)}   # +0.5 high -> not a tail
+        observed = {"2026-06-10": (31.0, 25.0),
+                    "2026-06-11": (30.0, 24.0),
+                    "2026-06-12": (27.5, 20.0)}
+        chk = self._settle(metar, observed)["source_check"]
+        self.assertEqual(chk["tail_days_ge3"], 2)
+        tail = chk["tail_days"]
+        self.assertEqual([t["date"] for t in tail], ["2026-06-10", "2026-06-11"])
+        self.assertEqual(tail[0]["metar_high"], 35.0)
+        self.assertEqual(tail[0]["observed_high"], 31.0)
+        self.assertEqual(tail[0]["delta"], 4.0)
+
+    def test_no_tail_days_when_all_close(self):
+        metar = {"2026-06-10": (30.0, 20.0), "2026-06-11": (31.0, 21.0)}
+        observed = {"2026-06-10": (29.5, 20.0), "2026-06-11": (30.5, 21.0)}
+        chk = self._settle(metar, observed)["source_check"]
+        self.assertEqual(chk["tail_days_ge3"], 0)
+        self.assertEqual(chk["tail_days"], [])
+
+    def test_grain_confidence_propagated(self):
+        metar = {"2026-06-10": (30.0, 20.0)}
+        observed = {"2026-06-10": (30.0, 20.0)}
+        out = self._settle(metar, observed, conf="low")
+        self.assertEqual(out["grain_confidence"], "low")
+
+
 class TestStrictEGLCAnchor(unittest.TestCase):
     """London is pinned to London City Airport (EGLC) as a STRICT anchor — the
     same rule as the Hong Kong Observatory. It is tried first, and no other

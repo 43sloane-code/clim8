@@ -155,6 +155,7 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
         "name": ref["name"],
         "url": ref["url"],
         "grain": md.get("grain"),
+        "grain_confidence": md.get("grain_confidence"),
         "target_date": target.isoformat(),
         "target_status": v.target_status,
         "target_record": target_record,
@@ -766,9 +767,11 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
     if s:
         unit = "whole °F" if s["grain"] == "F" else "whole °C"
         L.append("  SETTLEMENT ALIGNMENT (how this resolves against the market's record)")
+        low_grain = s.get("grain_confidence") == "low"
+        caveat = "  ⚠ LOW confidence — evidence thin/ambiguous, grain not asserted" if low_grain else ""
         L.append(f"    native grain : {unit} "
                  f"(detected: {s['grain_evidence'].get(s['grain'])*100:.0f}% of "
-                 f"raw METAR obs are integral in {s['grain']})")
+                 f"raw METAR obs are integral in {s['grain']}){caveat}")
         L.append(f"    settles as   : high {s['high_native']}  low {s['low_native']}  "
                  f"(verdict {v.high:.1f}/{v.low:.1f} °C snapped to the integer record)")
         chk = s.get("source_check")
@@ -783,6 +786,9 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
             if chk["tail_days_ge3"]:
                 L.append("      -> Meteostat clips the daily high on hot days vs the raw "
                          "METAR the record settles on; bias-correcting on it under-reads peaks.")
+                for t in chk.get("tail_days", [])[:5]:    # the worst few, named (B2)
+                    L.append(f"         {t['date']}: METAR {t['metar_high']:.1f} vs "
+                             f"Meteostat {t['observed_high']:.1f} °C  ({t['delta']:+.1f})")
         L.append("")
 
     if comparison is not None:

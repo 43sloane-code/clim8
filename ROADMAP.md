@@ -95,11 +95,23 @@ Supporting work so the settlement view is trustworthy.
 - [ ] **B1. Round-trip the bucket through backtest.** Score the *quantized*
   verdict against the *settlement source's* own integer record (not Meteostat)
   to report a settlement-accuracy hit rate distinct from the continuous skill.
-- [ ] **B2. Tail-day diagnostics.** When tail days exist, list the specific
-  dates and the raw METAR vs Meteostat values so the divergence is auditable.
-- [ ] **B3. Grain-detection guardrail.** If the integral-fraction evidence is
-  ambiguous (neither unit clearly dominant), flag low confidence rather than
-  guessing a grain.
+- [x] **B2. Tail-day diagnostics.** The settlement source-check now names the
+  specific days where raw METAR diverges ≥3°C from the Meteostat truth we
+  backtest on — `source_check.tail_days` = `[{date, metar_high, observed_high,
+  delta}]`, sorted worst-first — so the divergence is auditable, not just a
+  count. Surfaced in `run.render` (the worst few, named) and the web settlement
+  card (`index.html`). Verified in `tests/test_council.py::TestSettlementTailDays`.
+- [x] **B3. Grain-detection guardrail.** `fetch_metar_daily` now returns a
+  `grain_confidence` ("high"|"low"): the detected grain is only asserted with
+  confidence when the chosen unit's integral fraction clearly dominates
+  (`GRAIN_DOMINANT_FRAC=0.9`) on enough obs (`GRAIN_MIN_OBS=24`). Thin or
+  ambiguous evidence — a half-degree / 0.1° station, or a near-empty window —
+  is flagged low rather than silently claimed as a whole-degree grain.
+  Propagated through `council._settlement` and shown with a ⚠ caveat in CLI +
+  web. Verified in `tests/test_sources.py::TestGrainDetection`. *(Noted while
+  here: `_clean_temp_cell` screens each raw cell through a °C plausibility band,
+  so the °F column's grain evidence is unreliable for warm US readings >60 —
+  a pre-existing latent quirk, out of scope as both pinned cities settle in °C.)*
 
 ---
 
