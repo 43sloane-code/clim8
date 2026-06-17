@@ -285,7 +285,7 @@ def _self_test() -> None:
 
     # 5) Required keys present; no banned confidence vocabulary anywhere in output.
     blob = " ".join(f"{k}={v}" for k, v in k_edge.items()).lower()
-    assert REQUIRED_KEYS <= set(k_edge), REQUIRED_KEYS - set(k_edge)
+    assert set(k_edge) >= REQUIRED_KEYS, REQUIRED_KEYS - set(k_edge)
     assert not any(b in blob for b in _BANNED), "banned confidence vocabulary leaked"
 
     # 6) compact_buckets folds tails and still sums to ~1.

@@ -58,7 +58,7 @@ def load_config(path: str = _CONFIG_PATH) -> dict:
     so a partial or missing file never crashes the loop."""
     cfg = dict(DEFAULT_CONFIG)
     if path and os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             cfg.update(json.load(fh))
     for k, v in DEFAULT_CONFIG.items():
         cfg.setdefault(k, v)
@@ -244,9 +244,9 @@ def _self_test() -> None:
     assert loop_state(log[:2], cfg)["status"] == "ACTIVE"
 
     # AUTO-REARM only when EVERY station clears the fresh-row bar.
-    rows_thin = {s: 30 for s in cfg["stations"]}; rows_thin["london_low"] = 12
+    rows_thin = dict.fromkeys(cfg["stations"], 30); rows_thin["london_low"] = 12
     assert loop_state(log, cfg, new_rows_since_suspend=rows_thin)["status"] == "SUSPENDED"
-    rows_ok = {s: 30 for s in cfg["stations"]}
+    rows_ok = dict.fromkeys(cfg["stations"], 30)
     rearmed = loop_state(log, cfg, new_rows_since_suspend=rows_ok)
     assert rearmed["status"] == "ACTIVE" and rearmed["rearm_eligible"], rearmed
 

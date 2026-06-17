@@ -531,7 +531,7 @@ class MarketData:
                 break
         return out[:max_events]
 
-    def fetch_resolution(self, slug: str) -> "Resolution | None":
+    def fetch_resolution(self, slug: str) -> Resolution | None:
         """Read one settled event's authoritative outcome by slug. Returns a
         Resolution (resolved=False when the event exists but has not paid out yet)
         or None when no event is found / the response is unusable. One request;

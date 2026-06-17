@@ -93,7 +93,7 @@ class ConvergenceInputs:
     residual_spread_c: float | None
     n_resid: int
 
-    def decide(self, c7_validated: bool = False) -> "Convergence":
+    def decide(self, c7_validated: bool = False) -> Convergence:
         return converge(self.quantity, self.headline_c, list(self.mechanisms),
                         self.residual_spread_c, self.n_resid, c7_validated)
 

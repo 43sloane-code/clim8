@@ -43,7 +43,7 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
 
     cfg = load_config(str(CONFIG))
-    with open(LEDGER, "r", encoding="utf-8") as fh:
+    with open(LEDGER, encoding="utf-8") as fh:
         log = json.load(fh)["log"]
 
     new_rows = _parse_rows(a.new_rows)

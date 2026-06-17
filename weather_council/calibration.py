@@ -335,7 +335,7 @@ def _finalize_coverage(
     min_scored: int,
     warmup: int,
     z_threshold: float,
-) -> "CoverageEval | None":
+) -> CoverageEval | None:
     """Turn the pooled per-day contributions into the recommend/decline verdict.
     `cal_scores` here is an end-of-sample pool used only for the reported candidate
     factor — it drives no per-day decision, so pooling it across attributes leaks
@@ -390,7 +390,7 @@ def coverage_calibration_eval(
     lo_q: float = 0.10,
     hi_q: float = 0.90,
     z_threshold: float = Z_THRESHOLD,
-) -> "CoverageEval | None":
+) -> CoverageEval | None:
     """Walk-forward CRPS + coverage comparison of the served residual cloud vs the
     same cloud widened by a single online-conformal factor, over ONE ordered
     held-out residual stream.
@@ -418,7 +418,7 @@ def coverage_calibration_eval(
 
 
 def coverage_calibration_eval_grouped(
-    streams: "list[list[float]]",
+    streams: list[list[float]],
     *,
     band_floor: int = BAND_FLOOR,
     warmup: int = WARMUP,
@@ -427,7 +427,7 @@ def coverage_calibration_eval_grouped(
     lo_q: float = 0.10,
     hi_q: float = 0.90,
     z_threshold: float = Z_THRESHOLD,
-) -> "CoverageEval | None":
+) -> CoverageEval | None:
     """Per-attribute coverage calibration: the SAME walk-forward as the single-stream
     version, but each stream (e.g. held-out HIGH residuals, then LOW residuals) is
     scored against its OWN prior cloud — exactly the cloud the council serves for that

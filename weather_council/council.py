@@ -392,14 +392,14 @@ class Validation:
     # dispersion (a conditional/heteroscedastic distribution) beat the single
     # residual cloud on held-out CRPS, past the noise floor? None when too few days
     # to judge. This NEVER changes the verdict — it surfaces a finding for review.
-    calibration: "CalibrationEval | None" = None
+    calibration: CalibrationEval | None = None
     # Recommend-only spread–skill diagnostic over the SAME leak-free walk-forward
     # (signed_residual, member_dispersion) pairs: after removing the global
     # averaging scale, does member dispersion track the blend's error with the
     # right shape across regimes (a reliable per-day uncertainty signal), or is it
     # flat? This is the verification that makes the bucket probabilities' SPREAD
     # trustworthy. None when too few days. Never moves the verdict.
-    spread_skill: "SpreadSkill | None" = None
+    spread_skill: SpreadSkill | None = None
     # Recommend-only ensemble-calibration companions to spread_skill, over the
     # SAME leak-free walk-forward. rank_histogram (Talagrand) asks whether the raw
     # member panel's dispersion is the right SIZE (U = under-dispersed, the classic
@@ -407,8 +407,8 @@ class Validation:
     # pit_calibration asks whether the SERVED distribution — the residual cloud
     # compare.py resamples into bucket probabilities — is itself calibrated
     # (uniform PIT). None when too few days. Neither moves the verdict.
-    rank_histogram: "RankHistogram | None" = None
-    pit_calibration: "PITCalibration | None" = None
+    rank_histogram: RankHistogram | None = None
+    pit_calibration: PITCalibration | None = None
     # Recommend-only coverage calibration over the SAME leak-free walk-forward
     # residual stream: is the ONE served cloud the right WIDTH on average? Learns a
     # single online-conformal inflation factor from the council's realized
@@ -416,7 +416,7 @@ class Validation:
     # incumbent on CRPS past the noise floor while dragging coverage toward nominal.
     # Complements pit_calibration (shape) with a scale check. None when too few
     # days. RECOMMEND-ONLY — never widens the cloud the council actually serves.
-    coverage_calibration: "CoverageEval | None" = None
+    coverage_calibration: CoverageEval | None = None
     # Bucket-verdict simulation: the council scored on the object the MARKET pays
     # on — the whole-degree settlement bucket — over the SAME leak-free
     # walk-forward. The modal bucket (point verdict dressed with the prior
@@ -425,27 +425,27 @@ class Validation:
     # edge-distance fragility (misses near a boundary vs gross errors). Scored per
     # attribute because high and low settle as separate markets. None when too few
     # days. MEASURE-ONLY — never moves the served verdict. See bucket_verdict.py.
-    bucket_verdict_high: "BucketVerdictEval | None" = None
-    bucket_verdict_low: "BucketVerdictEval | None" = None
+    bucket_verdict_high: BucketVerdictEval | None = None
+    bucket_verdict_low: BucketVerdictEval | None = None
     # Recency-weighted-bias candidate evaluation: does recency-weighting each
     # member's bias (vs the served plain training mean) sharpen the held-out
     # distribution? Scored leak-free on paired CRPS (SE-gated) and bucket-hit, per
     # attribute then pooled. None when too few paired days. RECOMMEND-ONLY — the
     # served blend always uses the plain-mean bias. See recency_bias.py.
-    recency_bias: "RecencyBiasEval | None" = None
+    recency_bias: RecencyBiasEval | None = None
     # The SAME recency-bias audit, split PER ATTRIBUTE (high and low are separate
     # markets). The pooled `recency_bias` above can recommend off a gain that lives
     # entirely in one attribute; these localize it. A per-station served policy
     # that turns recency on for the pool is only justified on an attribute whose
     # own audit clears the gate — so these are the evidence that keeps the served
     # _served_bias_halflife honest at the attribute grain. Recommend-only.
-    recency_bias_high: "RecencyBiasEval | None" = None
-    recency_bias_low: "RecencyBiasEval | None" = None
+    recency_bias_high: RecencyBiasEval | None = None
+    recency_bias_low: RecencyBiasEval | None = None
     # The recency half-life (days) this station's SERVED bias correction uses, or
     # None for the plain trailing mean. When set, the headline MAE/CRPS/bucket
     # above already reflect the recency-weighted bias (it is APPLIED, not just
     # recommended). Set by _served_bias_halflife — see recency_bias gate.
-    bias_halflife_served: "float | None" = None
+    bias_halflife_served: float | None = None
 
 
 @dataclass
@@ -481,7 +481,7 @@ class Verdict:
     convergence: dict | None = None  # recommend-only mechanism-convergence inputs ({"high","low"})
 
 
-def _mae(v: "Validation", mechanism: str, attr: str) -> float | None:
+def _mae(v: Validation, mechanism: str, attr: str) -> float | None:
     """The held-out MAE the walk-forward backtest produced for one mechanism and
     quantity ('high'/'low'). Used by the convergence layer to score each
     mechanism on its own proper score — never a fabricated number."""
@@ -534,7 +534,7 @@ CONSENSUS_SPLIT_SIGMA = 1.5
 CONSENSUS_SIGMA_FLOOR = 1.0
 
 
-def _consensus_read(v: "Verdict", sigma: float) -> dict:
+def _consensus_read(v: Verdict, sigma: float) -> dict:
     """Job 3 of regime_consensus, isolated: measure whether the independent point
     estimators (naive equal-weight average, raw perturbed-ensemble mean) agree with
     the headline verdict within the stated effective σ, on the worse of high/low.
@@ -563,7 +563,7 @@ def _consensus_read(v: "Verdict", sigma: float) -> dict:
             "worst_axis": worst_axis, "status": status}
 
 
-def _classify_regime(v: "Verdict") -> dict:
+def _classify_regime(v: Verdict) -> dict:
     """Job 1 of regime_consensus, isolated: name the regime from already-computed,
     already-backtested signals on the Verdict — seasonality, ensemble data depth,
     today's volatility (effective-σ tier) and the spatial gradient. Pure summary."""
@@ -594,7 +594,7 @@ def _classify_regime(v: "Verdict") -> dict:
             "volatility": volatility, "eff": eff, "spatial": spatial, "sp": sp}
 
 
-def _regime_trusted_notes(r: dict, en: "Ensemble") -> list[str]:
+def _regime_trusted_notes(r: dict, en: Ensemble) -> list[str]:
     """Job 2 of regime_consensus, isolated: state which validation is load-bearing
     in this regime (and which to distrust), making the confidence-tier reasoning
     explicit instead of scattered across caveats."""
@@ -635,7 +635,7 @@ def _consensus_takeaway(status: str, worst_ratio: float, worst_axis: str,
             f"headline {worst_axis} — read the bucket probabilities wider. Regime: {label}.")
 
 
-def regime_consensus(v: "Verdict") -> dict:
+def regime_consensus(v: Verdict) -> dict:
     """Consolidated regime read + cross-mechanism consensus for a finished
     Verdict. Pure post-hoc summary, exactly like applied_bias_correction: it
     reads only what the engine already computed and backtested and NEVER changes
@@ -1672,7 +1672,7 @@ class Council:
         return out
 
     def _validate(self, votes: list[Vote], observed: DailySeries,
-                  fp: "Place | None" = None) -> Validation:
+                  fp: Place | None = None) -> Validation:
         dates = sorted(observed.keys())
         if len(dates) < 15:
             return Validation(None, None, None, None, None, 0)

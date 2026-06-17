@@ -158,7 +158,7 @@ class KernelRidge:
         self.alpha: list[float] = []
         self.y_mean = 0.0
 
-    def fit(self, X: list[list[float]], y: list[float]) -> "KernelRidge":
+    def fit(self, X: list[list[float]], y: list[float]) -> KernelRidge:
         n = len(X)
         self.y_mean = sum(y) / n if n else 0.0
         yc = [v - self.y_mean for v in y]           # centre the target

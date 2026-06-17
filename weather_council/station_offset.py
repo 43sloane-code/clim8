@@ -58,7 +58,7 @@ MODERN_RECENCY_DAYS = 730
 # station name to a Meteostat station name.
 _STOPWORDS = frozenset({
     "the", "of", "and", "at", "by", "in", "de", "la", "el",
-    "international", "intl", "airport", "station", "city", "the",
+    "international", "intl", "airport", "station", "city",
 })
 
 

@@ -76,7 +76,7 @@ class Experiment:
     c7_validated: bool = False       # from edge.is_edge_validated(...)
     human_signoff: bool = False
 
-    def lock(self) -> "Experiment":
+    def lock(self) -> Experiment:
         """Freeze the pre-registered hypothesis fields. Must be called before any
         validation result is attached; the hash records exactly what was promised."""
         payload = json.dumps({

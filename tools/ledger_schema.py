@@ -122,7 +122,7 @@ def main(argv=None) -> int:
     ap.add_argument("--ledger", default=str(Path(".harness_opt") / "ledger.json"))
     a = ap.parse_args(argv)
 
-    with open(a.ledger, "r", encoding="utf-8") as fh:
+    with open(a.ledger, encoding="utf-8") as fh:
         log = json.load(fh)["log"]
     rep = audit(log)
 

@@ -32,7 +32,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 from dataclasses import dataclass
-from typing import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 
 # Reuse the single, measurement-justified definition of "this place settles on
 # the Hong Kong Observatory" — the gate must fire for exactly the cities the rest
