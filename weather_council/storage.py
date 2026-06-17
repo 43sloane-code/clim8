@@ -366,7 +366,19 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
     the market pays out on), exactly as `verify` does — never a city-centroid or
     face-value grid reading. The high is then snapped to the market's native
     whole-degree reading and mapped into the stored bucket ladder, giving the
-    realized bucket `edge.score_snapshot` grades both forecasters against."""
+    realized bucket `edge.score_snapshot` grades both forecasters against.
+
+    Each `fetch_station_daily` pulls the weeks-stale Meteostat bulk file PLUS a
+    modern recent-day overlay (HKO open-data for the Observatory, IEM ASOS METAR
+    for EGLC), and the overlay alone costs many requests against the shared per-run
+    request budget. Reusing ONE `Sources` across every station let a heavy early
+    fetch exhaust that budget, after which a LATER station's overlay silently
+    failed and the series fell back to the bulk file — the target day was then
+    absent, `series.get(target)` was None, and that station's recent rows never
+    settled (leaving `realized_label` NULL). So on the production path (no injected
+    `Sources`) we build a FRESH `Sources` per unique station, giving each its own
+    request budget; an injected `Sources` (tests / explicit callers) is used as-is."""
+    injected = sources is not None
     sources = sources or Sources()
     cutoff = (dt.date.today() - dt.timedelta(days=2)).isoformat()
     conn = _connect()
@@ -387,12 +399,16 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
         if truth_kind == "station" and station_id:
             series = station_cache.get(station_id)
             if series is None:
+                # Fresh Sources per unique station on the production path so each
+                # station fetch gets its own request budget (see docstring); an
+                # injected Sources is honored as-is for tests/explicit callers.
+                fetcher = sources if injected else Sources()
                 try:
                     # Reconstruct the verdict's EXACT anchor — carrying icao+name so
                     # fetch_station_daily's modern overlays fire (EGLC by icao, the
                     # HKO Observatory by name+geography). A blank station here was the
                     # bug that left every snapshot reading only the stale bulk file.
-                    series = sources.fetch_station_daily(
+                    series = fetcher.fetch_station_daily(
                         Station(id=station_id, name=station_name or "", wmo=None,
                                 icao=station_icao or None,
                                 latitude=fc_lat or 0.0, longitude=fc_lon or 0.0,
