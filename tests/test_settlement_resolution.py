@@ -194,5 +194,46 @@ class TestBackfill(unittest.TestCase):
         self.assertNotIn("highest-temperature-in-london-on-june-12-2026", stub.fetches)
 
 
+class TestLiveScorecard(unittest.TestCase):
+    """The realized served-vs-settlement hit-rate (the honest number that replaces
+    the backtest-optimistic conviction)."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self._orig = storage.DB_PATH
+        storage.DB_PATH = Path(self.tmp.name) / "t.db"
+        conn = storage._connect()
+        bj = '[{"label":"22\\u00b0C","lo":22,"hi":22}]'
+        days = [  # (target, served_high, pm_resolved_label) — round-half-up London
+            ("2026-06-12", 21.8, "23°C"),   # served 22, settled 23 -> miss
+            ("2026-06-13", 21.5, "22°C"),   # served 22, settled 22 -> hit
+            ("2026-06-14", 20.0, "20°C"),   # served 20, settled 20 -> hit
+        ]
+        with conn:
+            for tgt, high, pm in days:
+                conn.execute(
+                    "INSERT INTO market_snapshots (issued_at, place, target_date, "
+                    "grain, buckets_json, sub_degree, pm_resolved_label) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (tgt + "T20:00:00", "London, United Kingdom", tgt, "C", bj, 0, pm))
+                conn.execute(
+                    "INSERT INTO verdicts (issued_at, place, target_date, high, low, "
+                    "confidence) VALUES (?,?,?,?,?,?)",
+                    (tgt + "T08:00:00", "London, United Kingdom", tgt, high, 12.0, "MODERATE"))
+        conn.close()
+
+    def tearDown(self):
+        storage.DB_PATH = self._orig
+        self.tmp.cleanup()
+
+    def test_realized_rate_uses_contract_bucket_not_backtest(self):
+        sc = storage.live_bucket_scorecard("London, United Kingdom")
+        self.assertEqual(sc["n"], 3)
+        self.assertEqual(sc["hits"], 2)            # 06-13 and 06-14 hit; 06-12 missed
+        self.assertAlmostEqual(sc["rate"], 2 / 3)
+
+    def test_no_settled_days_is_empty(self):
+        self.assertEqual(storage.live_bucket_scorecard("Nowhere, ZZ")["n"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

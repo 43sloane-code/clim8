@@ -18,7 +18,7 @@ from __future__ import annotations
 __all__ = [
     'log_verdict', 'verify', 'log_market_snapshot', 'settle_market_snapshots',
     'fetch_settled_snapshots', 'log_tracked_forecast', 'settle_tracked_forecasts',
-    'tracked_forecast_scores', 'backfill_pm_resolutions'
+    'tracked_forecast_scores', 'backfill_pm_resolutions', 'live_bucket_scorecard'
 ]
 
 import datetime as dt
@@ -27,7 +27,8 @@ import sqlite3
 from pathlib import Path
 
 from .council import Verdict
-from .market import MarketData, _native_reading_int, resolved_event_slug
+from .market import (MarketData, _bucket_edges, _native_reading_int,
+                     resolved_event_slug)
 from .sources import Place, Sources, Station
 
 DB_PATH = Path(__file__).resolve().parent.parent / "verdicts.db"
@@ -492,6 +493,46 @@ def backfill_pm_resolutions(market_data: "MarketData | None" = None,
         )
     conn.close()
     return report
+
+
+def live_bucket_scorecard(place_label: str, max_days: int = 60) -> dict:
+    """The HONEST realized hit-rate: served bucket vs the contract's OWN settled
+    bucket (`pm_resolved_label`) over recent settled days — no revisable backtest.
+
+    The backtest scores on the Open-Meteo historical-forecast archive, which is
+    revised toward truth after the fact, so it OVERSTATES live skill. This reads
+    only what actually happened: the served verdict's high (latest logged for the
+    day) snapped to the settlement bucket, compared to the bucket the market paid
+    out. Returns {n, hits, rate, recent:[(date, served_bucket, true_bucket, hit)]}.
+    No network. n=0 when no settled day has both a resolution and a served verdict."""
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT DISTINCT target_date, grain, sub_degree, pm_resolved_label "
+        "FROM market_snapshots WHERE place=? AND pm_resolved_label IS NOT NULL "
+        "ORDER BY target_date DESC LIMIT ?",
+        (place_label, max_days),
+    ).fetchall()
+    hits = 0
+    recent: list[tuple[str, int, int, bool]] = []
+    for target, grain, sub_degree, pm_label in rows:
+        lo, hi = _bucket_edges(pm_label or "")
+        true_b = lo if lo is not None else hi
+        if true_b is None:
+            continue
+        vrow = conn.execute(
+            "SELECT high FROM verdicts WHERE place=? AND target_date=? "
+            "AND high IS NOT NULL ORDER BY issued_at DESC LIMIT 1",
+            (place_label, target)).fetchone()
+        if not vrow:
+            continue
+        served_b = _native_reading_int(vrow[0], grain or "C", bool(sub_degree))
+        hit = served_b == true_b
+        hits += 1 if hit else 0
+        recent.append((target, served_b, true_b, hit))
+    conn.close()
+    n = len(recent)
+    return {"n": n, "hits": hits, "rate": (hits / n if n else None),
+            "recent": recent}
 
 
 def fetch_settled_snapshots() -> list[dict]:

@@ -39,8 +39,9 @@ from weather_council.tc_gate import tc_halt
 from weather_council.intraday import intraday_floor
 from weather_council.intraday_ceiling import intraday_ceiling
 from weather_council.station_offset import measure_settlement_offset
-from weather_council.storage import (fetch_settled_snapshots, log_market_snapshot,
-                                     log_verdict, settle_market_snapshots, verify)
+from weather_council.storage import (fetch_settled_snapshots, live_bucket_scorecard,
+                                     log_market_snapshot, log_verdict,
+                                     settle_market_snapshots, verify)
 
 # User-declared settlement-reference stations: cities the user has explicitly
 # pinned to a specific airport record to "compare and contrast" every verdict
@@ -707,6 +708,20 @@ def _bucket_call_lines(v: Verdict, ceiling=None) -> list[str]:
         else:
             L.append("    (single-bucket collapses to HIGH intraday as the peak nears — "
                      "run with --intraday on the settlement day)")
+    # Reality check: the REALIZED served-vs-settlement rate (not the revisable
+    # backtest, which overstates live skill because the historical-forecast archive
+    # is revised toward truth). This is the number that has actually been happening.
+    try:
+        sc = live_bucket_scorecard(v.place.label())
+    except Exception:
+        sc = {"n": 0}
+    if sc["n"] >= 3:
+        L.append(f"    REALITY CHECK — live served-vs-settlement {sc['hits']}/{sc['n']} "
+                 f"= {sc['rate']*100:.0f}% over last {sc['n']} settled days — the realized "
+                 f"rate (the model conviction above is backtest-optimistic; trust this + intraday)")
+    elif sc["n"] > 0:
+        L.append(f"    REALITY CHECK — only {sc['n']} settled day(s) logged; live track "
+                 f"record still thin (the model conviction above is backtest-optimistic)")
     return L
 
 
