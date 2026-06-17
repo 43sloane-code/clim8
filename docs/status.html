@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>clim8 — session handoff</title>
+<style>
+  :root{
+    --bg:#0b0f14; --card:#141b24; --ink:#e8eef5; --mut:#93a4b8; --line:#243140;
+    --good:#3fb950; --warn:#d29922; --bad:#f85149; --acc:#58a6ff;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f8fa; --card:#fff; --ink:#1b2733; --mut:#5b6b7c;
+           --line:#e2e8f0; }
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",Segoe UI,Roboto,sans-serif;
+       padding:max(16px,env(safe-area-inset-left)) 16px calc(48px + env(safe-area-inset-bottom));}
+  .wrap{max-width:680px;margin:0 auto}
+  h1{font-size:22px;margin:8px 0 2px;letter-spacing:-.01em}
+  h2{font-size:15px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);
+     margin:26px 0 10px;font-weight:600}
+  p{margin:8px 0}
+  .sub{color:var(--mut);font-size:13px;margin-top:0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+        padding:14px 16px;margin:10px 0}
+  .tldr{border-left:3px solid var(--acc)}
+  .row{display:flex;justify-content:space-between;gap:12px;align-items:baseline;
+       padding:9px 0;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:0}
+  .row .k{font-weight:600}
+  .row .v{text-align:right;color:var(--mut);font-variant-numeric:tabular-nums}
+  .pill{display:inline-block;font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px}
+  .lo{background:rgba(248,81,73,.16);color:var(--bad)}
+  .hi{background:rgba(63,185,80,.16);color:var(--good)}
+  .md{background:rgba(210,153,34,.16);color:var(--warn)}
+  code{background:rgba(127,127,127,.16);padding:1.5px 6px;border-radius:6px;
+       font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}
+  pre{background:var(--card);border:1px solid var(--line);border-radius:12px;
+      padding:12px;overflow:auto;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+  ul{margin:8px 0;padding-left:20px} li{margin:5px 0}
+  .ok{color:var(--good)} .bad{color:var(--bad)} .mut{color:var(--mut)}
+  .foot{color:var(--mut);font-size:12px;margin-top:28px;text-align:center}
+</style>
+</head>
+<body><div class="wrap">
+
+  <h1>clim8 — session handoff</h1>
+  <p class="sub">Two-city daily-high <b>bucket</b> prediction vs Polymarket settlement · Hong Kong &amp; London · snapshot 2026-06-18</p>
+
+  <div class="card tldr">
+    <p style="margin-top:0"><b>The core truth.</b> Day-ahead, the forecast error σ ≈ one bucket wide, so naming the exact 1 °C bucket is a near-coin-flip <b>by construction</b>: ~38 % HK, ~60 % London. No model tuning beats this (all levers failed the gate). The <b>only</b> way to make the bucket right is to shrink σ <b>intraday</b> — as the running max nears the peak.</p>
+  </div>
+
+  <h2>Today's bucket calls</h2>
+  <div class="card">
+    <div class="row"><span class="k">Hong Kong · day-ahead</span>
+      <span class="v">29 °C · <span class="pill lo">LOW 37%</span></span></div>
+    <div class="row"><span class="k">London · day-ahead</span>
+      <span class="v">~25 °C · <span class="pill md">coin-flip</span></span></div>
+    <div class="row"><span class="k">High-conviction call</span>
+      <span class="v">intraday only — appears post-peak</span></div>
+  </div>
+  <p class="sub">Day-ahead = a distribution, not a confident call. London locks the bucket to ~89 % by 15:00 / ~99 % by 18:00 once the running max is in. HK has no hourly settlement record yet (see below).</p>
+
+  <h2>What ships now</h2>
+  <div class="card">
+    <div class="row"><span class="k">London intraday-ceiling</span><span class="v ok">live · 56%→89→99%</span></div>
+    <div class="row"><span class="k">Settlement backfill + audit</span><span class="v ok">true-settlement scoring</span></div>
+    <div class="row"><span class="k">Proxy = contract</span><span class="v ok">HK 15/15 · LDN 16/16</span></div>
+    <div class="row"><span class="k">Honest BUCKET CALL</span><span class="v ok">conviction = bucket P</span></div>
+    <div class="row"><span class="k">settle-budget bug</span><span class="v ok">fixed + test</span></div>
+    <div class="row"><span class="k">HK Observatory accumulator</span><span class="v md">building (~6 wks)</span></div>
+    <div class="row"><span class="k">Test suite</span><span class="v ok">365 green · pyflakes clean</span></div>
+  </div>
+
+  <h2>Why HK is harder</h2>
+  <div class="card">
+    <p style="margin-top:0">Intraday only works off the <b>exact settlement station</b>.</p>
+    <ul>
+      <li><b>London</b> settles on London City Airport (<b>EGLC</b>) — an airport that <span class="ok">has</span> an hourly archive → intraday works out of the box.</li>
+      <li><b>Hong Kong</b> settles on the <b>HKO Observatory</b> (no hourly archive). The airport <b>VHHH</b> has hourly data but is a different station 25 km away → tested as a proxy, <span class="bad">failed (~38 %)</span>.</li>
+    </ul>
+    <p>So the accumulator logs the <b>Observatory's own</b> live feed hourly to build the missing record. Closed 3 ways: no HKO hourly API, ERA5 32 %, VHHH 38 %.</p>
+  </div>
+
+  <h2>Open / next</h2>
+  <div class="card">
+    <ul>
+      <li>Keep the HK Observatory hourly archive accumulating (the only path to HK intraday conviction).</li>
+      <li>When it has ~40 days: add an HK arm to <code>intraday_ceiling</code>, trained vs the authoritative <code>hko_daily_extract</code> abs-max, validated leak-free before serving.</li>
+      <li>Day-ahead point accuracy is at its ceiling — do <b>not</b> chase it (AIFS, spread, recency, warm-bias, pmf-mode all failed/bucket-neutral).</li>
+    </ul>
+  </div>
+
+  <h2>Continue on iOS</h2>
+  <p class="sub">All work is on <code>main</code>, pushed to GitHub. To run the verdict + intraday call:</p>
+<pre>PYTHONPATH=. python3 run.py "London" --lead 0 --market --intraday
+PYTHONPATH=. python3 run.py "Hong Kong" --lead 0 --market --intraday
+
+# accumulate HK Observatory hourly (schedule 0 * * * *)
+PYTHONPATH=. python3 tools/hko_intraday_accumulate.py
+
+# score served buckets vs true contract settlement
+PYTHONPATH=. python3 tools/settlement_audit.py --backfill
+
+# run the gate
+PYTHONPATH=. python3 -m unittest discover -s tests</pre>
+
+  <p class="foot">clim8 · github.com/43sloane-code/clim8 · main @ honest-bucket-call</p>
+
+</div></body></html>
