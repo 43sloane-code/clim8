@@ -18,7 +18,7 @@ from __future__ import annotations
 __all__ = [
     'log_verdict', 'verify', 'log_market_snapshot', 'settle_market_snapshots',
     'fetch_settled_snapshots', 'log_tracked_forecast', 'settle_tracked_forecasts',
-    'tracked_forecast_scores'
+    'tracked_forecast_scores', 'backfill_pm_resolutions'
 ]
 
 import datetime as dt
@@ -27,7 +27,8 @@ import sqlite3
 from pathlib import Path
 
 from .council import Verdict
-from .market import _native_reading_int
+from .market import (MarketData, Resolution, _native_reading_int,
+                     resolved_event_slug)
 from .sources import Place, Sources, Station
 
 DB_PATH = Path(__file__).resolve().parent.parent / "verdicts.db"
@@ -111,10 +112,18 @@ def _connect() -> sqlite3.Connection:
     # realized-bucket map must know it at settle time. Additive/nullable; legacy
     # rows are backfilled below from the anchor identity (only the HKO Observatory
     # settles sub-degree among the basket cities).
+    # pm_resolved_label / pm_resolved_at persist the contract's OWN settled bucket
+    # (read authoritatively from the Gamma event by `backfill_pm_resolutions`),
+    # SEPARATE from realized_label (which is our anchor-station PROXY). Keeping both
+    # lets the audit tool (a) score served buckets against the TRUE payout, and
+    # (b) ALARM when proxy and contract diverge — the alignment gap that no amount
+    # of internal CRPS can catch. Additive/nullable: never alters a model prob or
+    # an existing score; the served distribution is untouched.
     ms_existing = {row[1] for row in conn.execute("PRAGMA table_info(market_snapshots)")}
     ms_added = {"market_volume": "REAL", "market_liquidity": "REAL",
                 "station_icao": "TEXT", "station_name": "TEXT",
-                "sub_degree": "INTEGER"}
+                "sub_degree": "INTEGER",
+                "pm_resolved_label": "TEXT", "pm_resolved_at": "TEXT"}
     for col, typ in ms_added.items():
         if col not in ms_existing:
             conn.execute(f"ALTER TABLE market_snapshots ADD COLUMN {col} {typ}")
@@ -420,6 +429,51 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
         report.append(
             f"{place_label} {target}: realized high {realized_high:.1f}°C "
             f"settled in bucket \"{label}\""
+        )
+    conn.close()
+    return report
+
+
+def backfill_pm_resolutions(market_data: "MarketData | None" = None,
+                            *, cutoff_days: int = 1) -> list[str]:
+    """Fill `pm_resolved_label` for snapshot days that have settled, reading the
+    AUTHORITATIVE outcome straight from the Gamma contract (not our proxy truth).
+
+    Idempotent: only rows where `pm_resolved_label IS NULL` and the target day is
+    at least `cutoff_days` old are considered, and one resolution is fetched per
+    (place, target) — then written to every snapshot row for that day. An
+    unresolved or unfound event is left NULL to retry later. Read-only against the
+    market; the only writes are the additive pm_resolved_* columns. Returns one
+    human line per (place, target) newly resolved."""
+    md = market_data or MarketData()
+    cutoff = (dt.date.today() - dt.timedelta(days=cutoff_days)).isoformat()
+    conn = _connect()
+    pairs = conn.execute(
+        "SELECT DISTINCT place, target_date FROM market_snapshots "
+        "WHERE pm_resolved_label IS NULL AND target_date <= ? "
+        "ORDER BY target_date, place",
+        (cutoff,),
+    ).fetchall()
+
+    report: list[str] = []
+    for place_label, target in pairs:
+        try:
+            day = dt.date.fromisoformat(target)
+        except ValueError:
+            continue
+        res = md.fetch_resolution(resolved_event_slug(place_label, day))
+        if res is None or not res.resolved or not res.winning_label:
+            continue                       # not finalized / not found — retry later
+        now = dt.datetime.now().isoformat(timespec="seconds")
+        with conn:
+            conn.execute(
+                "UPDATE market_snapshots SET pm_resolved_label=?, pm_resolved_at=? "
+                "WHERE place=? AND target_date=? AND pm_resolved_label IS NULL",
+                (res.winning_label, now, place_label, target),
+            )
+        report.append(
+            f"{place_label} {target}: contract settled \"{res.winning_label}\" "
+            f"(source: {res.source or 'n/a'})"
         )
     conn.close()
     return report

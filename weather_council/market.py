@@ -20,9 +20,11 @@ JSON-encoded *strings*, not arrays, so each is json.loads'd defensively.
 from __future__ import annotations
 
 __all__ = [
-    'MarketBucket', 'WeatherMarket', 'MarketData'
+    'MarketBucket', 'WeatherMarket', 'MarketData', 'Resolution',
+    'resolved_event_slug',
 ]
 
+import datetime as dt
 import json
 import math
 import re
@@ -425,6 +427,63 @@ def _parse_event(e: dict) -> WeatherMarket | None:
     )
 
 
+# --- authoritative settlement resolution ----------------------------------- #
+#
+# The truth the council scores itself on (its anchor station / ERA5 grid) is a
+# PROXY for what the market actually paid out. They are MEANT to coincide (HK ==
+# the HKO Observatory abs-daily-max, London == Wunderground EGLC), but "coincided
+# yesterday" is not "coincides today" — so the only way to know whether a verdict
+# matched the contract is to read the contract's OWN resolved outcome. A settled
+# Gamma event carries it directly: the winning bucket's "Yes" outcomePrice is 1.0.
+# `fetch_temperature_markets` only pulls open events, so settled outcomes are read
+# here by SLUG (the per-day event slug, suffixed with the year).
+
+_MONTHS = ("january", "february", "march", "april", "may", "june", "july",
+           "august", "september", "october", "november", "december")
+_RESOLVED_YES = 0.99   # a settled winner prices at 1.0; allow float slop
+
+
+def resolved_event_slug(city_label: str, target: dt.date) -> str:
+    """The Gamma event slug for one city/day, e.g.
+    "highest-temperature-in-hong-kong-on-june-12-2026". `city_label` may be a
+    full place label ("Hong Kong, HK"); only the part before the first comma is
+    used. NOTE the year suffix — the bare slug returns the SAME-day event from a
+    PRIOR year (which can even settle in different units)."""
+    city = city_label.split(",", 1)[0].strip().lower()
+    token = re.sub(r"[^a-z0-9]+", "-", city).strip("-")
+    return (f"highest-temperature-in-{token}-on-"
+            f"{_MONTHS[target.month - 1]}-{target.day}-{target.year}")
+
+
+@dataclass(frozen=True)
+class Resolution:
+    """The contract's OWN settled outcome for one city/day — the authoritative
+    answer to "which bucket did the market pay out on", independent of the
+    council's proxy truth. `resolved` is True only for a closed event with a
+    YES-priced winning bucket; otherwise the day has not finalized."""
+    slug: str
+    resolved: bool
+    winning_label: str | None = None
+    winning_lo: int | None = None     # inclusive edges in the native unit
+    winning_hi: int | None = None
+    grain: str = "C"
+    station: str | None = None
+    source: str | None = None
+    end_date: str | None = None
+
+    def contains(self, reading_int: int) -> bool:
+        """True iff a native whole-degree reading lands in the winning bucket —
+        i.e. a forecast snapping to `reading_int` would have settled YES. False
+        for an unresolved day or an unparseable winning label."""
+        if not self.resolved or (self.winning_lo is None and self.winning_hi is None):
+            return False
+        if self.winning_lo is not None and reading_int < self.winning_lo:
+            return False
+        if self.winning_hi is not None and reading_int > self.winning_hi:
+            return False
+        return True
+
+
 class MarketData:
     """Read-only client for Polymarket temperature markets."""
 
@@ -471,3 +530,38 @@ class MarketData:
             if len(raw) < _PAGE_SIZE:
                 break
         return out[:max_events]
+
+    def fetch_resolution(self, slug: str) -> "Resolution | None":
+        """Read one settled event's authoritative outcome by slug. Returns a
+        Resolution (resolved=False when the event exists but has not paid out yet)
+        or None when no event is found / the response is unusable. One request;
+        read-only. Reuses `_parse_event` so the winning bucket's edges, grain,
+        station and source are parsed exactly as for live markets — the winner is
+        simply the bucket whose Yes price has settled to 1.0."""
+        try:
+            raw = self.http.get_json_array(EVENTS_URL, {"slug": slug})
+        except SecurityError:
+            raise
+        except Exception:
+            return None
+        if not raw:
+            return None
+        event = next((e for e in raw
+                      if isinstance(e, dict) and str(e.get("slug")) == slug),
+                     raw[0] if isinstance(raw[0], dict) else None)
+        if event is None:
+            return None
+        wm = _parse_event(event)
+        if wm is None:
+            return None
+        winner = next((b for b in wm.buckets
+                       if b.yes_price is not None and b.yes_price >= _RESOLVED_YES),
+                      None)
+        resolved = bool(event.get("closed")) and winner is not None
+        return Resolution(
+            slug=slug, resolved=resolved,
+            winning_label=winner.label if winner else None,
+            winning_lo=winner.lo if winner else None,
+            winning_hi=winner.hi if winner else None,
+            grain=wm.grain, station=wm.station,
+            source=wm.resolution_source, end_date=wm.end_date)
