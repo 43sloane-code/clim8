@@ -128,8 +128,8 @@ def sharpen_pmf(running_max_c: float, rise_samples: list[float],
 # lever applies (icao, tz, sub_degree). Manila (RPLL) and London (EGLC) both settle
 # whole-°C round-half-up on an airport, so both get the lever.
 _HOURLY_STATION = {
-    "london": ("EGLC", "Europe/London", False),
-    "manila": ("RPLL", "Asia/Manila", False),
+    "london": ("EGLC", "Europe/London", False, "London City Airport"),
+    "manila": ("RPLL", "Asia/Manila", False, "Ninoy Aquino Intl"),
 }
 _NO_HOURLY = {"hong kong": True}    # settles on a daily-max-only record (no hourly)
 
@@ -179,7 +179,7 @@ def intraday_ceiling(place: Place, target: dt.date, *,
                   "is no settlement-grade hourly record to learn or validate a "
                   "remaining-rise from, so no intraday sharpening is served"))
 
-    icao, tz, sub_degree = _HOURLY_STATION[key]
+    icao, tz, sub_degree, station_name = _HOURLY_STATION[key]
     if sources is None:
         return IntradayCeiling(kind="unavailable", city=city, target=tgt_iso,
                                sub_degree=sub_degree,
@@ -221,7 +221,7 @@ def intraday_ceiling(place: Place, target: dt.date, *,
         kind="sharpened", city=city, target=tgt_iso, sub_degree=sub_degree,
         hour=hour, running_max_c=running_max, n_rise=len(rises),
         pmf=tuple(pmf), modal_bucket=modal_b, modal_prob=modal_p,
-        source=f"London City Airport {icao} (live IEM ASOS METAR, hourly)")
+        source=f"{station_name} {icao} (live IEM ASOS METAR, hourly)")
 
 
 def _self_test() -> None:
