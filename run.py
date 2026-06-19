@@ -156,6 +156,33 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
             offset = None
 
     recent = sorted(daily)[-7:]
+    # Wunderground (api.weather.com) is the ACTUAL settlement oracle: it stores the
+    # airport record in whole °F, which the contract rounds to whole °C — and that
+    # can differ from the IEM whole-°C METAR at a boundary (e.g. true 30.4°C -> IEM
+    # 30°C but WU 87°F -> 31°C). So WU is the ANCHOR here; IEM stays the cross-ref.
+    # Bounded to the target day + the last few settled days to keep the fetch light.
+    from weather_council.market import _native_reading_int as _nri
+    wu_days: list[dict] = []
+    wu_agree = wu_total = 0
+    today = place_today(place)
+    wu_dates = [d for d in recent[-4:]]
+    if target <= today and target.isoformat() not in wu_dates:
+        wu_dates.append(target.isoformat())
+    for d in wu_dates:
+        try:
+            w = sources.wunderground_daily_max(icao, dt.date.fromisoformat(d))
+        except Exception:
+            w = None
+        if not w:
+            continue
+        wu_b = _nri(w["max_c"], "C", False)          # airport cities settle round-half-up
+        iem_b = _nri(daily[d][0], "C", False) if d in daily else None
+        if iem_b is not None:
+            wu_total += 1
+            wu_agree += 1 if iem_b == wu_b else 0
+        wu_days.append({"date": d, "wu_max_c": round(w["max_c"], 1),
+                        "wu_bucket": wu_b, "iem_bucket": iem_b,
+                        "agree": (iem_b == wu_b)})
     return {
         "icao": icao,
         "name": ref["name"],
@@ -169,6 +196,8 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
         "anchor_offset": offset,
         "anchor_is_same": bool(anchor_icao and anchor_icao == icao),
         "recent": [{"date": d, "high": daily[d][0], "low": daily[d][1]} for d in recent],
+        # Wunderground anchor: the oracle's own record, with IEM as the cross-ref.
+        "wunderground": {"days": wu_days, "agree": wu_agree, "total": wu_total},
     }
 
 
@@ -500,6 +529,21 @@ def _settlement_reference_lines(ref: dict) -> list[str]:
         L.append(f"    recent {ref['icao']} daily record (most recent {len(rec)} days):")
         for r in rec:
             L.append(f"      {r['date']}  high {r['high']:.0f}°  low {r['low']:.0f}°")
+    # Wunderground ANCHOR — the actual settlement oracle (whole °F → contract whole °C),
+    # with IEM as the cross-reference. Surfaces the °F/°C boundary divergence that flips
+    # a bucket (e.g. WU 87°F → 31°C while IEM reads 30°C).
+    wu = ref.get("wunderground") or {}
+    wud = wu.get("days") or []
+    if wud:
+        L.append(f"    ANCHOR — Wunderground {ref['icao']} (the settlement oracle, whole °F → contract whole °C):")
+        for w in wud:
+            ib = w.get("iem_bucket")
+            xref = f" | IEM {ib}°C" if ib is not None else ""
+            flag = "" if (ib is None or ib == w["wu_bucket"]) else "  ⚠ DIVERGES (°F/°C boundary flips the bucket)"
+            L.append(f"      {w['date']}  WU max {w['wu_max_c']:.1f}°C → bucket {w['wu_bucket']}°C{xref}{flag}")
+        if wu.get("total"):
+            L.append(f"    WU↔IEM cross-check: agree {wu['agree']}/{wu['total']} settled days "
+                     f"(WU anchors the settlement; IEM is the cross-reference)")
     L.append("")
     return L
 
