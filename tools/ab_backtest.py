@@ -41,8 +41,12 @@ from weather_council.agents import MemberSpec
 from weather_council.council import Council
 from weather_council.sources import Sources, place_today
 
-# The candidate change under test: the data-driven ECMWF AIFS model as a 9th member.
+# The candidate change under test: a 9th council member. Defaults to the data-driven
+# ECMWF AIFS (AI) model; override with --member <open_meteo_model_id> to A/B any
+# Open-Meteo model (e.g. a high-resolution NWP: icon_d2, ukmo_uk_deterministic_2km,
+# meteofrance_arome_france_hd) as the candidate addition.
 AIFS = MemberSpec("aifs", "ecmwf_aifs025_single", "ECMWF AIFS (AI)", "EU")
+CANDIDATE = AIFS
 
 _BASE_PANEL = list(agents.COUNCIL)  # the live 8-member panel, captured at import
 
@@ -51,7 +55,7 @@ def arm_members(arm: str) -> list[MemberSpec]:
     """Return the council panel for arm 'A' (incumbent) or 'B' (candidate)."""
     if arm == "A":
         return list(_BASE_PANEL)
-    return list(_BASE_PANEL) + [AIFS]
+    return list(_BASE_PANEL) + [CANDIDATE]
 
 
 def _key(method: str, url: str, params) -> str:
@@ -200,7 +204,22 @@ def main() -> int:
                     help="also run the disjoint-fold sign-stability gate with this "
                          "many folds (>=2). A below-noise-floor aggregate gain is "
                          "only believed if it holds on EVERY disjoint fold.")
+    ap.add_argument("--member", default=None,
+                    help="Open-Meteo model id to A/B as the candidate 9th member, "
+                         "optionally 'model|Display Name'. Default: ECMWF AIFS. "
+                         "e.g. ukmo_uk_deterministic_2km, icon_d2, "
+                         "meteofrance_arome_france_hd.")
     args = ap.parse_args()
+
+    # Override the candidate member from the CLI (default stays AIFS). Lets the same
+    # gated harness A/B any Open-Meteo model — e.g. a high-resolution NWP — as the
+    # 9th-member addition without editing source.
+    global CANDIDATE
+    if args.member:
+        parts = args.member.split("|", 1)
+        model_id = parts[0].strip()
+        display = parts[1].strip() if len(parts) > 1 else model_id
+        CANDIDATE = MemberSpec(model_id[:24], model_id, display, "EU")
 
     repo = Path(__file__).resolve().parent.parent
     slug = args.city.lower().replace(" ", "_").replace(",", "")
@@ -213,9 +232,10 @@ def main() -> int:
     sources = Sources()
     place = sources.geocode(args.city)
     target = place_today(place) + dt.timedelta(days=args.lead)
+    cand_tag = CANDIDATE.model.replace(" ", "")[:20]
     cache_path = Path(args.cache) if args.cache else (
         repo / "reports"
-        / f"ab_cache_{slug}_w{args.window}_l{args.lead}_{target.isoformat()}.pkl")
+        / f"ab_cache_{slug}_w{args.window}_l{args.lead}_{cand_tag}_{target.isoformat()}.pkl")
 
     store: dict = {}
     if cache_path.exists() and not args.refresh:
@@ -248,7 +268,8 @@ def main() -> int:
           f"window {args.window}d  (replay hits={frozen.hits})")
     print("=" * 70)
     print(f"  arm A (incumbent) : {len(arm_members('A'))} members")
-    print(f"  arm B (candidate) : {len(arm_members('B'))} members  (+{AIFS.institution})")
+    print(f"  arm B (candidate) : {len(arm_members('B'))} members  "
+          f"(+{CANDIDATE.institution} [{CANDIDATE.model}])")
     print(f"  determinism check : A re-run identical -> "
           f"{'PASS' if det_ok else 'FAIL (pipeline non-deterministic!)'}")
     print("-" * 70)
