@@ -204,19 +204,25 @@ def main() -> int:
 
     repo = Path(__file__).resolve().parent.parent
     slug = args.city.lower().replace(" ", "_").replace(",", "")
+
+    # Resolve the target BEFORE keying the cache: a frozen snapshot is valid only
+    # for the exact (city, window, lead, TARGET) it was recorded on. Omitting the
+    # target let a stale prior-day snapshot be replayed against a new target whose
+    # data isn't cached -> replay-miss -> "no eligible member" crash. Geocode up
+    # front (raw) just to get the target; the deliberate() data fetches stay frozen.
+    sources = Sources()
+    place = sources.geocode(args.city)
+    target = place_today(place) + dt.timedelta(days=args.lead)
     cache_path = Path(args.cache) if args.cache else (
-        repo / "reports" / f"ab_cache_{slug}_w{args.window}_l{args.lead}.pkl")
+        repo / "reports"
+        / f"ab_cache_{slug}_w{args.window}_l{args.lead}_{target.isoformat()}.pkl")
 
     store: dict = {}
     if cache_path.exists() and not args.refresh:
         store = pickle.loads(cache_path.read_bytes())
 
-    sources = Sources()
     frozen = FrozenHTTP(sources.http, store, mode="replay" if store else "record")
     sources.http = frozen
-
-    place = sources.geocode(args.city)
-    target = place_today(place) + dt.timedelta(days=args.lead)
 
     # Warm the frozen snapshot with the SUPERSET arm (B ⊇ A), so replaying either arm
     # is a pure cache hit. Done once; skipped when a snapshot already exists.
