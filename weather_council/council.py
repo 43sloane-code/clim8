@@ -157,6 +157,29 @@ STRICT_ANCHOR_ICAO = {"london"}
 # offset and read as model imprecision. (See _resolve_truth.)
 PINNED_ANCHOR_HKO = {"hong kong"}
 
+# Cities whose BACKTEST TRUTH is the Wunderground / Weather Company airport feed —
+# the exact market settlement oracle. Two wins over the Meteostat bulk archive the
+# nearest-station path would otherwise pick: it is CURRENT (no ~91-day lag, so the
+# window stays in-season and the out-of-season confidence downgrade disappears),
+# and it is settlement-CONSISTENT (members are scored against the very record the
+# market resolves on, at the airport's own coordinates). Strict, like the EGLC/HKO
+# pins: if WU is unavailable or too thin we fall through to the station/grid path,
+# never silently anchoring on a different sensor. Matched by city-name containment.
+_WU_TRUTH_STATIONS = {
+    "manila": {"icao": "RPLL", "name": "Ninoy Aquino Intl",
+               "lat": 14.5086, "lon": 121.0194},
+}
+
+
+def _wu_truth_station(place) -> dict | None:
+    """The Wunderground settlement-oracle station to anchor this city's backtest
+    truth on (e.g. Manila -> RPLL), or None to use the nearest-station/grid path."""
+    name = (getattr(place, "name", "") or "").strip().lower()
+    for key, st in _WU_TRUTH_STATIONS.items():
+        if key in name or name in key:
+            return st
+    return None
+
 
 def _pinned_anchor_icao(place) -> str | None:
     name = (getattr(place, "name", "") or "").strip().lower()
@@ -906,6 +929,47 @@ class Council:
         this never changes which source is chosen — it drives the out-of-season
         confidence downgrade so a station-anchored verdict stays anchored."""
         default_end = place_today(place) - dt.timedelta(days=ARCHIVE_LAG_DAYS)
+
+        # Wunderground settlement-oracle truth (e.g. Manila -> RPLL): the market
+        # settles on this feed and, unlike the Meteostat bulk archive the station
+        # loop below would pick, it is CURRENT — so the window stays IN-SEASON and
+        # members are scored against the exact record the contract resolves on, at
+        # the airport's own coordinates. STRICT: if WU is unavailable or too thin we
+        # fall through to the station/grid path (never silently re-anchor).
+        wu = _wu_truth_station(place)
+        if wu:
+            wu_end = place_today(place) - dt.timedelta(days=1)   # WU is current; complete days only
+            wu_start = wu_end - dt.timedelta(days=window + 5)    # buffer for dropped partial days
+            try:
+                series = self.sources.wunderground_daily_series(
+                    wu["icao"], wu_start, wu_end, place.timezone)
+            except Exception:
+                series = {}
+            obs = dict(sorted(series.items())[-(window + 1):])   # most-recent `window` days
+            if len(obs) >= MIN_SAMPLES:
+                w_start = dt.date.fromisoformat(min(obs))
+                w_end = dt.date.fromisoformat(max(obs))
+                fp = Place(place.name, place.country, wu["lat"], wu["lon"],
+                           place.timezone)
+                truth_source = {
+                    "kind": "station",
+                    "data_source": "Wunderground / Weather Company (settlement oracle)",
+                    "station": {
+                        "id": wu["icao"], "name": wu["name"], "icao": wu["icao"],
+                        "wmo": None, "latitude": wu["lat"], "longitude": wu["lon"],
+                        "elevation": None, "distance_km": 0.0,
+                    },
+                    "label": (f"{wu['name']} ({wu['icao']}) — Wunderground "
+                              f"settlement record (the market's own oracle, current)"),
+                    "window_start": w_start.isoformat(),
+                    "window_end": w_end.isoformat(),
+                    "sample_days": len(obs),
+                    "lag_days": (wu_end - w_end).days,
+                    "season_gap_days": _doy_gap(list(obs.keys()), target),
+                }
+                return fp, obs, w_start, w_end, truth_source
+            # else: fall through to the nearest-station / ERA5-grid truth below.
+
         try:
             candidates = self.sources.nearest_stations(place)
         except Exception:

@@ -69,6 +69,19 @@ def observe(sources: Sources, place: Place, observed: DailySeries,
             current["temperature_source"] = (
                 "London City Airport EGLC (live IEM METAR, whole-degree)")
             current["temperature_record_time"] = live.get("record_time")
+    elif "Wunderground" in (truth_source.get("data_source") or ""):
+        st = truth_source.get("station") or {}
+        try:
+            live = sources.wunderground_current(st.get("icao"), place.timezone)
+        except Exception:
+            live = None
+        if live and live.get("temperature_2m") is not None:
+            current = dict(current)
+            current["temperature_2m"] = live["temperature_2m"]
+            current["temperature_source"] = (
+                f"{st.get('name')} {st.get('icao')} "
+                f"(live Wunderground observation, whole-°F)")
+            current["temperature_record_time"] = live.get("record_time")
     recent = [(d, observed[d][0], observed[d][1])
               for d in sorted(observed)[-RECENT_OBS_DAYS:]]
     if truth_source["kind"] == "station":
@@ -82,6 +95,10 @@ def observe(sources: Sources, place: Place, observed: DailySeries,
             backbone = (f"{st['name']} daily extremes reconstructed from raw "
                         f"IEM ASOS METAR (London City Airport's own EGLC sensor "
                         f"— the point the London market settles on)")
+        elif "Wunderground" in (truth_source.get("data_source") or ""):
+            backbone = (f"{st['name']} ({st.get('icao')}) daily extremes from the "
+                        f"Wunderground / Weather Company record — the exact feed the "
+                        f"market settles on, and current (no archive lag)")
         else:
             backbone = (f"{st['name']} surface observations via Meteostat "
                         f"(aggregated METAR/SYNOP gauge readings — the point a "

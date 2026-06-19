@@ -871,14 +871,18 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
                  f"(verdict {v.high:.1f}/{v.low:.1f} °C snapped to the integer record)")
         chk = s.get("source_check")
         if chk:
-            L.append(f"    source check : raw METAR vs the Meteostat truth we backtest on, "
+            ts_src = (v.truth_source or {}).get("data_source") or ""
+            is_wu = "Wunderground" in ts_src
+            truth_name = ("the Wunderground settlement truth we backtest on" if is_wu
+                          else "the Meteostat truth we backtest on")
+            L.append(f"    source check : raw METAR vs {truth_name}, "
                      f"{chk['n']} overlapping days")
             L.append(f"      high  mean {chk['high_mean']:+.2f} °C  median "
                      f"{chk['high_median']:+.2f} °C  largest {chk['high_max']:+.2f} °C  "
                      f"({chk['tail_days_ge3']} day(s) ≥3 °C apart)")
             L.append(f"      low   mean {chk['low_mean']:+.2f} °C  median "
                      f"{chk['low_median']:+.2f} °C")
-            if chk["tail_days_ge3"]:
+            if chk["tail_days_ge3"] and not is_wu:
                 L.append("      -> Meteostat clips the daily high on hot days vs the raw "
                          "METAR the record settles on; bias-correcting on it under-reads peaks.")
         L.append("")

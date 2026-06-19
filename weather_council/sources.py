@@ -51,6 +51,10 @@ METAR_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
 WU_HISTORY_URL = "https://api.weather.com/v1/location/{loc}/observations/historical.json"
 WU_API_KEY = "e1f10a1e78da46f5b10a1e78da96f525"
 WU_LOCATION = {"EGLC": "EGLC:9:GB", "RPLL": "RPLL:9:PH"}  # ICAO -> Weather Company location id
+# Minimum hourly obs in a WU local day before its max/min are trustworthy as a
+# settlement-truth extreme — a partial final day would understate the peak. A
+# complete RPLL/EGLC day reports ~24 hourly observations.
+WU_MIN_DAY_OBS = 12
 # Hong Kong Observatory official open data — recent daily climate records direct
 # from the Observatory. The Meteostat archive for the HKO station ends in 1992,
 # far too old to measure a *current* settlement-vs-airport offset; this API is
@@ -884,6 +888,89 @@ class Sources:
         max_f = max(temps)
         return {"max_f": float(max_f), "max_c": (max_f - 32) * 5.0 / 9.0,
                 "n_obs": len(temps)}
+
+    def wunderground_daily_series(self, icao: str, start: dt.date, end: dt.date,
+                                  timezone: str) -> DailySeries:
+        """Daily (max_c, min_c) from the Wunderground / Weather Company station
+        record over [start, end], grouped by the station's LOCAL calendar day —
+        the exact feed the market settles on, used as Manila's backtest TRUTH.
+
+        Unlike the Meteostat bulk archive (which trails real time by ~3 months and
+        forces the backtest window out of season) this feed is CURRENT, so the
+        window stays in-season and every member is scored against the settlement
+        oracle itself. WU stores whole °F; each local day's max/min are taken in °F
+        then converted to °C, matching how the contract reads the record. Days with
+        fewer than WU_MIN_DAY_OBS obs (a partial final day) are dropped so an
+        incomplete day never understates the peak. The range is chunked to stay
+        within one API window per call. Returns {} on total failure, so the caller
+        falls back to the station/grid truth rather than anchoring on nothing."""
+        loc = WU_LOCATION.get((icao or "").upper())
+        if loc is None:
+            return {}
+        try:
+            zone = ZoneInfo(timezone)
+        except Exception:
+            zone = ZoneInfo("UTC")
+        by_date: dict[str, list[float]] = {}
+        cur = start
+        while cur <= end:
+            chunk_end = min(cur + dt.timedelta(days=30), end)
+            try:
+                data = self.http.get_json(
+                    WU_HISTORY_URL.format(loc=loc),
+                    {"apiKey": WU_API_KEY, "units": "e",
+                     "startDate": cur.strftime("%Y%m%d"),
+                     "endDate": chunk_end.strftime("%Y%m%d")})
+            except Exception:
+                data = {}
+            for o in (data.get("observations") or []):
+                t = o.get("temp")
+                vt = o.get("valid_time_gmt")
+                if not isinstance(t, (int, float)) or not isinstance(vt, (int, float)):
+                    continue
+                self.qc["screened"] += 1
+                local = dt.datetime.fromtimestamp(vt, tz=dt.timezone.utc).astimezone(zone)
+                by_date.setdefault(local.date().isoformat(), []).append(float(t))
+            cur = chunk_end + dt.timedelta(days=1)
+        out: DailySeries = {}
+        for d, temps in by_date.items():
+            if len(temps) < WU_MIN_DAY_OBS:       # incomplete day — untrustworthy extreme
+                continue
+            out[d] = ((max(temps) - 32.0) * 5.0 / 9.0,
+                      (min(temps) - 32.0) * 5.0 / 9.0)
+        return out
+
+    def wunderground_current(self, icao: str, timezone: str) -> dict | None:
+        """The latest Wunderground / Weather Company observation for an airport —
+        the settlement sensor's own most recent reading, so a WU-anchored verdict's
+        live 'now' comes from the oracle feed rather than an Open-Meteo grid cell
+        that can sit ~2 °C away. WU temps are whole °F → °C. Returns
+        {temperature_2m, record_time} or None on any failure (caller keeps grid)."""
+        loc = WU_LOCATION.get((icao or "").upper())
+        if loc is None:
+            return None
+        try:
+            zone = ZoneInfo(timezone)
+            today = dt.datetime.now(zone).date()
+        except Exception:
+            return None
+        try:
+            data = self.http.get_json(
+                WU_HISTORY_URL.format(loc=loc),
+                {"apiKey": WU_API_KEY, "units": "e",
+                 "startDate": today.strftime("%Y%m%d")})
+        except Exception:
+            return None
+        obs = [o for o in (data.get("observations") or [])
+               if isinstance(o.get("temp"), (int, float))
+               and isinstance(o.get("valid_time_gmt"), (int, float))]
+        if not obs:
+            return None
+        latest = max(obs, key=lambda o: o["valid_time_gmt"])
+        rt = dt.datetime.fromtimestamp(latest["valid_time_gmt"],
+                                       tz=dt.timezone.utc).astimezone(zone)
+        return {"temperature_2m": (float(latest["temp"]) - 32.0) * 5.0 / 9.0,
+                "record_time": rt.isoformat()}
 
     def eglc_current(self) -> dict | None:
         """Live current air temperature at London City Airport (EGLC) — the most
