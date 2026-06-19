@@ -16,11 +16,27 @@ __pycache__/
 .claude/
 
 # launchd / server runtime logs (transient, not source)
-reports/launchd.out.log
-reports/launchd.err.log
-reports/server.log
+reports/*.log
 
 # Generated text reports under reports/ (health checks, live probes, latest.txt)
 # are reproducible output, not source. reports/baseline.json is the committed
 # reference the health check grades against and stays tracked (it is .json).
 reports/*.txt
+
+# Exploration scratch + regenerable caches under reports/ (probe scripts named
+# _*, captured stdout/stderr, and the A/B frozen-data .pkl caches) — never source.
+reports/_*
+reports/*.err
+reports/*.out
+reports/*.pkl
+reports/healthcheck_status.json
+
+# SQLite verdict-store backups (runtime state, same class as the ignored *.db)
+*.db.bak*
+
+# Transient run logs and harness-optimizer working state
+logs/
+.harness_opt/
+
+# Full-source dump produced for mobile handoff (regenerable, not source)
+ALL_CODE.txt
