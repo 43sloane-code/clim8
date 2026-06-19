@@ -88,7 +88,7 @@ CRPS_MIN = 10               # residuals needed before a predictive CRPS is trust
 # becomes deliberately near-impossible to clear; read a surfaced CONSIDER on a
 # 2-city basket as "look harder", never as statistical proof. Re-widen the basket
 # if you want the constants re-justified with real significance.
-BASKET = ["London", "Hong Kong"]
+BASKET = ["London", "Manila"]
 
 WINDOW = 120                 # days of history per city (bounded by archive lag)
 WARMUP = MIN_SAMPLES         # walk-forward warmup = the live validation warmup

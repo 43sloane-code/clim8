@@ -22,6 +22,8 @@ HK = Place(name="Hong Kong", country="HK", latitude=22.30, longitude=114.17,
            timezone="Asia/Hong_Kong")
 TOKYO = Place(name="Tokyo", country="JP", latitude=35.68, longitude=139.69,
               timezone="Asia/Tokyo")
+MANILA = Place(name="Manila", country="PH", latitude=14.51, longitude=121.02,
+               timezone="Asia/Manila")
 TODAY = dt.date(2026, 6, 12)
 
 
@@ -147,6 +149,21 @@ class TestFrozen(unittest.TestCase):
                             sub_degree=False, modal_bucket=22)
         with self.assertRaises(Exception):
             c.modal_bucket = 5  # type: ignore[misc]
+
+
+class TestManila(unittest.TestCase):
+    """Manila replaces Hong Kong as a tracked city — and unlike HK it settles on an
+    airport (Ninoy Aquino RPLL) with an hourly METAR record, so it GETS the intraday
+    lever (round-half-up, exactly like London)."""
+    def test_manila_is_hourly_configured_and_sharpens(self):
+        obs = (_history_obs(25)
+               + _day(TODAY.isoformat(), [(9, 31.0), (12, 33.0), (15, 33.4)]))
+        c = intraday_ceiling(MANILA, TODAY, sources=FakeSources(obs=obs), today=TODAY)
+        self.assertEqual(c.kind, "sharpened")        # NOT "not_basket"/"unavailable"
+        self.assertFalse(c.sub_degree)               # round-half-up, like London
+        self.assertEqual(c.hour, 15)
+        self.assertAlmostEqual(c.running_max_c, 33.4)
+        self.assertEqual(sum(p for _, p in c.pmf) > 0, True)
 
 
 if __name__ == "__main__":

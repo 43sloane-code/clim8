@@ -45,18 +45,24 @@ from .sources import Place, Sources, place_today
 class _CityCfg:
     """How one basket city settles and where its live obs come from."""
     key: str             # lower-case name token matched by containment
-    sub_degree: bool     # True => floor (HK 0.1C); False => round-half-up (London)
-    fetch: str           # "hko" | "eglc"
+    sub_degree: bool     # True => floor (HK 0.1C); False => round-half-up (others)
+    fetch: str           # "hko" | "metar"
     label: str
+    icao: str | None = None   # settlement airport ICAO for the "metar" fetch
 
 
-# The two bucket cities, keyed exactly like run.py's SETTLEMENT_REFERENCE so the
+# The bucket cities, keyed exactly like run.py's SETTLEMENT_REFERENCE so the
 # settlement rule here is the SAME one the rest of the pipeline commits to.
+# Manila (Ninoy Aquino RPLL) and London (London City EGLC) both settle whole-°C
+# round-half-up on an airport with an hourly METAR record (so the intraday-ceiling
+# lever applies); Hong Kong settles floor on the Observatory (no hourly record).
 _CITY_CONFIG: tuple[_CityCfg, ...] = (
     _CityCfg("hong kong", sub_degree=True, fetch="hko",
              label="Hong Kong Observatory (floor / range-containment)"),
-    _CityCfg("london", sub_degree=False, fetch="eglc",
+    _CityCfg("london", sub_degree=False, fetch="metar", icao="EGLC",
              label="London City Airport EGLC (round-half-up)"),
+    _CityCfg("manila", sub_degree=False, fetch="metar", icao="RPLL",
+             label="Ninoy Aquino Intl RPLL (round-half-up)"),
 )
 
 
@@ -110,16 +116,17 @@ def _cfg_for(place: Place) -> _CityCfg | None:
     return None
 
 
-def _running_max_eglc(sources: Sources, target: dt.date,
-                      timezone: str) -> tuple[float | None, str | None, int]:
-    """Max EGLC METAR air temperature observed so far on the target LOCAL day.
+def _running_max_metar(sources: Sources, icao: str, target: dt.date,
+                       timezone: str) -> tuple[float | None, str | None, int]:
+    """Max METAR air temperature observed so far on the target LOCAL day at the
+    settlement airport `icao` (EGLC for London, RPLL for Manila).
 
     The IEM archive treats the end date as exclusive, so we ask through the day
     after the target and keep only obs whose local timestamp falls on the target
     date. Returns (running_max_c, record_time_of_max, n_obs)."""
     obs = sources.fetch_metar_observations(
-        "EGLC", target, target + dt.timedelta(days=1),
-        timezone or "Europe/London")
+        icao, target, target + dt.timedelta(days=1),
+        timezone or "Etc/UTC")
     today_iso = target.isoformat()
     todays = [(ts, c) for (ts, c) in obs if ts[:10] == today_iso]
     if not todays:
@@ -175,9 +182,10 @@ def intraday_floor(place: Place, target: dt.date, *,
             label=cfg.label, note="no Sources handle; cannot fetch live obs")
 
     try:
-        if cfg.fetch == "eglc":
-            rmax, rtime, n = _running_max_eglc(sources, target, place.timezone)
-            source = "London City Airport EGLC (live IEM ASOS METAR)"
+        if cfg.fetch == "metar":
+            rmax, rtime, n = _running_max_metar(
+                sources, cfg.icao, target, place.timezone)
+            source = f"{cfg.label} (live IEM ASOS METAR)"
         else:
             rmax, rtime, n = _running_max_hko(sources)
             source = "Hong Kong Observatory (live HKO real-time feed)"

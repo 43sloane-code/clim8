@@ -124,8 +124,14 @@ def sharpen_pmf(running_max_c: float, rise_samples: list[float],
 
 
 # The two settlement cities: only London exposes a settlement-grade hourly archive.
-_HOURLY_STATION = {"london": ("EGLC", "Europe/London", False)}  # icao, tz, sub_degree
-_NO_HOURLY = {"hong kong": True}    # settles on a daily-max-only record
+# Cities whose settlement airport has an hourly METAR archive -> the intraday-rise
+# lever applies (icao, tz, sub_degree). Manila (RPLL) and London (EGLC) both settle
+# whole-°C round-half-up on an airport, so both get the lever.
+_HOURLY_STATION = {
+    "london": ("EGLC", "Europe/London", False),
+    "manila": ("RPLL", "Asia/Manila", False),
+}
+_NO_HOURLY = {"hong kong": True}    # settles on a daily-max-only record (no hourly)
 
 
 def _city_key(place: Place) -> str | None:

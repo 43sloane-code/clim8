@@ -42,6 +42,15 @@ STATION_DAILY_URL = "https://bulk.meteostat.net/v2/daily/{id}.csv.gz"
 # Weather Underground (and thus market settlement) ultimately reads. Returned
 # in the sensor's native unit (whole °F for US ASOS, whole °C internationally).
 METAR_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
+# The Weather Company / Wunderground backend — the EXACT record the Polymarket
+# city markets settle on. WU stores the airport history in WHOLE °F; the contract
+# converts that to whole °C, which can round to a different bucket than the IEM
+# whole-°C METAR at a °F/°C boundary (e.g. true 30.4°C -> IEM 30°C but WU 87°F ->
+# 30.6 -> 31°C). So this is the settlement-grade anchor; IEM stays a cross-check.
+# apiKey is the wunderground.com site web key, carried in PARAMS (never the path).
+WU_HISTORY_URL = "https://api.weather.com/v1/location/{loc}/observations/historical.json"
+WU_API_KEY = "e1f10a1e78da46f5b10a1e78da96f525"
+WU_LOCATION = {"EGLC": "EGLC:9:GB", "RPLL": "RPLL:9:PH"}  # ICAO -> Weather Company location id
 # Hong Kong Observatory official open data — recent daily climate records direct
 # from the Observatory. The Meteostat archive for the HKO station ends in 1992,
 # far too old to measure a *current* settlement-vs-airport offset; this API is
@@ -849,6 +858,32 @@ class Sources:
             obs.append((ts, c))
         obs.sort()
         return obs
+
+    def wunderground_daily_max(self, icao: str, target: dt.date) -> dict | None:
+        """The day's max from the Weather Company / Wunderground record for an
+        airport — the ACTUAL market settlement oracle (the contract names this feed).
+
+        WU stores the station history in whole °F, so we read °F, take the day's max,
+        and convert to °C — the value the contract rounds to whole °C. Returns
+        {max_f, max_c, n_obs} or None on any failure (caller then falls back to the
+        IEM METAR cross-reference). One request, read-only; apiKey rides in params."""
+        loc = WU_LOCATION.get((icao or "").upper())
+        if loc is None:
+            return None
+        try:
+            data = self.http.get_json(
+                WU_HISTORY_URL.format(loc=loc),
+                {"apiKey": WU_API_KEY, "units": "e",
+                 "startDate": target.strftime("%Y%m%d")})
+        except Exception:
+            return None
+        temps = [o.get("temp") for o in (data.get("observations") or [])
+                 if isinstance(o.get("temp"), (int, float))]
+        if not temps:
+            return None
+        max_f = max(temps)
+        return {"max_f": float(max_f), "max_c": (max_f - 32) * 5.0 / 9.0,
+                "n_obs": len(temps)}
 
     def eglc_current(self) -> dict | None:
         """Live current air temperature at London City Airport (EGLC) — the most

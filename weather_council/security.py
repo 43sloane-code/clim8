@@ -79,6 +79,17 @@ ALLOWED_HOSTS = frozenset({
     # the Hong Kong verdict when a TC's 5-day forecast cone threatens HK — a risk
     # control, never a forecast input. No funds or writes ever touch this.
     "www.jma.go.jp",
+    # The Weather Company / Wunderground backend (api.weather.com): the EXACT
+    # source the Polymarket city markets name as their resolution oracle ("highest
+    # temperature recorded ... at the {airport} Station ... from Wunderground").
+    # Verified to differ from the IEM METAR at °F/°C boundaries: Wunderground stores
+    # the station record in WHOLE °F and the contract converts that to whole °C, so
+    # e.g. a true 30.4°C reads 30°C on IEM (whole-°C METAR) but 87°F→30.6→31°C on
+    # Wunderground — a one-bucket gap exactly where it matters. So this is the
+    # settlement-grade ANCHOR for those markets; IEM stays a cross-reference. Keyless
+    # to the site's public web API key (the same key the wunderground.com history
+    # page uses), carried in request PARAMS, read-only.
+    "api.weather.com",
     # Weatherbit daily forecast API: a non-Open-Meteo forecaster. It exposes NO
     # free archive of its PAST forecasts, so — unlike the council members — its
     # skill cannot be backtested instantly; it is added as a RECOMMEND-ONLY
