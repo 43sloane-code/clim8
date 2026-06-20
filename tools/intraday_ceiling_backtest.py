@@ -20,7 +20,7 @@ from collections import defaultdict
 from weather_council.sources import Sources
 from weather_council.market import _native_reading_int
 from weather_council.intraday_ceiling import (
-    remaining_rise_samples, sharpen_pmf, MIN_RISE_SAMPLES)
+    remaining_rise_samples, sharpen_pmf, MIN_RISE_SAMPLES, _HOURLY_STATION)
 
 EVAL_HOURS = (9, 12, 15, 18)
 
@@ -30,15 +30,24 @@ def _rate(xs: list[int]) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Intraday-ceiling disjoint-fold gate (London).")
+    ap = argparse.ArgumentParser(description="Intraday-ceiling disjoint-fold gate.")
+    ap.add_argument("--city", default="london",
+                    help=f"configured city key: {' | '.join(_HOURLY_STATION)}")
     ap.add_argument("--days", type=int, default=160, help="hourly lookback window")
     ap.add_argument("--warmup", type=int, default=40, help="days before scoring starts")
     args = ap.parse_args()
 
+    key = args.city.strip().lower()
+    if key not in _HOURLY_STATION:
+        print(f"city '{key}' not configured for hourly intraday "
+              f"(have: {', '.join(_HOURLY_STATION)})")
+        return 1
+    icao, tz, sub_degree, name = _HOURLY_STATION[key]
+
     src = Sources()
     end = dt.date.today()
     obs = src.fetch_metar_observations(
-        "EGLC", end - dt.timedelta(days=args.days), end, "Europe/London")
+        icao, end - dt.timedelta(days=args.days), end, tz)
     by_date: dict[str, list[tuple[int, float]]] = defaultdict(list)
     for ts, c in obs:
         by_date[ts[:10]].append((int(ts[11:13]), c))
@@ -48,7 +57,7 @@ def main() -> int:
         return 1
 
     def settled(d: str) -> int:
-        return _native_reading_int(max(c for _, c in by_date[d]), "C", False)
+        return _native_reading_int(max(c for _, c in by_date[d]), "C", sub_degree)
 
     test = days[args.warmup:]
     hits: dict[int, list[int]] = {h: [] for h in EVAL_HOURS}
@@ -65,10 +74,10 @@ def main() -> int:
             rises = remaining_rise_samples(hist, h)
             if len(rises) < MIN_RISE_SAMPLES:
                 continue
-            modal = sharpen_pmf(rm, rises, False)[0][0]
+            modal = sharpen_pmf(rm, rises, sub_degree)[0][0]
             hits[h].append(1 if modal == s else 0)
 
-    print(f"\nINTRADAY-CEILING GATE — London EGLC, {len(test)} held-out days "
+    print(f"\nINTRADAY-CEILING GATE — {name} {icao}, {len(test)} held-out days "
           f"(warmup {args.warmup}, window {args.days}d)")
     print("=" * 64)
     print(f"  baseline (no intraday, climatology modal bucket): {_rate(clim)}")
