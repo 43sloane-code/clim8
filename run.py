@@ -61,6 +61,11 @@ SETTLEMENT_REFERENCE: dict[str, dict[str, str]] = {
         "name": "Ninoy Aquino International Airport",
         "url": "https://www.wunderground.com/history/daily/ph/manila/RPLL",
     },
+    "singapore": {
+        "icao": "WSSS",
+        "name": "Changi Airport",
+        "url": "https://www.wunderground.com/history/daily/sg/singapore/WSSS",
+    },
 }
 
 # Cities anchored on a NON-airport settlement station, with a nearby airport shown

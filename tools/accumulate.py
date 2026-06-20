@@ -56,9 +56,9 @@ LOG = LOGS / "accumulate.log"
 STATUS = ROOT / "reports" / "c7_status.txt"
 LOCK = LOGS / ".accumulate.lock"
 
-# place.label() renders as "London, United Kingdom" / "Hong Kong, HK", so a
+# place.label() renders as "Manila, Philippines" / "Singapore, Singapore", so a
 # LIKE 'City%' prefix matches the stored rows without hard-coding the suffix.
-CITIES = ["London", "Manila"]
+CITIES = ["Manila", "Singapore"]
 LEAD = 1                                   # day-ahead: the fair edge test
 TIMEOUT_S = 600                            # generous per-subprocess cap
 

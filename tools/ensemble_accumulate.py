@@ -50,8 +50,8 @@ import sys
 from pathlib import Path
 
 # Basket cities (must match the verdict basket). Each settles round-half-up at
-# whole °C on its airport (London → EGLC, Manila → RPLL).
-CITIES = ("London", "Manila")
+# whole °C on its airport (Manila → RPLL, Singapore → WSSS).
+CITIES = ("Manila", "Singapore")
 # ECMWF EPS — the operational IC-perturbed ensemble whose spread is engineered to
 # be flow-dependent. 50 perturbed members + control on Open-Meteo.
 MODEL = "ecmwf_ifs025"
@@ -263,13 +263,14 @@ def _self_test() -> None:
         with tempfile.TemporaryDirectory() as d:
             csv_path = Path(d) / "ens.csv"
             rows = capture(_FakeSources(), csv_path, leads=(0, 1))
-            # 2 cities × 2 leads = 4 rows, all new.
-            assert len(rows) == 4, rows
+            # len(CITIES) cities × 2 leads, all new.
+            assert len(rows) == 2 * len(CITIES), rows
             # Read back the PERSISTED form (CSV = all strings, what downstream
-            # validate consumes), not the mixed-type in-memory return.
+            # validate consumes), not the mixed-type in-memory return. Reference
+            # the first basket city generically so the oracle survives a swap.
             persisted = _load(csv_path)
             r0 = next(r for r in persisted
-                      if r["city"] == "London" and r["lead"] == "0")
+                      if r["city"] == CITIES[0] and r["lead"] == "0")
             assert int(r0["modal_bucket"]) == 22, r0        # 23 of 25 round to 22
             assert abs(float(r0["modal_prob"]) - 23 / 25) < 1e-9, r0
             pmf = json.loads(r0["pmf_json"])
