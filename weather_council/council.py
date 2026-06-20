@@ -168,6 +168,8 @@ PINNED_ANCHOR_HKO = {"hong kong"}
 _WU_TRUTH_STATIONS = {
     "manila": {"icao": "RPLL", "name": "Ninoy Aquino Intl",
                "lat": 14.5086, "lon": 121.0194},
+    "singapore": {"icao": "WSSS", "name": "Changi",
+                  "lat": 1.3502, "lon": 103.9944},
 }
 
 

@@ -57,12 +57,14 @@ class TestWundergroundTruth(unittest.TestCase):
                 "ZZZZ", dt.date(2026, 6, 1), dt.date(2026, 6, 5), "Asia/Manila"),
             {})
 
-    def test_wu_truth_station_matches_manila_only(self):
+    def test_wu_truth_station_routing(self):
         manila = Place("Manila, Philippines", "PH", 14.6, 121.0, "Asia/Manila")
+        singapore = Place("Singapore", "SG", 1.29, 103.85, "Asia/Singapore")
         london = Place("London, United Kingdom", "GB", 51.5, -0.05, "Europe/London")
         hk = Place("Hong Kong", "HK", 22.3, 114.2, "Asia/Hong_Kong")
         self.assertEqual((_wu_truth_station(manila) or {}).get("icao"), "RPLL")
-        self.assertIsNone(_wu_truth_station(london))
+        self.assertEqual((_wu_truth_station(singapore) or {}).get("icao"), "WSSS")
+        self.assertIsNone(_wu_truth_station(london))   # London stays on IEM-EGLC truth
         self.assertIsNone(_wu_truth_station(hk))
 
 

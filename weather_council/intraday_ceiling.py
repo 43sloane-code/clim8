@@ -130,6 +130,7 @@ def sharpen_pmf(running_max_c: float, rise_samples: list[float],
 _HOURLY_STATION = {
     "london": ("EGLC", "Europe/London", False, "London City Airport"),
     "manila": ("RPLL", "Asia/Manila", False, "Ninoy Aquino Intl"),
+    "singapore": ("WSSS", "Asia/Singapore", False, "Changi"),
 }
 _NO_HOURLY = {"hong kong": True}    # settles on a daily-max-only record (no hourly)
 

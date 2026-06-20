@@ -50,7 +50,8 @@ METAR_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
 # apiKey is the wunderground.com site web key, carried in PARAMS (never the path).
 WU_HISTORY_URL = "https://api.weather.com/v1/location/{loc}/observations/historical.json"
 WU_API_KEY = "e1f10a1e78da46f5b10a1e78da96f525"
-WU_LOCATION = {"EGLC": "EGLC:9:GB", "RPLL": "RPLL:9:PH"}  # ICAO -> Weather Company location id
+WU_LOCATION = {"EGLC": "EGLC:9:GB", "RPLL": "RPLL:9:PH",
+               "WSSS": "WSSS:9:SG"}  # ICAO -> Weather Company location id
 # Minimum hourly obs in a WU local day before its max/min are trustworthy as a
 # settlement-truth extreme — a partial final day would understate the peak. A
 # complete RPLL/EGLC day reports ~24 hourly observations.

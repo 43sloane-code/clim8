@@ -63,6 +63,8 @@ _CITY_CONFIG: tuple[_CityCfg, ...] = (
              label="London City Airport EGLC (round-half-up)"),
     _CityCfg("manila", sub_degree=False, fetch="metar", icao="RPLL",
              label="Ninoy Aquino Intl RPLL (round-half-up)"),
+    _CityCfg("singapore", sub_degree=False, fetch="metar", icao="WSSS",
+             label="Changi WSSS (round-half-up)"),
 )
 
 
