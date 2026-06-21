@@ -1,0 +1,5 @@
+# watchdog runtime outputs — keep dead_candidates.jsonl tracked, ignore the rest
+runs/
+traces/
+cron.log
+.cost-halt

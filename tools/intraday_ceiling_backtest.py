@@ -13,6 +13,7 @@ Usage:  PYTHONPATH=. python3 tools/intraday_ceiling_backtest.py [--days 160] [--
 from __future__ import annotations
 
 import argparse
+import json
 import statistics
 import datetime as dt
 from collections import defaultdict
@@ -37,6 +38,13 @@ def main() -> int:
     ap.add_argument("--warmup", type=int, default=40, help="days before scoring starts")
     ap.add_argument("--hours", default=DEFAULT_HOURS,
                     help="comma-separated local eval hours (default 9,12,15,18)")
+    ap.add_argument("--end", default=None,
+                    help="pin the window end date YYYY-MM-DD (default today). Pin it so "
+                         "the regression baseline and the daily check evaluate the SAME "
+                         "held-out days -- then only a code change can move the hit-rate.")
+    ap.add_argument("--emit-crossover", default=None, metavar="PATH",
+                    help="merge {icao: {HH:00: hit_rate}} for this city into PATH "
+                         "(the crossover baseline / current-run file watchdog_core Duty 2 diffs)")
     args = ap.parse_args()
     eval_hours = tuple(int(x) for x in args.hours.split(","))
 
@@ -48,7 +56,7 @@ def main() -> int:
     icao, tz, sub_degree, name = _HOURLY_STATION[key]
 
     src = Sources()
-    end = dt.date.today()
+    end = dt.date.fromisoformat(args.end) if args.end else dt.date.today()
     obs = src.fetch_metar_observations(
         icao, end - dt.timedelta(days=args.days), end, tz)
     by_date: dict[str, list[tuple[int, float]]] = defaultdict(list)
@@ -108,6 +116,24 @@ def main() -> int:
     print("  -> post-noon sharpening beats climatology on BOTH folds: a real, "
           "monotone information gain." if ok else
           "  -> a post-noon fold flipped: investigate before trusting.")
+
+    if args.emit_crossover:
+        # merge THIS city's per-hour hit-rates into the shared file, keyed by ICAO
+        # (the settlement station) so the baseline and current-run files line up
+        # with watchdog_core Duty 2. Hours with no scored days are omitted, never
+        # written as null (Duty 2 reads only real numbers).
+        try:
+            with open(args.emit_crossover) as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                data = {}
+        except (FileNotFoundError, ValueError):
+            data = {}
+        data[icao] = {f"{h:02d}:00": sum(hits[h]) / len(hits[h])
+                      for h in eval_hours if hits[h]}
+        with open(args.emit_crossover, "w") as f:
+            json.dump(data, f, indent=2, sort_keys=True)
+        print(f"  emitted crossover hit-rates for {icao} -> {args.emit_crossover}")
     return 0
 
 

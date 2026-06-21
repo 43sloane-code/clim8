@@ -1,0 +1,10 @@
+{"id":"D01","candidate":"6 statistical correctors + regime-gating","space":"day-ahead","verdict":"DEAD","evidence":"no held-out gain across folds","grep":["corrector","regime gat","regime-gat"]}
+{"id":"D02","candidate":"AIFS ecmwf_aifs025_single as 9th council member","space":"day-ahead","verdict":"DEAD","evidence":"noise, 3 separate attempts","grep":["aifs","ecmwf_aifs025"]}
+{"id":"D03","candidate":"UKMO-2km high-res NWP lead-1","space":"day-ahead","verdict":"DEAD","evidence":"CRPS -0.009 / MAE-high -0.033, fold0 flips","grep":["ukmo","ukmo-2km","ukmo_2km"]}
+{"id":"D04","candidate":"ICON-D2 high-res NWP lead-1","space":"day-ahead","verdict":"DEAD","evidence":"-0.002 / -0.019, folds 0,2 flip","grep":["icon-d2","icon_d2","icond2"]}
+{"id":"D05","candidate":"ICON-EU high-res NWP lead-1","space":"day-ahead","verdict":"DEAD","evidence":"+0.002, no gain","grep":["icon-eu","icon_eu","iconeu"]}
+{"id":"D06","candidate":"AROME high-res NWP lead-1","space":"day-ahead","verdict":"DEAD","evidence":"+0.007, no gain","grep":["arome"]}
+{"id":"D07","candidate":"dew-point @09:00 intraday feature","space":"day-ahead","verdict":"DEAD","evidence":"+7.1 but fold0 regresses","grep":["dew","dewpoint","dew_point","dew point"]}
+{"id":"D08","candidate":"slope @12:00 intraday feature","space":"day-ahead","verdict":"DEAD","evidence":"+3.3 but still coin-flip; physical irreducibility","grep":["slope @","slope@","slope_12","morning slope"]}
+{"id":"D09","candidate":"Open-Meteo ensemble member-history source","space":"day-ahead","verdict":"NOT-BACKTESTABLE","evidence":"stores 0 days of member history","grep":["open-meteo ensemble","openmeteo_ensemble","ensemble member history"]}
+{"id":"D10","candidate":"boundary abstention / coverage recal / hierarchical pooling / low-side intraday lever","space":"design","verdict":"DEFERRED-REJECTED","evidence":"single bucket is the point; explicitly set aside","grep":["abstention","hierarchical pool","low-side","coverage recal"]}
