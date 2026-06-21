@@ -22,7 +22,7 @@ from weather_council.market import _native_reading_int
 from weather_council.intraday_ceiling import (
     remaining_rise_samples, sharpen_pmf, MIN_RISE_SAMPLES, _HOURLY_STATION)
 
-EVAL_HOURS = (9, 12, 15, 18)
+DEFAULT_HOURS = "9,12,15,18"
 
 
 def _rate(xs: list[int]) -> str:
@@ -35,7 +35,10 @@ def main() -> int:
                     help=f"configured city key: {' | '.join(_HOURLY_STATION)}")
     ap.add_argument("--days", type=int, default=160, help="hourly lookback window")
     ap.add_argument("--warmup", type=int, default=40, help="days before scoring starts")
+    ap.add_argument("--hours", default=DEFAULT_HOURS,
+                    help="comma-separated local eval hours (default 9,12,15,18)")
     args = ap.parse_args()
+    eval_hours = tuple(int(x) for x in args.hours.split(","))
 
     key = args.city.strip().lower()
     if key not in _HOURLY_STATION:
@@ -60,14 +63,14 @@ def main() -> int:
         return _native_reading_int(max(c for _, c in by_date[d]), "C", sub_degree)
 
     test = days[args.warmup:]
-    hits: dict[int, list[int]] = {h: [] for h in EVAL_HOURS}
+    hits: dict[int, list[int]] = {h: [] for h in eval_hours}
     clim: list[int] = []
     for i, d in enumerate(test, start=args.warmup):
         prior = days[:i]
         s = settled(d)
         clim.append(1 if statistics.mode([settled(p) for p in prior]) == s else 0)
         hist = {p: by_date[p] for p in prior}
-        for h in EVAL_HOURS:
+        for h in eval_hours:
             rm = max((c for hh, c in by_date[d] if hh <= h), default=None)
             if rm is None:
                 continue
@@ -81,13 +84,13 @@ def main() -> int:
           f"(warmup {args.warmup}, window {args.days}d)")
     print("=" * 64)
     print(f"  baseline (no intraday, climatology modal bucket): {_rate(clim)}")
-    for h in EVAL_HOURS:
+    for h in eval_hours:
         print(f"  intraday by {h:02d}:00 local -> exact-bucket hit {_rate(hits[h])}")
 
     print("-" * 64)
     print("  DISJOINT-FOLD sign-stability (2 chronological halves):")
     ok = True
-    for h in EVAL_HOURS:
+    for h in eval_hours:
         xs = hits[h]
         if len(xs) < 10:
             continue
