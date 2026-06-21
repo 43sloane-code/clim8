@@ -4,11 +4,30 @@ Covers the new Sources.wunderground_daily_series fetcher (local-day grouping,
 F->C max/min, partial-day drop, unknown-station guard) and the _wu_truth_station
 routing helper that anchors Manila's backtest truth on the WU feed."""
 import datetime as dt
+import tempfile
 import unittest
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import weather_council.sources as _wsrc
 from weather_council.sources import Sources, Place
 from weather_council.council import _wu_truth_station
+
+
+class _HermeticCache:
+    """Mixin: point the on-disk obs/history cache at a throwaway temp dir so a
+    test never reads or pollutes the real .cache."""
+
+    def setUp(self):
+        super().setUp()
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig_cache_dir = _wsrc.HISTORY_CACHE_DIR
+        _wsrc.HISTORY_CACHE_DIR = Path(self._tmp.name)
+
+    def tearDown(self):
+        _wsrc.HISTORY_CACHE_DIR = self._orig_cache_dir
+        self._tmp.cleanup()
+        super().tearDown()
 
 _MANILA = ZoneInfo("Asia/Manila")
 
@@ -33,7 +52,7 @@ class _FakeHTTP:
         return {"observations": self._obs}
 
 
-class TestWundergroundTruth(unittest.TestCase):
+class TestWundergroundTruth(_HermeticCache, unittest.TestCase):
     def test_series_groups_local_day_max_min_and_drops_partial(self):
         obs = (
             _obs_for_day(dt.date(2026, 6, 10), [80] + [97] + [85] * 22)   # max 97F min 80F, 24 obs
@@ -143,6 +162,56 @@ class TestIntradayFeedSelection(unittest.TestCase):
         self.assertTrue(spy.iem_called)
         self.assertFalse(spy.wu_called)
         self.assertIn("IEM", r.source or "")
+
+
+class TestObsRangeCache(_HermeticCache, unittest.TestCase):
+    """The obs cache must serve the immutable past from disk but ALWAYS re-fetch
+    the recent tail — otherwise a live intraday running max would freeze."""
+
+    def _spy_raw(self):
+        calls = []
+
+        def raw(a, b):
+            calls.append((a, b))
+            return [((a + dt.timedelta(days=i)).strftime("%Y-%m-%d") + " 12:00", 30.0 + i)
+                    for i in range((b - a).days + 1)]
+        return raw, calls
+
+    def test_past_cached_tail_always_fresh(self):
+        s = Sources(http=_FakeHTTP([]))          # http unused; raw is injected
+        today = dt.date.today()
+        start = today - dt.timedelta(days=12)
+        cutoff = today - _wsrc.OBS_CACHE_MARGIN   # last immutable day
+
+        raw, calls = self._spy_raw()
+        r1 = s._cached_range_obs("unit", "WSSS", start, today, "Asia/Singapore", raw)
+        first = list(calls)
+        calls.clear()
+        r2 = s._cached_range_obs("unit", "WSSS", start, today, "Asia/Singapore", raw)
+        second = list(calls)
+
+        # 1st run fetches the immutable past as one blob...
+        self.assertIn((start, cutoff), first)
+        # ...2nd run serves the past from cache (never re-fetched)...
+        self.assertNotIn((start, cutoff), second)
+        # ...but ALWAYS re-fetches the recent tail, and only the tail.
+        self.assertTrue(second, "the recent tail must always be fetched fresh")
+        for a, b in second:
+            self.assertGreater(a, cutoff)         # never the cached past
+            self.assertEqual(b, today)
+        # cache must be faithful: identical merged result both times.
+        self.assertEqual(r1, r2)
+        self.assertEqual(len(r1), 13)             # 13 days, start..today inclusive
+
+    def test_all_past_range_fully_cached(self):
+        s = Sources(http=_FakeHTTP([]))
+        today = dt.date.today()
+        start, end = today - dt.timedelta(days=20), today - dt.timedelta(days=10)
+        raw, calls = self._spy_raw()
+        s._cached_range_obs("unit2", "WSSS", start, end, "Asia/Singapore", raw)
+        calls.clear()
+        s._cached_range_obs("unit2", "WSSS", start, end, "Asia/Singapore", raw)
+        self.assertEqual(calls, [])               # wholly past -> no network on warm cache
 
 
 if __name__ == "__main__":

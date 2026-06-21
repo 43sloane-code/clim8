@@ -119,6 +119,12 @@ DailySeries = dict[str, tuple[float, float]]  # date -> (high, low)
 # response we genuinely fetched before.
 HISTORY_CACHE_DIR = Path(__file__).resolve().parent.parent / ".cache" / "history"
 HISTORY_CACHE_TTL = dt.timedelta(days=7)
+# Station-observation (WU / IEM) range fetches: the past is immutable so it is
+# cached, but anything within this margin of "now" is ALWAYS re-fetched. The
+# margin (not 0) absorbs host-vs-city timezone skew and same-day settlement, so a
+# live intraday running max is never served stale from cache. 2 days is safe for
+# any ±1-day skew while still caching ~99% of a 160-day backtest window.
+OBS_CACHE_MARGIN = dt.timedelta(days=2)
 
 
 def _history_cache_key(url: str, params: dict) -> str:
@@ -450,6 +456,39 @@ class Sources:
             raise
         _history_cache_write(key, data)
         return data
+
+    def _cached_range_obs(self, tag: str, icao: str, start: dt.date, end: dt.date,
+                          tz: str, raw_fetch):
+        """Return parsed observations for [start, end], caching the IMMUTABLE past
+        on disk and ALWAYS fetching the recent tail fresh.
+
+        Station archives (WU, IEM) for a settled day never change, so re-fetching a
+        160-day window on every run/gate/intraday-refresh is pure waste. This caches
+        [start, today-OBS_CACHE_MARGIN] (one keyed blob of parsed rows) and fetches
+        [.. , end] live, then merges and time-sorts. The margin guarantees a live
+        running max is never served stale. `raw_fetch(a, b) -> list[tuple]` is the
+        un-cached fetch-and-parse core; rows are JSON-round-tripped, so any tuple
+        arity ((ts,c) or (date,max,min)) is preserved. Cache write is best-effort —
+        a failure degrades to a live fetch, never an error."""
+        cutoff = dt.date.today() - OBS_CACHE_MARGIN     # everything <= cutoff is immutable
+        out: list = []
+        past_end = min(end, cutoff)
+        if start <= past_end:
+            key = _history_cache_key("obs:" + tag, {
+                "icao": (icao or "").upper(), "tz": tz or "",
+                "start": start.isoformat(), "end": past_end.isoformat()})
+            cached, age = _history_cache_read(key)
+            if cached is not None and age is not None and age <= HISTORY_CACHE_TTL:
+                out.extend(tuple(r) for r in cached.get("obs", []))
+            else:
+                past = list(raw_fetch(start, past_end))
+                _history_cache_write(key, {"obs": [list(x) for x in past]})
+                out.extend(past)
+        fresh_start = max(start, cutoff + dt.timedelta(days=1))   # recent tail, never cached
+        if fresh_start <= end:
+            out.extend(raw_fetch(fresh_start, end))
+        out.sort()
+        return out
 
     def fetch_archive_series(self, place: Place,
                              start: dt.date, end: dt.date) -> DailySeries:
@@ -838,7 +877,17 @@ class Sources:
         METAR ~hourly, plus SPECIs) — emphatically NOT per-second or per-minute.
         A caller asking for a finer timescale than this cadence is asking for
         truth that was never measured; such scales must be reported as
-        unobserved, never interpolated into fabricated readings."""
+        unobserved, never interpolated into fabricated readings.
+
+        The immutable past is served from the on-disk obs cache; the recent tail
+        (within OBS_CACHE_MARGIN of now) is always re-fetched, so a live intraday
+        running max is never stale."""
+        return self._cached_range_obs(
+            "metar", icao, start, end, timezone or "",
+            lambda a, b: self._fetch_metar_raw(icao, a, b, timezone))
+
+    def _fetch_metar_raw(self, icao: str, start: dt.date, end: dt.date,
+                         timezone: str) -> list[tuple[str, float]]:
         tz = timezone if "/" in (timezone or "") else "Etc/UTC"
         txt = self.http.get_text(METAR_URL, {
             "station": icao,
@@ -904,10 +953,18 @@ class Sources:
         fewer than WU_MIN_DAY_OBS obs (a partial final day) are dropped so an
         incomplete day never understates the peak. The range is chunked to stay
         within one API window per call. Returns {} on total failure, so the caller
-        falls back to the station/grid truth rather than anchoring on nothing."""
+        falls back to the station/grid truth rather than anchoring on nothing.
+        Immutable past from the obs cache; the recent tail is always re-fetched."""
+        rows = self._cached_range_obs(
+            "wu_daily", icao, start, end, timezone or "",
+            lambda a, b: self._wu_daily_raw(icao, a, b, timezone))
+        return {d: (mx, mn) for d, mx, mn in rows}
+
+    def _wu_daily_raw(self, icao: str, start: dt.date, end: dt.date,
+                      timezone: str) -> list[tuple[str, float, float]]:
         loc = WU_LOCATION.get((icao or "").upper())
         if loc is None:
-            return {}
+            return []
         try:
             zone = ZoneInfo(timezone)
         except Exception:
@@ -933,13 +990,13 @@ class Sources:
                 local = dt.datetime.fromtimestamp(vt, tz=dt.timezone.utc).astimezone(zone)
                 by_date.setdefault(local.date().isoformat(), []).append(float(t))
             cur = chunk_end + dt.timedelta(days=1)
-        out: DailySeries = {}
+        rows: list[tuple[str, float, float]] = []
         for d, temps in by_date.items():
             if len(temps) < WU_MIN_DAY_OBS:       # incomplete day — untrustworthy extreme
                 continue
-            out[d] = ((max(temps) - 32.0) * 5.0 / 9.0,
-                      (min(temps) - 32.0) * 5.0 / 9.0)
-        return out
+            rows.append((d, (max(temps) - 32.0) * 5.0 / 9.0,
+                         (min(temps) - 32.0) * 5.0 / 9.0))
+        return rows
 
     def wunderground_current(self, icao: str, timezone: str) -> dict | None:
         """The latest Wunderground / Weather Company observation for an airport —
@@ -987,7 +1044,15 @@ class Sources:
         optimistic at the peak hour (Singapore 14:00: IEM 91% vs WU-faithful 78%).
         Reading the running max on the same feed it settles on removes that gap.
         WU cadence ~30 min; whole °F → °C. Range chunked to one API window per
-        call. Returns [] on total failure so the caller can fall back to IEM."""
+        call. Returns [] on total failure so the caller can fall back to IEM.
+        Immutable past is served from the obs cache; the recent tail is always
+        re-fetched so the live running max is never stale."""
+        return self._cached_range_obs(
+            "wu_hourly", icao, start, end, timezone or "",
+            lambda a, b: self._wu_hourly_raw(icao, a, b, timezone))
+
+    def _wu_hourly_raw(self, icao: str, start: dt.date, end: dt.date,
+                       timezone: str) -> list[tuple[str, float]]:
         loc = WU_LOCATION.get((icao or "").upper())
         if loc is None:
             return []
