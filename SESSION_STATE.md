@@ -76,12 +76,18 @@ peak** — then the lever near-*observes* rather than forecasts.
 | 15:00 | 97.5% | — | 89% |
 | 16:00 | 99% | — | — |
 
-- **Tropical cities lock the confident single bucket at 14:00** (their diurnal
-  peak) — an hour earlier than the previously-quoted 15:00.
+- ⚠️ **CORRECTION (06-21 bust): the table above is IEM whole-°C and runs ~12pts
+  OPTIMISTIC at the peak hour.** Served Singapore 31 @ "91% locked" at 14:00;
+  settled **32** (late 15:30 spike). IEM's coarse °C grain hides the °F boundary
+  fragility that actually settles. **Singapore now runs WU-native** (`_WU_INTRADAY`,
+  settlement-faithful whole °F): **14:00 79% · 15:00 96% · 16:00 98%** (disjoint-
+  fold stable) — NOT "locked." Manila/London still IEM. So 14:00 is the *floor* of
+  the confident range, not a lock; a late peak (14:00 ±1.6h) is irreducible — only
+  post-peak (temps falling) is genuinely high-confidence.
 - London peaks later/choppier → needs **15:00+**.
-- **10:00 is a physical floor**, not a modeling gap: the peak is 4h away and the
-  morning carries *less* signal than guessing the seasonal modal bucket.
-- Parameterized via `--hours` and `--city` flags (commit `fb6f50c`).
+- **10:00 is a physical floor**: the peak is hours away; the morning carries *less*
+  signal than guessing the seasonal modal bucket.
+- Flags: `--hours`, `--city` (`fb6f50c`); WU-native via `_WU_INTRADAY` this session.
 
 ## 4. Gates (every change must clear all of these)
 

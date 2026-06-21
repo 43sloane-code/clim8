@@ -21,7 +21,7 @@ from collections import defaultdict
 from weather_council.sources import Sources
 from weather_council.market import _native_reading_int
 from weather_council.intraday_ceiling import (
-    remaining_rise_samples, sharpen_pmf, MIN_RISE_SAMPLES, _HOURLY_STATION)
+    remaining_rise_samples, sharpen_pmf, MIN_RISE_SAMPLES, _HOURLY_STATION, _WU_INTRADAY)
 
 DEFAULT_HOURS = "9,12,15,18"
 
@@ -57,11 +57,14 @@ def main() -> int:
 
     src = Sources()
     end = dt.date.fromisoformat(args.end) if args.end else dt.date.today()
-    obs = src.fetch_metar_observations(
-        icao, end - dt.timedelta(days=args.days), end, tz)
-    by_date: dict[str, list[tuple[int, float]]] = defaultdict(list)
+    use_wu = key in _WU_INTRADAY        # WU-native (settlement feed) for configured cities
+    start = end - dt.timedelta(days=args.days)
+    obs = (src.wunderground_hourly_observations(icao, start, end, tz) if use_wu
+           else src.fetch_metar_observations(icao, start, end, tz))
+    by_date: dict[str, list[tuple[float, float]]] = defaultdict(list)
     for ts, c in obs:
-        by_date[ts[:10]].append((int(ts[11:13]), c))
+        hh = int(ts[11:13]) + (int(ts[14:16]) / 60.0 if use_wu else 0.0)
+        by_date[ts[:10]].append((hh, c))
     days = sorted(d for d, v in by_date.items() if v)
     if len(days) <= args.warmup + 10:
         print(f"insufficient history ({len(days)} days)")
@@ -88,8 +91,9 @@ def main() -> int:
             modal = sharpen_pmf(rm, rises, sub_degree)[0][0]
             hits[h].append(1 if modal == s else 0)
 
-    print(f"\nINTRADAY-CEILING GATE — {name} {icao}, {len(test)} held-out days "
-          f"(warmup {args.warmup}, window {args.days}d)")
+    print(f"\nINTRADAY-CEILING GATE — {name} {icao} "
+          f"[{'WU whole-°F (settlement-native)' if use_wu else 'IEM whole-°C'}], "
+          f"{len(test)} held-out days (warmup {args.warmup}, window {args.days}d)")
     print("=" * 64)
     print(f"  baseline (no intraday, climatology modal bucket): {_rate(clim)}")
     for h in eval_hours:

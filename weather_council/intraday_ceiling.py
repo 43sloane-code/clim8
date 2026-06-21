@@ -133,6 +133,13 @@ _HOURLY_STATION = {
     "singapore": ("WSSS", "Asia/Singapore", False, "Changi"),
 }
 _NO_HOURLY = {"hong kong": True}    # settles on a daily-max-only record (no hourly)
+# Cities whose intraday lever reads the WUNDERGROUND settlement feed (whole °F)
+# instead of IEM METAR (whole °C) — running max, remaining-rise and settled bucket
+# then live on the SAME feed the market pays out on. IEM's coarser °C grain hides
+# the °F boundary fragility (Singapore 14:00: IEM 91% vs WU-faithful 78%), so a
+# WU-native lever reports honest, settlement-correct conviction. Validated stable
+# via reports/_wu_native_intraday_sg.py.
+_WU_INTRADAY = {"singapore"}
 
 
 def _city_key(place: Place) -> str | None:
@@ -186,18 +193,27 @@ def intraday_ceiling(place: Place, target: dt.date, *,
                                sub_degree=sub_degree,
                                note="no Sources handle; cannot fetch hourly history")
 
+    use_wu = key in _WU_INTRADAY
     try:
-        obs = sources.fetch_metar_observations(
-            icao, target - dt.timedelta(days=back_days),
-            target + dt.timedelta(days=1), tz)
+        if use_wu:
+            obs = sources.wunderground_hourly_observations(
+                icao, target - dt.timedelta(days=back_days),
+                target + dt.timedelta(days=1), tz)
+        else:
+            obs = sources.fetch_metar_observations(
+                icao, target - dt.timedelta(days=back_days),
+                target + dt.timedelta(days=1), tz)
     except Exception as exc:
         return IntradayCeiling(kind="unavailable", city=city, target=tgt_iso,
                                sub_degree=sub_degree,
                                note=f"hourly feed errored: {exc}")
 
-    by_date: dict[str, list[tuple[int, float]]] = {}
+    # WU is sub-hourly (~30 min) -> keep fractional hours so "by H:00" excludes the
+    # :30 reading (a leak otherwise); IEM stays integer-hour as before.
+    by_date: dict[str, list[tuple[float, float]]] = {}
     for ts, c in obs:
-        by_date.setdefault(ts[:10], []).append((int(ts[11:13]), c))
+        hh = int(ts[11:13]) + (int(ts[14:16]) / 60.0 if use_wu else 0)
+        by_date.setdefault(ts[:10], []).append((hh, c))
 
     todays = by_date.get(tgt_iso, [])
     if not todays:
@@ -213,7 +229,7 @@ def intraday_ceiling(place: Place, target: dt.date, *,
         return IntradayCeiling(
             kind="unavailable", city=city, target=tgt_iso, sub_degree=sub_degree,
             source=icao, hour=hour, running_max_c=running_max, n_rise=len(rises),
-            note=(f"insufficient rise history at {hour:02d}:00 "
+            note=(f"insufficient rise history at {int(hour):02d}:00 "
                   f"({len(rises)} < {MIN_RISE_SAMPLES} days)"))
 
     pmf = sharpen_pmf(running_max, rises, sub_degree)
@@ -222,7 +238,9 @@ def intraday_ceiling(place: Place, target: dt.date, *,
         kind="sharpened", city=city, target=tgt_iso, sub_degree=sub_degree,
         hour=hour, running_max_c=running_max, n_rise=len(rises),
         pmf=tuple(pmf), modal_bucket=modal_b, modal_prob=modal_p,
-        source=f"{station_name} {icao} (live IEM ASOS METAR, hourly)")
+        source=(f"{station_name} {icao} "
+                + ("(live Wunderground hourly, whole-°F → settlement °C)" if use_wu
+                   else "(live IEM ASOS METAR, hourly)")))
 
 
 def _self_test() -> None:

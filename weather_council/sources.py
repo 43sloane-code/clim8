@@ -973,6 +973,52 @@ class Sources:
         return {"temperature_2m": (float(latest["temp"]) - 32.0) * 5.0 / 9.0,
                 "record_time": rt.isoformat()}
 
+    def wunderground_hourly_observations(self, icao: str, start: dt.date,
+                                         end: dt.date, timezone: str) -> list[tuple[str, float]]:
+        """Sub-daily air-temperature obs (°C) from the Wunderground / Weather
+        Company station record, shaped EXACTLY like fetch_metar_observations —
+        a time-sorted list of (local 'YYYY-MM-DD HH:MM', temp_c) — so the
+        intraday-ceiling lever can read the running max, learn the remaining-rise,
+        AND settle on ONE feed: the settlement oracle itself.
+
+        Why this exists: the lever was backtested on IEM whole-°C METAR but the
+        market settles on WU whole-°F → °C. The coarser °C grain HIDES the °F
+        boundary fragility that actually flips buckets, so the IEM gate ran ~12pts
+        optimistic at the peak hour (Singapore 14:00: IEM 91% vs WU-faithful 78%).
+        Reading the running max on the same feed it settles on removes that gap.
+        WU cadence ~30 min; whole °F → °C. Range chunked to one API window per
+        call. Returns [] on total failure so the caller can fall back to IEM."""
+        loc = WU_LOCATION.get((icao or "").upper())
+        if loc is None:
+            return []
+        try:
+            zone = ZoneInfo(timezone)
+        except Exception:
+            zone = ZoneInfo("UTC")
+        out: list[tuple[str, float]] = []
+        cur = start
+        while cur <= end:
+            chunk_end = min(cur + dt.timedelta(days=30), end)
+            try:
+                data = self.http.get_json(
+                    WU_HISTORY_URL.format(loc=loc),
+                    {"apiKey": WU_API_KEY, "units": "e",
+                     "startDate": cur.strftime("%Y%m%d"),
+                     "endDate": chunk_end.strftime("%Y%m%d")})
+            except Exception:
+                data = {}
+            for o in (data.get("observations") or []):
+                t = o.get("temp")
+                vt = o.get("valid_time_gmt")
+                if not isinstance(t, (int, float)) or not isinstance(vt, (int, float)):
+                    continue
+                self.qc["screened"] += 1
+                local = dt.datetime.fromtimestamp(vt, tz=dt.timezone.utc).astimezone(zone)
+                out.append((local.strftime("%Y-%m-%d %H:%M"), (float(t) - 32.0) * 5.0 / 9.0))
+            cur = chunk_end + dt.timedelta(days=1)
+        out.sort()
+        return out
+
     def eglc_current(self) -> dict | None:
         """Live current air temperature at London City Airport (EGLC) — the most
         recent raw IEM ASOS METAR, i.e. the settlement sensor's own latest
