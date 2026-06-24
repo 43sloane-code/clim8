@@ -79,6 +79,16 @@ class TestBucketCall(unittest.TestCase):
         self.assertEqual(c["bucket"], 25)           # round(24.5) fallback
         self.assertEqual(c["tier"], "LOW")
 
+    def test_intraday_fractional_hour_renders(self):
+        # Regression: WU-native cities (Singapore) carry a FRACTIONAL local hour
+        # (e.g. 19.5 from 30-min obs). _bucket_call must format it without a
+        # ValueError — the old f"{hour:02d}" crashed on a float post-peak.
+        c = _ceiling(31, 1.0)
+        c.hour = 19.5
+        out = _bucket_call(_v("Singapore, Singapore", 31.1, _SPREAD), ceiling=c)
+        self.assertTrue(out["used_intraday"])
+        self.assertIn("19:00", out["source"])       # 19.5 -> "by 19:00"
+
 
 if __name__ == "__main__":
     unittest.main()

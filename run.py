@@ -707,7 +707,7 @@ def _bucket_call(v: Verdict, ceiling=None) -> dict:
     if use_intra:
         pmf = {b: p for b, p in ceiling.pmf}
         source = (f"intraday — running max {ceiling.running_max_c:.1f}°C by "
-                  f"{ceiling.hour:02d}:00, σ collapsed near the peak")
+                  f"{int(ceiling.hour):02d}:00, σ collapsed near the peak")
     else:
         pmf = da_pmf
         source = "day-ahead distribution"
@@ -1523,7 +1523,7 @@ def _ceiling_lines(c) -> list[str]:
         L.append(f"    UNAVAILABLE — {c.note}.")
         return L
     # kind == "sharpened"
-    L.append(f"    running max by {c.hour:02d}:00 local: {c.running_max_c:.1f}°C "
+    L.append(f"    running max by {int(c.hour):02d}:00 local: {c.running_max_c:.1f}°C "
              f"({c.source})")
     L.append(f"    remaining-rise learned from {c.n_rise} strictly-earlier days "
              f"(leak-free, resampled through the settlement quantizer)")
