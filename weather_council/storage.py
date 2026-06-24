@@ -224,7 +224,18 @@ def verify(sources: Sources | None = None) -> list[str]:
          truth_kind, station_id, station_icao, station_name,
          fc_lat, fc_lon) in rows:
         actual, truth_note = None, ""
-        if truth_kind == "station" and station_id:
+        icao_up = (station_icao or "").upper()
+        if truth_kind == "station" and icao_up in _WU_SETTLE_TZ:
+            # WU-truth city: score against the Wunderground oracle (fetch_station_daily
+            # has no overlay for RPLL/WSSS). Same repair as settle_market_snapshots.
+            day = dt.date.fromisoformat(target)
+            try:
+                actual = sources.wunderground_daily_series(
+                    icao_up, day, day, _WU_SETTLE_TZ[icao_up]).get(target)
+            except Exception:
+                actual = None
+            truth_note = " vs Wunderground"
+        elif truth_kind == "station" and station_id:
             series = station_cache.get(station_id)
             if series is None:
                 # Rebuild the verdict's EXACT anchor so fetch_station_daily's modern
@@ -359,6 +370,14 @@ def _bucket_for_reading(buckets: list[dict], reading_int: int) -> str | None:
     return None
 
 
+# Airports whose REALIZED settlement truth is the Wunderground oracle (the record
+# the contract pays on), NOT the Meteostat bulk + IEM/HKO overlay fetch_station_daily
+# covers. icao -> tz (for local-day grouping). Mirrors council._WU_TRUTH_STATIONS.
+# London (EGLC) is deliberately EXCLUDED though it is in WU_LOCATION — it settles on
+# the IEM-EGLC record. Both settle_market_snapshots and verify route these here.
+_WU_SETTLE_TZ = {"RPLL": "Asia/Manila", "WSSS": "Asia/Singapore"}
+
+
 def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
     """Resolve each unsettled snapshot's realized bucket against the SAME anchor
     record the verdict was scored on, then mark it settled.
@@ -397,7 +416,21 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
          truth_kind, station_id, station_icao, station_name,
          fc_lat, fc_lon, sub_degree) in rows:
         actual = None
-        if truth_kind == "station" and station_id:
+        icao_up = (station_icao or "").upper()
+        if truth_kind == "station" and icao_up in _WU_SETTLE_TZ:
+            # WU-truth city (Manila RPLL / Singapore WSSS): settle on the SAME
+            # Wunderground oracle the verdict + contract pay out on. fetch_station_daily
+            # has no WU overlay for these airports (only EGLC/HKO), so it would leave
+            # realized_label NULL — the bug this branch repairs. daily_series returns
+            # the local-day (max_c, min_c) tuple settle/verify both expect.
+            fetcher = sources if injected else Sources()
+            day = dt.date.fromisoformat(target)
+            try:
+                actual = fetcher.wunderground_daily_series(
+                    icao_up, day, day, _WU_SETTLE_TZ[icao_up]).get(target)
+            except Exception:
+                actual = None
+        elif truth_kind == "station" and station_id:
             series = station_cache.get(station_id)
             if series is None:
                 # Fresh Sources per unique station on the production path so each
