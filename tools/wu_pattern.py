@@ -106,7 +106,7 @@ def main() -> int:
     allb = [r[1] for r in rows]
     n = len(allb)
     h = Counter(allb)
-    print(f"  recent settled (last 10): " + " ".join(str(r[1]) for r in rows[-10:]))
+    print("  recent settled (last 10): " + " ".join(str(r[1]) for r in rows[-10:]))
     print(f"  season base rate (n={n}): " +
           " ".join(f"{b}C:{h[b]/n*100:.0f}%" for b in sorted(h)) +
           f"  | mode {statistics.mode(allb)} median {int(statistics.median(allb))}")
