@@ -706,8 +706,10 @@ def _bucket_call(v: Verdict, ceiling=None) -> dict:
                  and ceiling.modal_prob is not None and ceiling.modal_prob >= 0.70)
     if use_intra:
         pmf = {b: p for b, p in ceiling.pmf}
-        source = (f"intraday — running max {ceiling.running_max_c:.1f}°C by "
-                  f"{int(ceiling.hour):02d}:00, σ collapsed near the peak")
+        source = (f"today's running max {ceiling.running_max_c:.1f}°C by "
+                  f"{int(ceiling.hour):02d}:00 + remaining-rise over "
+                  f"{getattr(ceiling, 'n_rise', 0)} prior days' intraday records; "
+                  f"σ collapsed near the peak")
     else:
         pmf = da_pmf
         source = "day-ahead distribution"
@@ -731,6 +733,7 @@ def _bucket_call(v: Verdict, ceiling=None) -> dict:
         span_prob = cum
     return {"bucket": bucket, "prob": prob, "tier": tier, "source": source,
             "rule": rule, "used_intraday": use_intra,
+            "n_rise": (getattr(ceiling, "n_rise", 0) if use_intra else 0),
             "day_ahead_bucket": da_bucket, "day_ahead_prob": da_pmf.get(da_bucket),
             "span": span, "span_prob": span_prob}
 
@@ -742,26 +745,37 @@ def _bucket_call_lines(v: Verdict, ceiling=None) -> list[str]:
         L.append(f"    best single guess : {c['bucket']}°C  (conviction unavailable — "
                  f"too little held-out history)")
         return L
-    L.append(f"    best single guess     : {c['bucket']}°C  —  {c['tier']} "
-             f"{c['prob']*100:.0f}%   [{c['source']}]")
     span = c["span"]
-    if span:
-        if len(span) == 1:
-            L.append(f"    HIGH-CONVICTION CALL  : {span[0]}°C  ({c['span_prob']*100:.0f}%)"
-                     f"  ← σ collapsed; single bucket is now confident")
-        else:
-            verb = "HIGH-CONVICTION CALL " if c["span_prob"] >= _SPAN_TARGET else "best range          "
-            L.append(f"    {verb} : {span[0]}–{span[-1]}°C  "
-                     f"({c['span_prob']*100:.0f}%)  ← the actionable call ({len(span)} buckets)")
-    if not c["used_intraday"]:
+    if c["used_intraday"]:
+        # LEAD with the intraday lock — the accurate, settlement-grounded prediction. It is
+        # grounded in today's running max PLUS prior days' intraday records (n_rise), which is
+        # the whole engine: where today is now + how every earlier day rose from here to its peak.
+        L.append(f"    ► INTRADAY LOCK   : {c['bucket']}°C  —  {c['tier']} {c['prob']*100:.0f}%")
+        L.append(f"      grounded in: {c['source']}")
+        if span and len(span) == 1:
+            L.append(f"      single bucket is confident now — σ collapsed at/after the peak")
+        elif span:
+            L.append(f"      actionable range {span[0]}–{span[-1]}°C ({c['span_prob']*100:.0f}%)")
+        if c["day_ahead_bucket"] is not None and c["day_ahead_bucket"] != c["bucket"]:
+            L.append(f"      (the day-ahead preliminary had {c['day_ahead_bucket']}°C — the live "
+                     f"intraday record OVERRIDES it; this is why we lead with the lock)")
+    else:
+        # No lock yet: the day-ahead call is a BAND, not a pinpoint — said honestly. The pinpoint
+        # single bucket arrives intraday, from the SAME prior-records engine, as the peak forms.
+        L.append(f"    PRELIMINARY (day-ahead) : best guess {c['bucket']}°C  —  {c['tier']} "
+                 f"{c['prob']*100:.0f}%   (a coin-flip near a boundary — NOT yet a pinpoint)")
+        if span and len(span) > 1:
+            verb = "confident band" if c["span_prob"] >= _SPAN_TARGET else "best range"
+            L.append(f"      {verb} : {span[0]}–{span[-1]}°C ({c['span_prob']*100:.0f}%)  "
+                     f"← the honest day-ahead call is this BAND ({len(span)} buckets), not one bucket")
         hk = "hong kong" in v.place.label().lower()
         if hk:
-            L.append("    (single-bucket HK is information-limited day-ahead — the range "
-                     "is the tradeable call; a single confident bucket needs intraday, "
-                     "pending HK's hourly archive)")
+            L.append("      ► pinpoint single bucket needs the intraday lock; HK has no hourly "
+                     "archive yet, so it stays a band")
         else:
-            L.append("    (single-bucket collapses to HIGH intraday as the peak nears — "
-                     "run with --intraday on the settlement day)")
+            L.append("      ► pinpoint single bucket LOCKS intraday — today's running max + the "
+                     "remaining-rise over prior days' records collapses σ as the peak nears "
+                     "(auto-delivered by the afternoon run)")
     # Reality check: the REALIZED served-vs-settlement rate (not the revisable
     # backtest, which overstates live skill because the historical-forecast archive
     # is revised toward truth). This is the number that has actually been happening.
