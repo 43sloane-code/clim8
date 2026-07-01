@@ -17,6 +17,7 @@ import argparse
 import csv
 import datetime as dt
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -738,7 +739,53 @@ def _bucket_call(v: Verdict, ceiling=None) -> dict:
             "span": span, "span_prob": span_prob}
 
 
-def _bucket_call_lines(v: Verdict, ceiling=None) -> list[str]:
+def _bucket_int_from_label(label: str | None) -> int | None:
+    """First integer in a bucket label ('32°C' / '32°C or higher' / '23°C or below')."""
+    m = re.search(r"-?\d+", label or "")
+    return int(m.group()) if m else None
+
+
+def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
+    """Day-ahead CROSS-VALIDATION panel — the council bucket is never shown as the ONLY
+    signal. Places the market's modal bucket and the recent-settled regime beside it and
+    flags when the council is the outlier. CONTEXT only: the served bucket stays the council
+    (the backtested side). A consensus does NOT beat the council day-ahead — measured 44% vs
+    44%, tied; the market's apparent 69% edge was a post-peak snapshot artifact — so this
+    cross-checks the call, it does not override it. The intraday lock remains the resolver."""
+    council = c["bucket"]
+    signals = [("council", council)]
+    if comparison is not None and getattr(comparison, "market_modal", None):
+        mk = _bucket_int_from_label(comparison.market_modal)
+        if mk is not None:
+            signals.append(("market", mk))
+    try:
+        settled = [s for (_d, _srv, s, _h)
+                   in live_bucket_scorecard(v.place.label()).get("recent", [])
+                   if isinstance(s, int)]
+    except Exception:
+        settled = []
+    if len(settled) >= 3:
+        signals.append(("recent-regime", max(set(settled), key=settled.count)))  # mode
+    if len(signals) < 2:
+        return []                                  # nothing independent to check against
+    others = [b for name, b in signals if name != "council"]
+    L = ["      CROSS-CHECK (day-ahead — the council is not the only signal):",
+         "        " + "  ·  ".join(f"{name} {b}°C" for name, b in signals)]
+    if all(b == others[0] for b in others) and others[0] != council:
+        lo, hi = min(council, others[0]), max(council, others[0])
+        L.append(f"        → the independent signals agree on {others[0]}°C; the COUNCIL "
+                 f"({council}) is the OUTLIER — the {lo}/{hi} boundary is live; the intraday "
+                 f"lock resolves it (day-ahead neither side has an edge — σ-ceiling)")
+    elif all(b == council for b in others):
+        L.append(f"        → market + regime agree with the council ({council}°C) — "
+                 f"cross-validated; higher confidence in the band")
+    else:
+        L.append(f"        → the signals split — a genuine coin-flip; neither side has a "
+                 f"day-ahead edge (σ-ceiling), the intraday lock decides")
+    return L
+
+
+def _bucket_call_lines(v: Verdict, ceiling=None, comparison=None) -> list[str]:
     c = _bucket_call(v, ceiling)
     L = ["", f"  BUCKET CALL — the {c['rule']} bucket the market settles on"]
     if c["prob"] is None:
@@ -776,6 +823,7 @@ def _bucket_call_lines(v: Verdict, ceiling=None) -> list[str]:
             L.append("      ► pinpoint single bucket LOCKS intraday — today's running max + the "
                      "remaining-rise over prior days' records collapses σ as the peak nears "
                      "(auto-delivered by the afternoon run)")
+        L.extend(_cross_check_lines(v, c, comparison))
     # Reality check: the REALIZED served-vs-settlement rate (not the revisable
     # backtest, which overstates live skill because the historical-forecast archive
     # is revised toward truth). This is the number that has actually been happening.
@@ -812,7 +860,7 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
     if ts.get("kind") == "station":
         L.append(f"    anchored on: {ts.get('label','')}")
     L.append(f"    of: {v.target_basis}")
-    L.extend(_bucket_call_lines(v, ceiling))
+    L.extend(_bucket_call_lines(v, ceiling, comparison))
     cd = v.confidence_detail
     hr = cd.get("hit_rate_within_2c")
     hr_s = f"{hr*100:.0f}% held-out hits -> {cd.get('backtest_tier','?')}" if hr is not None \
