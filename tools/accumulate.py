@@ -136,6 +136,18 @@ def main() -> int:
             )
             _log(f"{city}: no snapshot — {note}")
 
+    # 1b. Forward-log TWC's OWN day-ahead forecast (the candidate 9th council member earning a
+    # backtestable record; recommend-only, never feeds the blend). Non-fatal — a TWC hiccup must
+    # never break the core accrual loop, so it runs isolated and its failure is only logged.
+    try:
+        env = dict(os.environ, PYTHONPATH=str(ROOT))
+        p = subprocess.run([PY, "tools/twc_forecast_logger.py"], cwd=ROOT, env=env,
+                           capture_output=True, text=True, timeout=TIMEOUT_S)
+        last = next((l for l in reversed((p.stdout or "").splitlines()) if l.strip()), "")
+        _log(f"twc forecast log rc={p.returncode} | {last.strip()}")
+    except Exception as e:                                   # noqa: BLE001 — non-fatal by design
+        _log(f"twc forecast log failed (non-fatal): {type(e).__name__}: {e}")
+
     # 2. Settle whatever is now observable, against each verdict's anchor station.
     rc, out = _run(["--verify"])
     last = out.strip().splitlines()[-1] if out.strip() else "(nothing ready)"
