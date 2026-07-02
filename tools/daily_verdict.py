@@ -44,8 +44,11 @@ def main() -> int:
         _run(["tools/intraday_ceiling_backtest.py", "--city", "singapore", "--hours", "13,14,15,16"]),
         "### 3. PATTERN RECOGNITION (live + historical Wunderground) ###",
         _run(["tools/wu_pattern.py", "--city", "singapore"]),
-        "### 4. LOCK CERTIFICATION LEDGER (point-in-time; pre-registered bar) ###",
+        "### 4. ACCRUAL LEDGERS (point-in-time; idempotent — run here AND in accumulate so one "
+        "dead-network window cannot leave a permanent hole, per the 2026-07-02 outage) ###",
         _run(["tools/lock_logger.py"]),
+        _run(["tools/twc_forecast_logger.py"]),
+        _run(["tools/singapore_pop_logger.py"]),
         f"===== END ({dt.datetime.now(ZoneInfo('Asia/Singapore')):%Y-%m-%dT%H:%M:%S%z}) =====\n",
     ]
     with open(out, "w") as f:

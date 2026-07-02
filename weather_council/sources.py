@@ -146,6 +146,16 @@ def _history_cache_read(key: str):
         return None, None
 
 
+def _obs_days_covered(rows) -> int:
+    """Distinct calendar days present in a parsed obs list. Every cached arity puts a
+    'YYYY-MM-DD...' string first ((ts,c) or (date,max,min)), so day = first 10 chars.
+    The sanity metric behind the cache poisoning guard in `_cached_range_obs`."""
+    try:
+        return len({str(r[0])[:10] for r in rows})
+    except Exception:
+        return 0
+
+
 def _history_cache_write(key: str, data: dict) -> None:
     """Best-effort persist; a cache write must never break a live fetch."""
     try:
@@ -477,12 +487,24 @@ class Sources:
             key = _history_cache_key("obs:" + tag, {
                 "icao": (icao or "").upper(), "tz": tz or "",
                 "start": start.isoformat(), "end": past_end.isoformat()})
+            # POISONING GUARD: raw_fetch returns [] (or a thin partial) on network failure,
+            # and caching that starves every consumer for the 7-day TTL — the 2026-07-02
+            # dead-DNS launchd window cached an EMPTY blob and silently broke the WU-native
+            # validation gate ("insufficient history"). A blob is only trusted (and only
+            # WRITTEN) if it covers >=25% of the requested days; anything thinner is a miss
+            # and is refetched, so a poisoned key self-heals on the next healthy run.
+            expected_days = (past_end - start).days + 1
+            floor = max(1, expected_days // 4)
             cached, age = _history_cache_read(key)
-            if cached is not None and age is not None and age <= HISTORY_CACHE_TTL:
-                out.extend(tuple(r) for r in cached.get("obs", []))
+            rows = ([tuple(r) for r in cached.get("obs", [])]
+                    if cached is not None and age is not None and age <= HISTORY_CACHE_TTL
+                    else None)
+            if rows is not None and _obs_days_covered(rows) >= floor:
+                out.extend(rows)
             else:
                 past = list(raw_fetch(start, past_end))
-                _history_cache_write(key, {"obs": [list(x) for x in past]})
+                if _obs_days_covered(past) >= floor:
+                    _history_cache_write(key, {"obs": [list(x) for x in past]})
                 out.extend(past)
         fresh_start = max(start, cutoff + dt.timedelta(days=1))   # recent tail, never cached
         if fresh_start <= end:

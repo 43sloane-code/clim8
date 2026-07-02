@@ -621,6 +621,20 @@ def _anchored_actual(sources: Sources, truth_kind, station_id,
     uses: the station's own daily record where the verdict was station-anchored,
     else ERA5 at the exact forecast coordinates. None until the truth is in.
     Mirrors the resolution `verify`/`settle_market_snapshots` already use."""
+    # WU-anchored basket stations settle on the Wunderground record itself — the same
+    # branch verify/settle_market_snapshots already use. Without this, a tracked row
+    # whose station_id is None (e.g. the TWC forward-log rows) fell through to the
+    # LAGGED ERA5 path and never settled — the 2026-07-03 audit found the TWC 40-pair
+    # clock would have accrued ZERO pairs forever.
+    if truth_kind == "station":
+        icao_up = (station_icao or "").upper()
+        if icao_up in _WU_SETTLE_TZ:
+            try:
+                day = dt.date.fromisoformat(target)
+                return sources.wunderground_daily_series(
+                    icao_up, day, day, _WU_SETTLE_TZ[icao_up]).get(target)
+            except Exception:
+                return None
     if truth_kind == "station" and station_id:
         series = station_cache.get(station_id)
         if series is None:
@@ -685,18 +699,30 @@ def settle_tracked_forecasts(sources: Sources | None = None) -> list[str]:
     is only graded once its anchored record is available. Returns a settlement
     note per newly graded row."""
     sources = sources or Sources()
-    cutoff = (dt.date.today() - dt.timedelta(days=2)).isoformat()
+    # Broad prefilter only (host clock); the REAL readiness test is per-row below, because
+    # "the day is over" is a CITY-LOCAL question — the host runs a day behind SGT, so a
+    # host-date cutoff left completed Singapore/Manila days permanently "not yet due"
+    # (2026-07-03 audit). WU-anchored stations are gradable the moment their city-local
+    # day ends (current feed, no lag); lagged-truth stations keep the 2-day cutoff.
     conn = _connect()
     rows = conn.execute(
         "SELECT source, place, target_date, truth_kind, station_id, "
         "       station_icao, station_name, fc_lat, fc_lon "
         "FROM tracked_forecasts WHERE actual_high IS NULL AND target_date <= ?",
-        (cutoff,),
+        (dt.date.today().isoformat(),),
     ).fetchall()
+    from zoneinfo import ZoneInfo
     station_cache: dict[str, dict] = {}
     report: list[str] = []
     for (source, place_label, target, truth_kind, station_id,
          station_icao, station_name, fc_lat, fc_lon) in rows:
+        icao_up = (station_icao or "").upper()
+        if truth_kind == "station" and icao_up in _WU_SETTLE_TZ:
+            local_today = dt.datetime.now(ZoneInfo(_WU_SETTLE_TZ[icao_up])).date()
+            if target >= local_today.isoformat():
+                continue                   # city-local day not finished — grading would leak
+        elif target > (dt.date.today() - dt.timedelta(days=2)).isoformat():
+            continue                       # lagged-truth stations: conservative 2-day cutoff
         actual = _anchored_actual(sources, truth_kind, station_id,
                                   station_icao, station_name, fc_lat, fc_lon,
                                   place_label, target, station_cache)

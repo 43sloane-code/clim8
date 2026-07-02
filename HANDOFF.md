@@ -2,6 +2,23 @@
 
 *Written 2026-07-02 after 07-02 settled. For the next session. Read before running another verdict.*
 
+## 2026-07-03 FULL-STACK AUDIT — seven defects found running the production pipeline end-to-end
+Ran `tools/daily_verdict.py` (the real launchd job) and audited every layer. Found, fixed, verified:
+
+| # | Defect | Root cause | Status |
+|---|---|---|---|
+| A | WU-native validation gate DEAD since 07-02 ("insufficient history") | **obs-cache poisoning**: `_wu_hourly_raw` returns `[]` on network failure and `_cached_range_obs` cached it for the 7-day TTL (written during the 07-02 dead-DNS window) | **FIXED** — ≥25%-coverage floor on cache read AND write (`sources._obs_days_covered`); poisoned keys self-heal; 4 KATs (`test_obs_cache_guard`). Verified: gate back (14:00 79.3% / 15:00 94.2%, fold-stable) |
+| B | 07-02 09:00-WAT launchd cycle silently produced NOTHING (whole run died in ~1s, dead DNS) → **permanent TWC hole for 07-03** (point-in-time can't backfill) | single daily shot per ledger | **MITIGATED** — TWC + PoP loggers now also run in `daily_verdict` (3 windows/day, idempotent). The 07-03 hole itself is unrecoverable — the honest cost of point-in-time |
+| C | The failure in B was INVISIBLE — accumulate logged only the LAST stdout line ("rc=0 \| …40 more pairs…") while the fetch-failed line scrolled by | last-line-only logging | **FIXED** — `_tail_status` surfaces any "fail/error" line alongside the last line |
+| D | **TWC 40-pair clock would have accrued ZERO pairs forever** — `_anchored_actual` had no WU branch (rows with `station_id=None` fell to lagged ERA5) AND the cutoff used host-local `today-2` (host runs a day behind SGT) | settle path WU-blind + host-vs-city-local date | **FIXED** — WU branch added (mirrors `settle_market_snapshots`); readiness is now CITY-LOCAL per station. Verified: 2 pairs settled (Singapore 30 **HIT**, Manila 32 miss vs 35) |
+| E | M3 cross-check thin-regime bug — flagged 07-02, still shipped (Manila n=4 → "regime 36") | no min-n guard | **FIXED** — recent-regime requires n≥8 settled days. (Honest note: on 07-02 the buggy signal was *closer than my read* — the guard suppresses noise, it does not make thin modes oracles) |
+| F | TWC + PoP were logged but NOT SURFACED in the verdict — violating the 07-02 lesson (don't bury divergent signals) | panel predated the ledgers | **FIXED** — cross-check now shows `twc-oracle` at face value + the PoP regime tag as context ("cold squall tail is LIVE" when convective). Verified on the 07-04 panel: `council 32 · market 32 · twc-oracle 32 · recent-regime 32 · PoP 55% → CONVECTIVE` |
+| G | Lock rows from the "15:00 job" sometimes land in the **14:00 bin** (the lever keys on the WU obs-hour, ~30-min lag) | honest binning vs wall-clock naming | **DOCUMENTED, no code change** — binning by obs-hour is the *correct* conditioning; it just spreads n across adjacent bins (mitigated by 3 runs/day). The "95% @ 15:00" claim certifies at the lever's hour 15, not the job's wall time |
+
+Meta-lesson: every defect was in the **plumbing between correct components** (cache↔fetch, settle↔truth-source, log↔visibility, panel↔ledger) — not in any model. End-to-end production runs ARE the test that finds these; unit suites (403→407 green throughout) caught none of them.
+
+---
+
 ## The scoring that exposed the mistakes (07-02, both bucket cities)
 
 | City | Settled | My day-ahead call | Result |

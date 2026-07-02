@@ -89,6 +89,17 @@ def _run(args: list[str]) -> tuple[int, str]:
         return 124, f"timeout after {TIMEOUT_S}s"
 
 
+def _tail_status(out: str) -> str:
+    """Last non-empty stdout line, PLUS any failure line — the 2026-07-02 dead-DNS window
+    proved last-line-only logging hides a fetch failure behind a healthy-looking status."""
+    lines = [l.strip() for l in (out or "").splitlines() if l.strip()]
+    if not lines:
+        return "(no output)"
+    bad = next((l for l in lines if "fail" in l.lower() or "error" in l.lower()), None)
+    last = lines[-1]
+    return f"{bad}  ||  {last}" if bad and bad != last else last
+
+
 def _snapshotted_today(city: str) -> bool:
     """True if a market snapshot for this city was already issued today — the
     idempotency key that keeps repeated daily fires from writing duplicates."""
@@ -143,8 +154,8 @@ def main() -> int:
         env = dict(os.environ, PYTHONPATH=str(ROOT))
         p = subprocess.run([PY, "tools/twc_forecast_logger.py"], cwd=ROOT, env=env,
                            capture_output=True, text=True, timeout=TIMEOUT_S)
-        last = next((l for l in reversed((p.stdout or "").splitlines()) if l.strip()), "")
-        _log(f"twc forecast log rc={p.returncode} | {last.strip()}")
+        last = _tail_status(p.stdout)
+        _log(f"twc forecast log rc={p.returncode} | {last}")
     except Exception as e:                                   # noqa: BLE001 — non-fatal by design
         _log(f"twc forecast log failed (non-fatal): {type(e).__name__}: {e}")
 
@@ -154,8 +165,8 @@ def main() -> int:
         env = dict(os.environ, PYTHONPATH=str(ROOT))
         p = subprocess.run([PY, "tools/singapore_pop_logger.py"], cwd=ROOT, env=env,
                            capture_output=True, text=True, timeout=TIMEOUT_S)
-        last = next((l for l in reversed((p.stdout or "").splitlines()) if l.strip()), "")
-        _log(f"singapore pop log rc={p.returncode} | {last.strip()}")
+        last = _tail_status(p.stdout)
+        _log(f"singapore pop log rc={p.returncode} | {last}")
     except Exception as e:                                   # noqa: BLE001 — non-fatal by design
         _log(f"singapore pop log failed (non-fatal): {type(e).__name__}: {e}")
 
@@ -166,8 +177,8 @@ def main() -> int:
         env = dict(os.environ, PYTHONPATH=str(ROOT))
         p = subprocess.run([PY, "tools/lock_logger.py"], cwd=ROOT, env=env,
                            capture_output=True, text=True, timeout=TIMEOUT_S)
-        last = next((l for l in reversed((p.stdout or "").splitlines()) if l.strip()), "")
-        _log(f"lock ledger rc={p.returncode} | {last.strip()}")
+        last = _tail_status(p.stdout)
+        _log(f"lock ledger rc={p.returncode} | {last}")
     except Exception as e:                                   # noqa: BLE001 — non-fatal by design
         _log(f"lock ledger failed (non-fatal): {type(e).__name__}: {e}")
 

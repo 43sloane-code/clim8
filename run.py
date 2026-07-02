@@ -752,25 +752,59 @@ def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
     (the backtested side). A consensus does NOT beat the council day-ahead — measured 44% vs
     44%, tied; the market's apparent 69% edge was a post-peak snapshot artifact — so this
     cross-checks the call, it does not override it. The intraday lock remains the resolver."""
+    from weather_council.market import _native_reading_int
     council = c["bucket"]
+    sub = "hong kong" in v.place.label().lower()
     signals = [("council", council)]
     if comparison is not None and getattr(comparison, "market_modal", None):
         mk = _bucket_int_from_label(comparison.market_modal)
         if mk is not None:
             signals.append(("market", mk))
+    # TWC — the settlement oracle's OWN forecast, logged point-in-time in tracked_forecasts.
+    # Surfaced at FACE VALUE (recommend-only, un-gated): on 07-02 it was the only point signal
+    # that hit while the council-cluster missed — dismissing divergent signals IS the mistake.
+    try:
+        from weather_council import storage as _st
+        conn = _st._connect()
+        row = conn.execute(
+            "SELECT fc_high FROM tracked_forecasts WHERE source='twc' AND place=? "
+            "AND target_date=? ORDER BY issued_at LIMIT 1",
+            (v.place.label(), str(v.target))).fetchone()
+        conn.close()
+        if row and row[0] is not None:
+            signals.append(("twc-oracle", _native_reading_int(float(row[0]), "C", sub)))
+    except Exception:
+        pass
     try:
         settled = [s for (_d, _srv, s, _h)
                    in live_bucket_scorecard(v.place.label()).get("recent", [])
                    if isinstance(s, int)]
     except Exception:
         settled = []
-    if len(settled) >= 3:
+    # M3 guard: a THIN scorecard's mode is noise, not a regime (Manila n=4 printed "36").
+    # Require n>=8 settled days before quoting a recent-regime signal at all.
+    if len(settled) >= 8:
         signals.append(("recent-regime", max(set(settled), key=settled.count)))  # mode
     if len(signals) < 2:
         return []                                  # nothing independent to check against
     others = [b for name, b in signals if name != "council"]
     L = ["      CROSS-CHECK (day-ahead — the council is not the only signal):",
          "        " + "  ·  ".join(f"{name} {b}°C" for name, b in signals)]
+    # PoP regime tag (Singapore, pre-registered split) — CONTEXT only, never a vote: a
+    # convective tag warns the cold squall tail is live (the 06-22/06-30 gross-miss mechanism).
+    try:
+        if "singapore" in v.place.label().lower():
+            _pl = Path(__file__).resolve().parent / "ledger" / "singapore_pop.jsonl"
+            for _line in _pl.read_text().splitlines():
+                _r = json.loads(_line)
+                if _r.get("target_date") == str(v.target):
+                    L.append(f"        PoP {_r['pop']:.0f}% -> {_r['regime'].upper()} regime "
+                             f"(point-in-time, pre-registered split — context only"
+                             + ("; cold squall tail is LIVE" if _r["regime"] == "convective" else "")
+                             + ")")
+                    break
+    except Exception:
+        pass
     if all(b == others[0] for b in others) and others[0] != council:
         lo, hi = min(council, others[0]), max(council, others[0])
         L.append(f"        → the independent signals agree on {others[0]}°C; the COUNCIL "
