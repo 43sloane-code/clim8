@@ -148,6 +148,17 @@ def main() -> int:
     except Exception as e:                                   # noqa: BLE001 — non-fatal by design
         _log(f"twc forecast log failed (non-fatal): {type(e).__name__}: {e}")
 
+    # 1c. Point-in-time PoP for the Singapore regime-split (pre-registered; recommend-only; the
+    # [D14]-deferred lever's leak-free clock). Non-fatal, isolated — never breaks core accrual.
+    try:
+        env = dict(os.environ, PYTHONPATH=str(ROOT))
+        p = subprocess.run([PY, "tools/singapore_pop_logger.py"], cwd=ROOT, env=env,
+                           capture_output=True, text=True, timeout=TIMEOUT_S)
+        last = next((l for l in reversed((p.stdout or "").splitlines()) if l.strip()), "")
+        _log(f"singapore pop log rc={p.returncode} | {last.strip()}")
+    except Exception as e:                                   # noqa: BLE001 — non-fatal by design
+        _log(f"singapore pop log failed (non-fatal): {type(e).__name__}: {e}")
+
     # 2. Settle whatever is now observable, against each verdict's anchor station.
     rc, out = _run(["--verify"])
     last = out.strip().splitlines()[-1] if out.strip() else "(nothing ready)"
