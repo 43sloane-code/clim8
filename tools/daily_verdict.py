@@ -44,6 +44,8 @@ def main() -> int:
         _run(["tools/intraday_ceiling_backtest.py", "--city", "singapore", "--hours", "13,14,15,16"]),
         "### 3. PATTERN RECOGNITION (live + historical Wunderground) ###",
         _run(["tools/wu_pattern.py", "--city", "singapore"]),
+        "### 4. LOCK CERTIFICATION LEDGER (point-in-time; pre-registered bar) ###",
+        _run(["tools/lock_logger.py"]),
         f"===== END ({dt.datetime.now(ZoneInfo('Asia/Singapore')):%Y-%m-%dT%H:%M:%S%z}) =====\n",
     ]
     with open(out, "w") as f:

@@ -159,6 +159,18 @@ def main() -> int:
     except Exception as e:                                   # noqa: BLE001 — non-fatal by design
         _log(f"singapore pop log failed (non-fatal): {type(e).__name__}: {e}")
 
+    # 1d. Lock certification ledger — logs the lever's current output point-in-time and settles
+    # past rows, accruing the LIVE coverage-vs-stated-conviction record for the flagship claim
+    # (pre-registered bar in ledger/preregistered/singapore_lock_certification.md). Non-fatal.
+    try:
+        env = dict(os.environ, PYTHONPATH=str(ROOT))
+        p = subprocess.run([PY, "tools/lock_logger.py"], cwd=ROOT, env=env,
+                           capture_output=True, text=True, timeout=TIMEOUT_S)
+        last = next((l for l in reversed((p.stdout or "").splitlines()) if l.strip()), "")
+        _log(f"lock ledger rc={p.returncode} | {last.strip()}")
+    except Exception as e:                                   # noqa: BLE001 — non-fatal by design
+        _log(f"lock ledger failed (non-fatal): {type(e).__name__}: {e}")
+
     # 2. Settle whatever is now observable, against each verdict's anchor station.
     rc, out = _run(["--verify"])
     last = out.strip().splitlines()[-1] if out.strip() else "(nothing ready)"
