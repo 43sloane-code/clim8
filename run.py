@@ -736,7 +736,8 @@ def _bucket_call(v: Verdict, ceiling=None) -> dict:
             "rule": rule, "used_intraday": use_intra,
             "n_rise": (getattr(ceiling, "n_rise", 0) if use_intra else 0),
             "day_ahead_bucket": da_bucket, "day_ahead_prob": da_pmf.get(da_bucket),
-            "span": span, "span_prob": span_prob}
+            "span": span, "span_prob": span_prob,
+            "pmf_top": sorted(pmf.items(), key=lambda t: -t[1])[:3] if pmf else []}
 
 
 def _bucket_int_from_label(label: str | None) -> int | None:
@@ -845,6 +846,14 @@ def _bucket_call_lines(v: Verdict, ceiling=None, comparison=None) -> list[str]:
         # single bucket arrives intraday, from the SAME prior-records engine, as the peak forms.
         L.append(f"    PRELIMINARY (day-ahead) : best guess {c['bucket']}°C  —  {c['tier']} "
                  f"{c['prob']*100:.0f}%   (a coin-flip near a boundary — NOT yet a pinpoint)")
+        # Print the DISTRIBUTION, so any "X-vs-Y" talk is pinned to the model's own ranking.
+        # 07-02 lesson: the pmf's #2 was 30°C (29%) and it SETTLED there, while the narrated
+        # "coin flip" named 32°C (10%) off a warm-regime story — never let the story pick the pair.
+        if c.get("pmf_top"):
+            top = "  ·  ".join(f"{b}°C {p*100:.0f}%" for b, p in c["pmf_top"])
+            rest = 1.0 - sum(p for _, p in c["pmf_top"][:2])
+            L.append(f"      day-ahead pmf : {top}   (top-2 leave {rest*100:.0f}% outside — "
+                     f"that mass settles some days; 07-02 did)")
         if span and len(span) > 1:
             verb = "confident band" if c["span_prob"] >= _SPAN_TARGET else "best range"
             L.append(f"      {verb} : {span[0]}–{span[-1]}°C ({c['span_prob']*100:.0f}%)  "
