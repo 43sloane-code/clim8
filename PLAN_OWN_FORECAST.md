@@ -46,7 +46,7 @@ higher-headroom, already-certified domain.
   (allowlisted archive API: cloud, shortwave, wind, RH) for the same window → one frozen
   training table `data/wsss_training.jsonl` (day × predictors × outcomes: Tmax, peak hour,
   late-climb flag). Deliverable is a FILE, not a model.
-- **P2 — Peak-timing / remaining-rise conditioning (the high-headroom target):** on 10y,
+- **P2 — CLOSED AS D15 (2026-07-04, same day):** the frozen gate ruled — 12:00 +5.9pt fold-stable but 13:00 regressed both folds and pooled +1.5 < +2.0. See dead ledger D15. Original design: on 10y,
   learn P(remaining rise | hour, day-state, morning predictors) — analog/quantile first, GBM
   only if the simple version clears. GATE (pre-registered before scoring): beats the current
   unconditional lever at 12:00–14:00 on held-out CRPS **and** exact-bucket hit, sign-stable on
