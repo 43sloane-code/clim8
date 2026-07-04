@@ -39,6 +39,7 @@ GATE_MIN_PAIRS = 40                      # minimum settled pairs before the disj
 _STATIONS = {
     ("Singapore", "Singapore"): ("WSSS", "Changi", 1.3502, 103.994, "Asia/Singapore"),
     ("Manila", "Philippines"): ("RPLL", "Ninoy Aquino Intl", 14.5086, 121.0198, "Asia/Manila"),
+    ("London", "United Kingdom"): ("EGLC", "London City", 51.5053, 0.0553, "Europe/London"),
 }
 
 

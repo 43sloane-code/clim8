@@ -45,3 +45,4 @@ reports/truth_config.json
 data/wsss_hourly.jsonl
 data/wsss_hourly_iem.jsonl
 data/wsss_training.jsonl
+data/eglc_hourly_iem.jsonl

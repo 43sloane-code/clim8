@@ -56,9 +56,12 @@ LOG = LOGS / "accumulate.log"
 STATUS = ROOT / "reports" / "c7_status.txt"
 LOCK = LOGS / ".accumulate.lock"
 
-# place.label() renders as "Manila, Philippines" / "Singapore, Singapore", so a
-# LIKE 'City%' prefix matches the stored rows without hard-coding the suffix.
-CITIES = ["Manila", "Singapore"]
+# place.label() renders as "Manila, Philippines" / "Singapore, Singapore" /
+# "London, United Kingdom", so a LIKE 'City%' prefix matches the stored rows
+# without hard-coding the suffix. London anchors on EGLC via PINNED_ANCHOR_ICAO and
+# settles on the IEM-EGLC record (its own path — deliberately NOT the WU-oracle
+# _WU_TRUTH_STATIONS/_WU_SETTLE_TZ registries, which stay Manila+Singapore only).
+CITIES = ["Manila", "Singapore", "London"]
 LEAD = 1                                   # day-ahead: the fair edge test
 TIMEOUT_S = 600                            # generous per-subprocess cap
 
