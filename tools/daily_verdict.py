@@ -37,8 +37,8 @@ def main() -> int:
                        f"verdict-singapore-{now:%Y-%m-%d-%H%M}sgt.txt")
     sections = [
         f"===== SINGAPORE FULL-STACK VERDICT — {now:%Y-%m-%d %H:%M} SGT =====\n",
-        "### 1. COUNCIL VERDICT (8 NWP + 92-member ensemble, Bayesian bias + "
-        "Monte-Carlo bucket pmf, live intraday lever, market compare, live scorecard) ###",
+        "### 1. COUNCIL VERDICT (8 NWP + 92-member ensemble, gated bias correction + "
+        "empirical residual-cloud bucket pmf, live intraday lever, market compare, live scorecard) ###",
         _run(["run.py", "Singapore", "--lead", "0", "--market", "--intraday"]),
         "### 2. INTRADAY VALIDATION (WU-native ceiling lever gate) ###",
         _run(["tools/intraday_ceiling_backtest.py", "--city", "singapore", "--hours", "13,14,15,16"]),
