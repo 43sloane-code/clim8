@@ -113,6 +113,33 @@ def _ledger_step(label: str, script: str) -> None:
         _log(f"{label} failed (non-fatal): {type(e).__name__}: {e}")
 
 
+def _snapshot_db() -> None:
+    """Rolling gzip snapshot of verdicts.db into TRACKED backups/verdicts.db.gz. The DB itself
+    is gitignored (binary, churns daily), so without this a disk failure erases every scorecard,
+    snapshot and TWC pair. The sqlite backup API gives a consistent copy even mid-write; gzip
+    mtime=0 keeps the file byte-stable when content is unchanged; every git push then carries
+    the latest snapshot off-machine. Failure is logged, never fatal."""
+    try:
+        import gzip
+        import tempfile
+        dst = ROOT / "backups"
+        dst.mkdir(exist_ok=True)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tf:
+            tmp = tf.name
+        src_c, dst_c = sqlite3.connect(DB), sqlite3.connect(tmp)
+        with dst_c:
+            src_c.backup(dst_c)
+        src_c.close(); dst_c.close()
+        with open(tmp, "rb") as f, open(dst / "verdicts.db.gz", "wb") as out:
+            with gzip.GzipFile(fileobj=out, mode="wb", mtime=0) as g:
+                g.write(f.read())
+        os.unlink(tmp)
+        _log(f"db snapshot -> backups/verdicts.db.gz "
+             f"({(dst / 'verdicts.db.gz').stat().st_size // 1024}KB)")
+    except Exception as e:                                   # noqa: BLE001 — non-fatal by design
+        _log(f"db snapshot failed (non-fatal): {type(e).__name__}: {e}")
+
+
 def _snapshotted_today(city: str) -> bool:
     """True if a market snapshot for this city was already issued today — the
     idempotency key that keeps repeated daily fires from writing duplicates."""
@@ -174,6 +201,12 @@ def main() -> int:
 
     rc, edge_out = _run(["--edge"])
     _log(f"--edge rc={rc}")
+
+    # 2b. TRUE-settlement audit: persist the contract's OWN resolved bucket (pm_resolved_label,
+    # straight from Gamma) and alarm if our anchor-proxy truth ever diverges from what actually
+    # paid — the market's answer must accrue DAILY, not only when someone runs the tool by hand.
+    _ledger_step("settlement audit", "tools/settlement_audit.py")
+    _snapshot_db()
 
     # 3. Refresh the at-a-glance C7 status file.
     try:
