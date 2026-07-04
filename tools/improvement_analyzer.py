@@ -132,7 +132,6 @@ def main() -> int:
     import sys
     sys.path.insert(0, os.path.abspath(args.repo))
     from weather_council import storage
-    from weather_council.edge import score_snapshots, report_lines
 
     print("IMPROVEMENT ANALYZER — system status + gated next-steps")
     print("=" * 66)

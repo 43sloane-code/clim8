@@ -33,7 +33,7 @@ from weather_council.council import (Council, Verdict, applied_bias_correction,
                                      regime_consensus)
 from weather_council.edge import report_lines as edge_report_lines, score_snapshots
 from weather_council.convergence import report_lines as convergence_report_lines
-from weather_council.market import MarketData
+from weather_council.market import MarketData, _native_reading_int
 from weather_council.security import RateLimitError, SecurityError
 from weather_council.sources import Sources, place_today
 from weather_council.tc_gate import tc_halt
@@ -167,7 +167,6 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
     # can differ from the IEM whole-°C METAR at a boundary (e.g. true 30.4°C -> IEM
     # 30°C but WU 87°F -> 31°C). So WU is the ANCHOR here; IEM stays the cross-ref.
     # Bounded to the target day + the last few settled days to keep the fetch light.
-    from weather_council.market import _native_reading_int as _nri
     wu_days: list[dict] = []
     wu_agree = wu_total = 0
     today = place_today(place)
@@ -181,8 +180,8 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
             w = None
         if not w:
             continue
-        wu_b = _nri(w["max_c"], "C", False)          # airport cities settle round-half-up
-        iem_b = _nri(daily[d][0], "C", False) if d in daily else None
+        wu_b = _native_reading_int(w["max_c"], "C", False)          # airport cities settle round-half-up
+        iem_b = _native_reading_int(daily[d][0], "C", False) if d in daily else None
         if iem_b is not None:
             wu_total += 1
             wu_agree += 1 if iem_b == wu_b else 0
@@ -689,7 +688,6 @@ def _bucket_call(v: Verdict, ceiling=None) -> dict:
     a coin-flip while a tight range is genuinely confident. Uses the intraday pmf when
     it is sharpened and confident (same-day, post-peak — London collapses to a single
     bucket at HIGH), else the day-ahead residual-cloud pmf."""
-    from weather_council.market import _native_reading_int
     sub = "hong kong" in v.place.label().lower()
     rule = "floor / 0.1°C" if sub else "round-half-up / whole °C"
     resid = (getattr(v.validation, "residuals_high", None) if v.validation else None) or []
@@ -753,7 +751,6 @@ def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
     (the backtested side). A consensus does NOT beat the council day-ahead — measured 44% vs
     44%, tied; the market's apparent 69% edge was a post-peak snapshot artifact — so this
     cross-checks the call, it does not override it. The intraday lock remains the resolver."""
-    from weather_council.market import _native_reading_int
     council = c["bucket"]
     sub = "hong kong" in v.place.label().lower()
     signals = [("council", council)]
@@ -815,8 +812,8 @@ def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
         L.append(f"        → market + regime agree with the council ({council}°C) — "
                  f"cross-validated; higher confidence in the band")
     else:
-        L.append(f"        → the signals split — a genuine coin-flip; neither side has a "
-                 f"day-ahead edge (σ-ceiling), the intraday lock decides")
+        L.append("        → the signals split — a genuine coin-flip; neither side has a "
+                 "day-ahead edge (σ-ceiling), the intraday lock decides")
     return L
 
 
@@ -839,14 +836,13 @@ def _bucket_call_lines(v: Verdict, ceiling=None, comparison=None) -> list[str]:
         # (18.6% at 14:00): a later reading can still RAISE it (07-04: 91°F landed at 16:00,
         # 32→33). Never present an afternoon read as final; the settle-grade read is ~18:00.
         if ceiling is not None and getattr(ceiling, "running_max_c", None) is not None:
-            from weather_council.market import _native_reading_int as _nri
-            banked = _nri(ceiling.running_max_c, "C",
-                          "hong kong" in v.place.label().lower())
+            banked = _native_reading_int(ceiling.running_max_c, "C",
+                                         "hong kong" in v.place.label().lower())
             rise_p = max(0.0, 1.0 - (c["prob"] or 0.0))
             L.append(f"      banked ≥ {banked}°C (mechanical floor) — NOT FINAL: ~{rise_p*100:.0f}% "
                      f"chance a later reading still raises the bucket; settle-grade after ~18:00")
         if span and len(span) == 1:
-            L.append(f"      single bucket is confident now — σ collapsed at/after the peak")
+            L.append("      single bucket is confident now — σ collapsed at/after the peak")
         elif span:
             L.append(f"      actionable range {span[0]}–{span[-1]}°C ({c['span_prob']*100:.0f}%)")
         if c["day_ahead_bucket"] is not None and c["day_ahead_bucket"] != c["bucket"]:
@@ -1570,7 +1566,6 @@ def to_json(
 def _intraday_verdict_bucket(f, v: Verdict) -> int | None:
     """The whole-degree bucket the verdict's own high settles into, under the
     SAME quantizer the intraday floor uses — so the two are directly comparable."""
-    from weather_council.market import _native_reading_int
     if v.high is None:
         return None
     return _native_reading_int(v.high, "C", f.sub_degree)

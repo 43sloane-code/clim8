@@ -20,13 +20,13 @@ held-out exact-bucket hit climbs 16% (09:00) → 30% (12:00) → 89% (15:00) →
 (18:00), vs ~56% day-ahead and 2.5% climatology, sign-stable on disjoint folds
 (reproduce with tools/intraday_ceiling_backtest.py).
 
-Applicability. Only the LONDON market settles on a station with an hourly archive
-(London City Airport EGLC via the IEM ASOS METAR archive), so only London can
-learn and be back-validated here. Hong Kong settles on the HKO Observatory, which
-publishes a daily maximum only — there is no settlement-grade hourly record to
-learn or validate the rise from — so HK ABSTAINS (kind="unavailable"). This is
-READ-ONLY and TODAY-only: it never moves the day-ahead verdict; it adds a
-high-conviction same-day refinement once enough of the day has elapsed.
+Applicability. London (EGLC, IEM hourly), Manila (RPLL, IEM hourly) and Singapore
+(WSSS — WU-NATIVE: running max, rises and settlement all read the market's own
+Wunderground feed, plus the v3 live-register floor consult on live runs) each have
+a settlement-grade hourly record. Hong Kong settles on the HKO daily maximum only
+(no hourly record) so HK ABSTAINS (kind="unavailable"). READ-ONLY and TODAY-only:
+never moves the day-ahead verdict; every live read is logged to the certification
+ledger, and a pre-sunset read is a banked FLOOR, never "final".
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ import datetime as dt
 from dataclasses import dataclass, field
 
 from .market import _native_reading_int
-from .sources import Place, Sources, place_today
+from .sources import Place, Sources, _fuse_live_floor, place_today
 
 # A rise distribution needs enough strictly-earlier days before its sharpened pmf
 # is trustworthy; below this we abstain rather than quote a tiny-sample pmf.
@@ -238,7 +238,6 @@ def intraday_ceiling(place: Place, target: dt.date, *,
     live_note = None
     if use_wu and now_hour is None:              # live runs only — replays/backtests stay v1
         try:
-            from .sources import _fuse_live_floor
             live = sources.wunderground_current_v3(icao)
             if live is not None:
                 live_cur, live_max24 = live["cur_f"], live["max24_f"]

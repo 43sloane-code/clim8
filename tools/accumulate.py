@@ -100,6 +100,19 @@ def _tail_status(out: str) -> str:
     return f"{bad}  ||  {last}" if bad and bad != last else last
 
 
+def _ledger_step(label: str, script: str) -> None:
+    """Run one point-in-time accrual ledger tool, failure-isolated: a ledger hiccup must never
+    break the core loop, and its failure must be VISIBLE (_tail_status), never last-line-hidden
+    (the 2026-07-02 dead-DNS lesson)."""
+    try:
+        env = dict(os.environ, PYTHONPATH=str(ROOT))
+        p = subprocess.run([PY, script], cwd=ROOT, env=env,
+                           capture_output=True, text=True, timeout=TIMEOUT_S)
+        _log(f"{label} rc={p.returncode} | {_tail_status(p.stdout)}")
+    except Exception as e:                                   # noqa: BLE001 — non-fatal by design
+        _log(f"{label} failed (non-fatal): {type(e).__name__}: {e}")
+
+
 def _snapshotted_today(city: str) -> bool:
     """True if a market snapshot for this city was already issued today — the
     idempotency key that keeps repeated daily fires from writing duplicates."""
@@ -147,40 +160,12 @@ def main() -> int:
             )
             _log(f"{city}: no snapshot — {note}")
 
-    # 1b. Forward-log TWC's OWN day-ahead forecast (the candidate 9th council member earning a
-    # backtestable record; recommend-only, never feeds the blend). Non-fatal — a TWC hiccup must
-    # never break the core accrual loop, so it runs isolated and its failure is only logged.
-    try:
-        env = dict(os.environ, PYTHONPATH=str(ROOT))
-        p = subprocess.run([PY, "tools/twc_forecast_logger.py"], cwd=ROOT, env=env,
-                           capture_output=True, text=True, timeout=TIMEOUT_S)
-        last = _tail_status(p.stdout)
-        _log(f"twc forecast log rc={p.returncode} | {last}")
-    except Exception as e:                                   # noqa: BLE001 — non-fatal by design
-        _log(f"twc forecast log failed (non-fatal): {type(e).__name__}: {e}")
-
-    # 1c. Point-in-time PoP for the Singapore regime-split (pre-registered; recommend-only; the
-    # [D14]-deferred lever's leak-free clock). Non-fatal, isolated — never breaks core accrual.
-    try:
-        env = dict(os.environ, PYTHONPATH=str(ROOT))
-        p = subprocess.run([PY, "tools/singapore_pop_logger.py"], cwd=ROOT, env=env,
-                           capture_output=True, text=True, timeout=TIMEOUT_S)
-        last = _tail_status(p.stdout)
-        _log(f"singapore pop log rc={p.returncode} | {last}")
-    except Exception as e:                                   # noqa: BLE001 — non-fatal by design
-        _log(f"singapore pop log failed (non-fatal): {type(e).__name__}: {e}")
-
-    # 1d. Lock certification ledger — logs the lever's current output point-in-time and settles
-    # past rows, accruing the LIVE coverage-vs-stated-conviction record for the flagship claim
-    # (pre-registered bar in ledger/preregistered/singapore_lock_certification.md). Non-fatal.
-    try:
-        env = dict(os.environ, PYTHONPATH=str(ROOT))
-        p = subprocess.run([PY, "tools/lock_logger.py"], cwd=ROOT, env=env,
-                           capture_output=True, text=True, timeout=TIMEOUT_S)
-        last = _tail_status(p.stdout)
-        _log(f"lock ledger rc={p.returncode} | {last}")
-    except Exception as e:                                   # noqa: BLE001 — non-fatal by design
-        _log(f"lock ledger failed (non-fatal): {type(e).__name__}: {e}")
+    # 1b-1d. Point-in-time accrual ledgers (all recommend-only, each failure-isolated):
+    # TWC 9th-member candidate pairs, the Singapore PoP regime tag, and the lock
+    # certification rows. Idempotent per day/hour — also run by daily_verdict for redundancy.
+    _ledger_step("twc forecast log", "tools/twc_forecast_logger.py")
+    _ledger_step("singapore pop log", "tools/singapore_pop_logger.py")
+    _ledger_step("lock ledger", "tools/lock_logger.py")
 
     # 2. Settle whatever is now observable, against each verdict's anchor station.
     rc, out = _run(["--verify"])

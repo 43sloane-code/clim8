@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import math
 import sqlite3
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -76,7 +77,6 @@ def gather(now_sgt: _dt.datetime | None = None) -> dict:
             "SELECT fc_high, actual_high FROM tracked_forecasts "
             "WHERE source='twc' AND actual_high IS NOT NULL").fetchall()
         con.close()
-        import math
         hits = sum(1 for f, a in twc                     # settlement rule: round-half-up whole C
                    if math.floor(f + 0.5) == math.floor(a + 0.5))
         state["twc"] = {"n": len(twc), "hits": hits}
@@ -124,7 +124,6 @@ def brief(state: dict) -> list[str]:
                  f"hit {c['hit_rate']:.0%} [{s}] -> {cite}")
     t = lk.get("today")
     if t is not None:
-        floor_b = t.get("modal_bucket") if t.get("running_max_c") is None else None
         L.append(f"  TODAY'S LOCK ROW: hour {int(t['hour']):02d}, modal {t['modal_bucket']} @ "
                  f"{(t['modal_prob'] or 0)*100:.0f}% — "
                  + ("NOT FINAL (pre-sunset: only the running-max FLOOR is observation-grade; "
@@ -182,11 +181,12 @@ def directives(state: dict) -> list[str]:
              "defect stays recorded in FINDINGS/HANDOFF, unworked.)")
     rank += 1
     twc = state["twc"]
-    twc_eta = max(0, (TWC_GATE - twc["n"])) // 2 or 1          # ~2 pairs/day (both cities)
+    twc_eta = ("READY for the gate" if twc["n"] >= TWC_GATE
+               else f"~{max(1, (TWC_GATE - twc['n'] + 1) // 2)}d at 2 pairs/day")
     lock15 = state["lock"]["cov"].get(15, {}).get("n", 0)
     L.append(f"  {rank}. CLOCKS (time-bound, no action accelerates them except not missing "
              f"days): lock 15:00 bin {lock15}/{N_FLOOR}; TWC {twc['n']}/{TWC_GATE} "
-             f"(~{twc_eta}d at 2 pairs/day); PoP {state['pop']['dry']}/{POP_GATE_DRY} dry days "
+             f"({twc_eta}); PoP {state['pop']['dry']}/{POP_GATE_DRY} dry days "
              f"(rate-limited by the weather itself). Redundant logging already guards them.")
     L.append("  X. Spend NOTHING on: day-ahead point/conditioning levers (0/14, physics), "
              "consensus overrides (day-ahead market ties the council 44%=44%), retro-computed "
