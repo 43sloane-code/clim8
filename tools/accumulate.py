@@ -195,6 +195,7 @@ def main() -> int:
     # certification rows. Idempotent per day/hour — also run by daily_verdict for redundancy.
     _ledger_step("twc forecast log", "tools/twc_forecast_logger.py")
     _ledger_step("singapore pop log", "tools/singapore_pop_logger.py")
+    _ledger_step("p2b 12:00 forward", "tools/p2b_1200_logger.py")
     _ledger_step("lock ledger", "tools/lock_logger.py")
 
     # 1e. Watchdog (Duties 1-3). Built 06-28, discovered UNSCHEDULED in the 07-04
