@@ -93,6 +93,32 @@ def gather(now_sgt: _dt.datetime | None = None) -> dict:
         pass
     state["pop"] = {"dry": dry, "convective": conv}
 
+    live = {}
+    try:
+        acc = (ROOT / "logs" / "accumulate.log").read_text().strip().splitlines()
+        live["accumulate"] = next((l[1:20] for l in reversed(acc) if "accumulate done" in l), None)
+        live["watchdog"] = next((l[1:20] for l in reversed(acc) if "watchdog rc=" in l), None)
+    except OSError:
+        live["accumulate"] = live["watchdog"] = None
+    try:
+        rows = load_rows()
+        live["lock_ledger"] = max((r["issued_ts"][:16] for r in rows), default=None)
+    except Exception:
+        live["lock_ledger"] = None
+    try:
+        pop_lines = (ROOT / "ledger" / "singapore_pop.jsonl").read_text().strip().splitlines()
+        live["pop_ledger"] = json.loads(pop_lines[-1])["issued_ts"][:16] if pop_lines else None
+    except (OSError, ValueError):
+        live["pop_ledger"] = None
+    try:
+        con = sqlite3.connect(ROOT / "verdicts.db")
+        r = con.execute("SELECT max(issued_at) FROM tracked_forecasts WHERE source='twc'").fetchone()
+        con.close()
+        live["twc_ledger"] = r[0][:16] if r and r[0] else None
+    except Exception:
+        live["twc_ledger"] = None
+    state["liveness"] = live
+
     try:
         dead = [json.loads(l)["id"] for l in
                 (ROOT / "ledger" / "dead_candidates.jsonl").read_text().splitlines() if l.strip()]
@@ -147,6 +173,16 @@ def brief(state: dict) -> list[str]:
              f"the tag is context, never a band-mover.")
     L.append(f"  DEAD LEDGER: {len(state['dead'])} closed candidates "
              f"({state['dead'][-1] if state['dead'] else '-'} latest) — do not relitigate.")
+    lv = state.get("liveness") or {}
+    stale = [k for k, v in lv.items() if v is None]
+    L.append("  AUTONOMY LIVENESS (a guard that never runs guards nothing — 07-04 lesson: the "
+             "watchdog sat unscheduled for 6 days):")
+    for k in ("accumulate", "watchdog", "lock_ledger", "twc_ledger", "pop_ledger"):
+        L.append(f"    {k:12} last activity: {lv.get(k) or 'NEVER / NOT FOUND'}"
+                 + ("   <- DORMANT — rewire or explain TODAY" if lv.get(k) is None else ""))
+    if stale:
+        L.append(f"    !! {len(stale)} component(s) show no heartbeat — dormancy is a defect, "
+                 f"not a default.")
     L.append("  VOCABULARY GUARD: 'banked/floor/guaranteed' = running-max ratchet ONLY; "
              "'final' = post-sunset ONLY; percentages = the certification table ONLY "
              "(else say 'backtest, uncertified'); anything else is narration, not measurement.")
@@ -230,8 +266,15 @@ def _selftest() -> int:
     assert "Spend NOTHING on" in d and "0/14" in d
     full = dict(base); full["lock"] = dict(base["lock"], recent_hours={h: 2 for h in (12,13,14,15,16,18)})
     assert "UNINSTRUMENTED" not in "\n".join(directives(full))
+    lv_state = dict(base)
+    lv_state["liveness"] = {"accumulate": "2026-07-04T10:15", "watchdog": None,
+                            "lock_ledger": "2026-07-04T15:0", "twc_ledger": None,
+                            "pop_ledger": "2026-07-03T00:44"}
+    lout = "\n".join(brief(lv_state))
+    assert "AUTONOMY LIVENESS" in lout and lout.count("DORMANT") == 2
+    assert "2 component(s) show no heartbeat" in lout
     print("eval_harness selftest PASS (uncertified label, pre/post-sunset vocab, citable "
-          "sentences, certified->measured, no loose certainty words, directives: gaps/"
+          "sentences, certified->measured, no loose certainty words, liveness dormancy flags, directives: gaps/"
           "anti-directives/defect ranked)")
     return 0
 
