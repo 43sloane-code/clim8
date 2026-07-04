@@ -49,10 +49,14 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--years", type=int, default=3)
     ap.add_argument("--icao", default="WSSS")
+    ap.add_argument("--source", choices=("wu", "iem"), default="wu",
+                    help="wu = settlement grain (whole-degF); iem = training grain (degC METAR, "
+                         "global archive, decade depth)")
     args = ap.parse_args()
     icao = args.icao.upper()
     tz = _TZ[icao]
-    path = ROOT / "data" / f"{icao.lower()}_hourly.jsonl"
+    suffix = "_hourly.jsonl" if args.source == "wu" else "_hourly_iem.jsonl"
+    path = ROOT / "data" / f"{icao.lower()}{suffix}"
     data = load_dataset(path)
     src = Sources()
     end = _dt.date.today()
@@ -69,7 +73,10 @@ def main() -> int:
         missing = [d for d in span if d not in data]
         if missing:
             try:
-                obs = src.wunderground_hourly_observations(icao, cur, ce, tz)
+                if args.source == "wu":
+                    obs = src.wunderground_hourly_observations(icao, cur, ce, tz)
+                else:
+                    obs = src.fetch_metar_observations(icao, cur, ce, tz)
             except Exception as e:
                 print(f"  slice {cur}->{ce}: fetch failed ({type(e).__name__}) — kept going")
                 cur = ce
@@ -89,7 +96,8 @@ def main() -> int:
     save_dataset(path, data)
     if data:
         days = sorted(data)
-        print(f"DATASET: {len(days)} settlement-grain days  {days[0]} -> {days[-1]}  "
+        grain = "settlement-grain (WU whole-degF)" if args.source == "wu" else "training-grain (IEM degC)"
+        print(f"DATASET: {len(days)} {grain} days  {days[0]} -> {days[-1]}  "
               f"(+{fetched} new)  -> {path.relative_to(ROOT)}")
     return 0
 
