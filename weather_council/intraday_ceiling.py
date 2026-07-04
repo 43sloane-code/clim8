@@ -73,6 +73,10 @@ class IntradayCeiling:
     modal_prob: float | None = None
     source: str | None = None
     note: str | None = None
+    # Live-register evidence (v3 current feed; floor-raise-only — see sources._fuse_live_floor).
+    live_cur_f: float | None = None
+    live_max24_f: float | None = None
+    feed: str = "v1"
 
     @property
     def is_sharpened(self) -> bool:
@@ -223,6 +227,31 @@ def intraday_ceiling(place: Place, target: dt.date, *,
 
     hour = now_hour if now_hour is not None else max(hh for hh, _ in todays)
     running_max = _running_max(todays, hour)
+
+    # LIVE-REGISTER CONSULT (WU cities, floor-raise only): the v1 history rows lag ~30-45min
+    # and miss between-obs spikes; the oracle's own v3 current feed + 24h register is the
+    # freshest read of the SAME instrument. Fused through sources._fuse_live_floor (current
+    # always counts; the register only when it exceeds yesterday's max). 07-04: rows said 91°F
+    # while the register read 92 — this consult closes exactly that gap. Failure => no-op.
+    live_cur = live_max24 = None
+    feed = "v1"
+    live_note = None
+    if use_wu and now_hour is None:              # live runs only — replays/backtests stay v1
+        try:
+            from .sources import _fuse_live_floor
+            live = sources.wunderground_current_v3(icao)
+            if live is not None:
+                live_cur, live_max24 = live["cur_f"], live["max24_f"]
+                yday = (target - dt.timedelta(days=1))
+                yrow = sources.wunderground_daily_series(icao, yday, yday, tz).get(yday.isoformat())
+                fused, live_note = _fuse_live_floor(running_max, live_cur, live_max24,
+                                                    yrow[0] if yrow else None)
+                if fused is not None and (running_max is None or fused > running_max):
+                    running_max = fused
+                feed = "wu+live"
+        except Exception:
+            pass
+
     history = {d: o for d, o in by_date.items() if d < tgt_iso}
     rises = remaining_rise_samples(history, hour)
     if running_max is None or len(rises) < MIN_RISE_SAMPLES:
@@ -238,9 +267,11 @@ def intraday_ceiling(place: Place, target: dt.date, *,
         kind="sharpened", city=city, target=tgt_iso, sub_degree=sub_degree,
         hour=hour, running_max_c=running_max, n_rise=len(rises),
         pmf=tuple(pmf), modal_bucket=modal_b, modal_prob=modal_p,
+        live_cur_f=live_cur, live_max24_f=live_max24, feed=feed,
         source=(f"{station_name} {icao} "
                 + ("(live Wunderground hourly, whole-°F → settlement °C)" if use_wu
-                   else "(live IEM ASOS METAR, hourly)")))
+                   else "(live IEM ASOS METAR, hourly)")
+                + (f" + {live_note}" if live_note else "")))
 
 
 def _self_test() -> None:

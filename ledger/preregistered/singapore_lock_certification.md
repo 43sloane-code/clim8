@@ -46,3 +46,13 @@ it appears in this ledger's coverage table.
 INSTRUMENTATION LIVE — clock started 2026-07-03. Recommend-only; no served text changes until an
 hour reaches n ≥ 20. Related: [D14]/PoP pre-registrations (same freeze discipline),
 `verify_skill.py` (the coverage-vs-stated-conviction adjudicator this bar copies).
+
+## Documented feed breakpoint — 2026-07-04 (rows carry `feed`)
+From 2026-07-04 evening, LIVE lock rows fuse the oracle's v3 current-conditions read +
+24h register into the running max (floor-raise-only, attribution-gated vs yesterday's max —
+`sources._fuse_live_floor`). Replays/backtests (explicit `now_hour`) remain v1-history-only,
+so the backtest reference numbers are unchanged. Rows record `feed: "v1" | "wu+live"`; if the
+certification table is ever split by feed era, this is the boundary. The bar itself (n>=20,
+-10pp) is UNCHANGED. Companion guard: `lock_logger.settle_cross_check` warns when a settled
+bucket is lower than the day's banked register floor (the 92-vs-91 class) — warn-and-stamp,
+never silent rewrite.

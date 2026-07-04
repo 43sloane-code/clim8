@@ -50,6 +50,9 @@ METAR_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
 # apiKey is the wunderground.com site web key, carried in PARAMS (never the path).
 WU_HISTORY_URL = "https://api.weather.com/v1/location/{loc}/observations/historical.json"
 WU_API_KEY = "e1f10a1e78da46f5b10a1e78da96f525"
+# Settlement-station geocodes for the v3 current-conditions feed (same host + key).
+WU_GEO = {"WSSS": (1.3502, 103.994), "RPLL": (14.5086, 121.0198), "EGLC": (51.5053, 0.0553)}
+V3_CURRENT_URL = "https://api.weather.com/v3/wx/observations/current"
 WU_LOCATION = {"EGLC": "EGLC:9:GB", "RPLL": "RPLL:9:PH",
                "WSSS": "WSSS:9:SG"}  # ICAO -> Weather Company location id
 # Minimum hourly obs in a WU local day before its max/min are trustworthy as a
@@ -144,6 +147,33 @@ def _history_cache_read(key: str):
         return json.loads(raw), age
     except ValueError:
         return None, None
+
+
+def _fuse_live_floor(runmax_c, cur_f, max24_f, yesterday_max_c):
+    """FLOOR-RAISE-ONLY fusion of the settlement station's freshest evidence into the
+    running max. Returns (floor_c, note|None). Rules (the 07-04 lesson — 91°F posted ~45min
+    late and the 24h register read 92°F while the half-hourly rows topped at 91):
+      * the CURRENT reading always counts — it IS a station reading, just fresher;
+      * temperatureMax24Hour counts ONLY when it EXCEEDS yesterday's daily max — the 24h
+        window spans yesterday afternoon, so an un-attributed register value may be
+        yesterday's peak (conservative: unattributable => ignored);
+      * the fusion can only RAISE the floor, never lower it, and never invents readings.
+    Pure — KAT'd in tests/test_live_floor.py."""
+    floor_c = runmax_c if runmax_c is not None else None
+    note = None
+
+    def f2c(f):
+        return (f - 32.0) * 5.0 / 9.0
+
+    if isinstance(cur_f, (int, float)) and (floor_c is None or f2c(cur_f) > floor_c):
+        floor_c = f2c(cur_f)
+        note = f"live now {cur_f:.0f}°F"
+    if isinstance(max24_f, (int, float)) and yesterday_max_c is not None \
+            and f2c(max24_f) > yesterday_max_c + 1e-9 \
+            and (floor_c is None or f2c(max24_f) > floor_c):
+        floor_c = f2c(max24_f)
+        note = f"live 24h-register {max24_f:.0f}°F"
+    return floor_c, note
 
 
 def _obs_days_covered(rows) -> int:
@@ -960,6 +990,29 @@ class Sources:
         max_f = max(temps)
         return {"max_f": float(max_f), "max_c": (max_f - 32) * 5.0 / 9.0,
                 "n_obs": len(temps)}
+
+    def wunderground_current_v3(self, icao: str) -> dict | None:
+        """Freshest read of the settlement station from the oracle's v3 current-conditions
+        feed: {'cur_f','max24_f','valid_local'}. ~10-min latency vs ~30-45min for the v1
+        history rows, and max24_f is the station's own running 24h register — it sees
+        BETWEEN-obs spikes the half-hourly listing misses (07-04: register 92°F, rows 91).
+        Consumed ONLY through _fuse_live_floor (floor-raise-only). None on any failure."""
+        geo = WU_GEO.get((icao or "").upper())
+        if geo is None:
+            return None
+        try:
+            d = self.http.get_json(V3_CURRENT_URL,
+                                   {"geocode": f"{geo[0]},{geo[1]}", "units": "e",
+                                    "language": "en-US", "format": "json",
+                                    "apiKey": WU_API_KEY})
+        except Exception:
+            return None
+        t, m = d.get("temperature"), d.get("temperatureMax24Hour")
+        if not isinstance(t, (int, float)):
+            return None
+        return {"cur_f": float(t),
+                "max24_f": float(m) if isinstance(m, (int, float)) else None,
+                "valid_local": d.get("validTimeLocal")}
 
     def wunderground_daily_series(self, icao: str, start: dt.date, end: dt.date,
                                   timezone: str) -> DailySeries:

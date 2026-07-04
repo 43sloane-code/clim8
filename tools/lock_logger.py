@@ -117,6 +117,9 @@ def log_now(rows: list[dict]) -> str:
            "kind": c.kind, "running_max_c": c.running_max_c, "n_rise": c.n_rise,
            "modal_bucket": c.modal_bucket, "modal_prob": c.modal_prob,
            "pmf_top4": [list(t) for t in (c.pmf or ())[:4]] or None,
+           "live_cur_f": getattr(c, "live_cur_f", None),
+           "live_max24_f": getattr(c, "live_max24_f", None),
+           "feed": getattr(c, "feed", "v1"),
            "source": "live:intraday_ceiling"}
     if _key(row) in {_key(r) for r in rows}:
         return f"already logged (date {row['target_date']}, hour {hour}) — idempotent"
@@ -159,6 +162,30 @@ def fetch_settled(dates: list[str]) -> dict[str, int]:
             day = _dt.datetime.fromtimestamp(vt, tz=_dt.timezone.utc).astimezone(zone).date().isoformat()
             highs[day] = max(highs.get(day, -999.0), float(t))
     return {day: _bucket_f(f) for day, f in highs.items() if day in set(dates)}
+
+
+def settle_cross_check(rows: list[dict]) -> list[str]:
+    """PURE: the settlement TRUTH-SPINE guard. The settled bucket comes from max(half-hourly
+    obs) — but the day's logged rows carry the fused live-register floor (running_max_c), and
+    07-04 proved the register can exceed the listed rows (92°F vs 91). If any settled day's
+    banked floor implies a HIGHER bucket than its settled bucket, that settlement is suspect:
+    warn loudly and stamp `register_bucket` on the rows. Never silently rewrites a settlement."""
+    import math
+    warnings = []
+    by_day: dict[str, list[dict]] = {}
+    for r in rows:
+        if r.get("settled_bucket") is not None and r.get("running_max_c") is not None:
+            by_day.setdefault(r["target_date"], []).append(r)
+    for day, rs in sorted(by_day.items()):
+        reg = max(math.floor(r["running_max_c"] + 0.5) for r in rs)
+        settled = rs[0]["settled_bucket"]
+        if reg > settled:
+            for r in rs:
+                r["register_bucket"] = reg
+            warnings.append(f"SETTLE DIVERGENCE {day}: banked register floor implies {reg} "
+                            f"but half-hourly settle recorded {settled} — verify against the "
+                            f"WU daily-summary before trusting this settlement")
+    return warnings
 
 
 def coverage(rows: list[dict], hours=CERT_HOURS) -> dict[int, dict]:
@@ -256,6 +283,8 @@ def main() -> int:
     if unsettled:
         n = settle_rows(rows, fetch_settled(unsettled))
         print(f"  settled {n} row(s) against the WU/Changi record")
+    for w in settle_cross_check(rows):
+        print(f"  !! {w}")
     save_rows(rows)
     report(rows)
     return 0
