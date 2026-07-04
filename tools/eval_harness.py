@@ -173,10 +173,13 @@ def directives(state: dict) -> list[str]:
         if any(h in (12, 13) for h in dead_hours):
             L.append("       launchctl load ~/Library/LaunchAgents/com.weatherverdict.verdict-midday.plist    (13:15 SGT — fills 12/13)")
         rank += 1
-    L.append(f"  {rank}. Manila band under-dispersion — the ONE adjudicated open MODEL defect "
-             f"(coverage 64% vs ~85% stated, verify_skill 2026-07-02): a hot-tail SCALE fix, "
-             f"opened ONLY through the frozen-A/B harness + disjoint-fold gate. Yield: the "
-             f"gross-miss class (35-outside-band). Prerequisite not yet built: the frozen A/B.")
+    L.append(f"  {rank}. SINGAPORE MODEL: no open defect — band coverage 90% (calibrated, "
+             f"verify_skill), lock calibrated at its hour (replay 95.0% vs stated 94.1%, n=180). "
+             f"The one deferred Singapore lever is the pre-registered PoP regime split "
+             f"(weather-bound); its gate (frozen-A/B + disjoint folds) gets built WHEN the "
+             f"dry-day clock fills, not before.")
+    L.append("     (Manila: OUT OF SCOPE by user directive 2026-07-04 — its under-dispersion "
+             "defect stays recorded in FINDINGS/HANDOFF, unworked.)")
     rank += 1
     twc = state["twc"]
     twc_eta = max(0, (TWC_GATE - twc["n"])) // 2 or 1          # ~2 pairs/day (both cities)
@@ -223,7 +226,7 @@ def _selftest() -> int:
     d = "\n".join(directives(d_state))
     assert "UNINSTRUMENTED certification hours [12, 13, 18]" in d
     assert "verdict-midday.plist" in d and "verdict-evening.plist" in d
-    assert "Manila band under-dispersion" in d and "frozen-A/B" in d
+    assert "SINGAPORE MODEL: no open defect" in d and "OUT OF SCOPE" in d
     assert "Spend NOTHING on" in d and "0/14" in d
     full = dict(base); full["lock"] = dict(base["lock"], recent_hours={h: 2 for h in (12,13,14,15,16,18)})
     assert "UNINSTRUMENTED" not in "\n".join(directives(full))

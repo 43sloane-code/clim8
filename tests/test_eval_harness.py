@@ -54,7 +54,8 @@ class TestEvalHarness(unittest.TestCase):
         self.assertIn("UNINSTRUMENTED certification hours [12, 13, 18]", out)
         self.assertIn("verdict-midday.plist", out)
         self.assertIn("verdict-evening.plist", out)
-        self.assertIn("Manila band under-dispersion", out)      # the adjudicated defect ranks
+        self.assertIn("SINGAPORE MODEL: no open defect", out)   # scope: Singapore only
+        self.assertIn("OUT OF SCOPE", out)                      # Manila parked, recorded
         self.assertIn("Spend NOTHING on", out)                  # anti-directives always present
 
     def test_directives_quiet_when_fully_instrumented(self):
