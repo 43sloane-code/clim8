@@ -117,6 +117,8 @@ def log_now(rows: list[dict]) -> str:
            "kind": c.kind, "running_max_c": c.running_max_c, "n_rise": c.n_rise,
            "modal_bucket": c.modal_bucket, "modal_prob": c.modal_prob,
            "pmf_top4": [list(t) for t in (c.pmf or ())[:4]] or None,
+           "day_state": getattr(c, "day_state", None),
+           "state_late_risk": getattr(c, "state_late_risk", None),
            "live_cur_f": getattr(c, "live_cur_f", None),
            "live_max24_f": getattr(c, "live_max24_f", None),
            "feed": getattr(c, "feed", "v1"),

@@ -59,3 +59,20 @@ class TestSettleCrossCheck(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDayState(unittest.TestCase):
+    def test_holding_vs_declining_and_risk(self):
+        from weather_council.intraday_ceiling import _day_state, state_late_risk
+        holding = [(10, 30.0), (12, 32.2), (15, 32.2)]          # still AT the max at 15:00
+        declin = [(10, 30.0), (12, 32.2), (15, 30.6)]           # fallen >0.3C below the max
+        self.assertEqual(_day_state(holding, 15), "holding")
+        self.assertEqual(_day_state(declin, 15), "declining")
+        self.assertIsNone(_day_state([], 15))
+        # leak-free state-conditional rate: 25 holding days, 5 of which climbed a bucket late
+        hist = {}
+        for k in range(25):
+            rise = 1.0 if k < 5 else 0.0                        # 5/25 raise the bucket after 15
+            hist[f"d{k}"] = [(12, 32.2), (15, 32.2), (17, 32.2 + rise)]
+        self.assertAlmostEqual(state_late_risk(hist, 15, "holding", False), 0.2)
+        self.assertIsNone(state_late_risk(hist, 15, "declining", False))   # thin cell -> None

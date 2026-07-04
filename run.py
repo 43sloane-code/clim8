@@ -839,8 +839,19 @@ def _bucket_call_lines(v: Verdict, ceiling=None, comparison=None) -> list[str]:
             banked = _native_reading_int(ceiling.running_max_c, "C",
                                          "hong kong" in v.place.label().lower())
             rise_p = max(0.0, 1.0 - (c["prob"] or 0.0))
-            L.append(f"      banked ≥ {banked}°C (mechanical floor) — NOT FINAL: ~{rise_p*100:.0f}% "
-                     f"chance a later reading still raises the bucket; settle-grade after ~18:00")
+            st = getattr(ceiling, "day_state", None)
+            sr = getattr(ceiling, "state_late_risk", None)
+            if st is not None and sr is not None:
+                # state-conditional risk (probe 2026-07-04, fold-stable): a HOLDING day at 15:00
+                # raises ~13.5% of the time vs ~0.8% declining — say which day TODAY is.
+                L.append(f"      banked ≥ {banked}°C (floor) — NOT FINAL: day is {st.upper()} at "
+                         f"{int(ceiling.hour):02d}:00; historical raise-risk in this state "
+                         f"≈{sr*100:.0f}% (pmf tail {rise_p*100:.0f}%); "
+                         + ("a decline or the ~18:00 read resolves it"
+                            if st == "holding" else "settle-grade after ~18:00"))
+            else:
+                L.append(f"      banked ≥ {banked}°C (mechanical floor) — NOT FINAL: ~{rise_p*100:.0f}% "
+                         f"chance a later reading still raises the bucket; settle-grade after ~18:00")
         if span and len(span) == 1:
             L.append("      single bucket is confident now — σ collapsed at/after the peak")
         elif span:

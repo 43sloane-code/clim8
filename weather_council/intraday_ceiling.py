@@ -77,6 +77,11 @@ class IntradayCeiling:
     live_cur_f: float | None = None
     live_max24_f: float | None = None
     feed: str = "v1"
+    # Peak-formed state (probe 2026-07-04, fold-stable): a day still AT its max ("holding")
+    # carries ~13.5% bucket-raise risk after 15:00 vs ~0.8% once "declining" — the honest
+    # NOT-FINAL risk is state-conditional. Risk-LABELING only; never moves modal/pmf.
+    day_state: str | None = None
+    state_late_risk: float | None = None
 
     @property
     def is_sharpened(self) -> bool:
@@ -92,6 +97,32 @@ def _running_max(obs: list[tuple[int, float]], hour: int) -> float | None:
 def _final_max(obs: list[tuple[int, float]]) -> float | None:
     vals = [c for (_hh, c) in obs]
     return max(vals) if vals else None
+
+
+def _day_state(obs, hour, delta=0.3):
+    """PURE: has today's peak demonstrably formed by `hour`? "declining" once the latest
+    reading sits >delta below the running max, else "holding" (still at/near the max — the
+    peak may not have happened yet). None without data. delta=0.3C ~= within one deg-F tick."""
+    prior = [(hh, c) for hh, c in sorted(obs) if hh <= hour]
+    rm = _running_max(obs, hour)
+    if not prior or rm is None:
+        return None
+    return "holding" if prior[-1][1] >= rm - delta else "declining"
+
+
+def state_late_risk(history, hour, state, sub_degree, min_n=20):
+    """PURE, leak-free: over strictly-earlier days in `state` at `hour`, the empirical rate of
+    the SETTLED bucket ending above the running-max bucket — the state-conditional raise risk
+    behind the NOT-FINAL line. None when the state cell is thinner than min_n."""
+    sel = []
+    for obs in history.values():
+        if _day_state(obs, hour) != state:
+            continue
+        rm, fm = _running_max(obs, hour), _final_max(obs)
+        if rm is None or fm is None:
+            continue
+        sel.append(_native_reading_int(fm, "C", sub_degree) > _native_reading_int(rm, "C", sub_degree))
+    return (sum(sel) / len(sel)) if len(sel) >= min_n else None
 
 
 def remaining_rise_samples(history: dict[str, list[tuple[int, float]]],
@@ -227,6 +258,7 @@ def intraday_ceiling(place: Place, target: dt.date, *,
 
     hour = now_hour if now_hour is not None else max(hh for hh, _ in todays)
     running_max = _running_max(todays, hour)
+    day_state = _day_state(todays, hour)        # obs-only, BEFORE any register fusion
 
     # LIVE-REGISTER CONSULT (WU cities, floor-raise only): the v1 history rows lag ~30-45min
     # and miss between-obs spikes; the oracle's own v3 current feed + 24h register is the
@@ -262,10 +294,13 @@ def intraday_ceiling(place: Place, target: dt.date, *,
 
     pmf = sharpen_pmf(running_max, rises, sub_degree)
     modal_b, modal_p = pmf[0]
+    s_risk = (state_late_risk(history, hour, day_state, sub_degree)
+              if day_state is not None else None)
     return IntradayCeiling(
         kind="sharpened", city=city, target=tgt_iso, sub_degree=sub_degree,
         hour=hour, running_max_c=running_max, n_rise=len(rises),
         pmf=tuple(pmf), modal_bucket=modal_b, modal_prob=modal_p,
+        day_state=day_state, state_late_risk=s_risk,
         live_cur_f=live_cur, live_max24_f=live_max24, feed=feed,
         source=(f"{station_name} {icao} "
                 + ("(live Wunderground hourly, whole-°F → settlement °C)" if use_wu
