@@ -42,3 +42,4 @@ logs/
 ALL_CODE.txt
 reports/crossover_now.json
 reports/truth_config.json
+data/wsss_hourly.jsonl
