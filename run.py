@@ -834,6 +834,17 @@ def _bucket_call_lines(v: Verdict, ceiling=None, comparison=None) -> list[str]:
         # the whole engine: where today is now + how every earlier day rose from here to its peak.
         L.append(f"    ► INTRADAY LOCK   : {c['bucket']}°C  —  {c['tier']} {c['prob']*100:.0f}%")
         L.append(f"      grounded in: {c['source']}")
+        # BANKED vs FINAL — the 07-04 lesson. The lock is calibrated at its own hour (replay
+        # 95.0% vs stated 94.1%, n=180) but ~5.9% of days the bucket is NOT yet banked at 15:00
+        # (18.6% at 14:00): a later reading can still RAISE it (07-04: 91°F landed at 16:00,
+        # 32→33). Never present an afternoon read as final; the settle-grade read is ~18:00.
+        if ceiling is not None and getattr(ceiling, "running_max_c", None) is not None:
+            from weather_council.market import _native_reading_int as _nri
+            banked = _nri(ceiling.running_max_c, "C",
+                          "hong kong" in v.place.label().lower())
+            rise_p = max(0.0, 1.0 - (c["prob"] or 0.0))
+            L.append(f"      banked ≥ {banked}°C (mechanical floor) — NOT FINAL: ~{rise_p*100:.0f}% "
+                     f"chance a later reading still raises the bucket; settle-grade after ~18:00")
         if span and len(span) == 1:
             L.append(f"      single bucket is confident now — σ collapsed at/after the peak")
         elif span:
