@@ -110,6 +110,9 @@ def _selftest() -> int:
     assert tercile(50) == 0 and tercile(90) == 1 and tercile(99) == 2 and tercile(None) is None
     assert day_state([(10, 30.0), (12, 32.0)], 12) == "holding"
     assert day_state([(10, 32.0), (12, 31.0)], 12) == "declining"
+    # premature-day guard: obs reaching only 01:00 must NOT produce a row (the 07-05 bug)
+    early = [(0.3, 28.9), (1.0, 29.0)]
+    assert max(hh for hh, _ in early) < 11.5
     pmf = pmf_from_rises([0.0, 0.1, 0.2, 1.0], 31.1)            # 31.1/31.2/31.3 -> 31; 32.1 -> 32
     assert modal(pmf) == 31 and abs(sum(pmf.values()) - 1.0) < 1e-6 and pmf == {31: 0.75, 32: 0.25}
     rows = [{"date": "2026-07-01", "settled_bucket": None}]
@@ -176,8 +179,11 @@ def main() -> int:
                    "WSSS", t, t + dt.timedelta(days=1), "Asia/Singapore")
                if ts[:10] == today]
         pri = [(hh, c) for hh, c in obs if hh <= HOUR]
-        if not pri:
-            print(f"P2B: no WSSS obs by 12:00 SGT yet for {today} — row skipped this run")
+        # the row is only meaningful once the day has actually REACHED ~12:00 — logging at
+        # 01:00 with two night obs would record a midnight max as "runmax12" (caught live
+        # on the first accumulate run after midnight SGT, 07-05)
+        if not pri or max(hh for hh, _ in pri) < 11.5:
+            print(f"P2B: obs for {today} do not reach 12:00 SGT yet — row skipped this run")
         else:
             runmax = max(c for _, c in pri)
             st = day_state(obs, HOUR)
