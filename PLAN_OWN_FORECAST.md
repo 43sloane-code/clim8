@@ -53,14 +53,14 @@ higher-headroom, already-certified domain.
   BOTH chronological folds, post-peak hours not regressed; else **D15** and the unconditional
   lever stands. (D13 conditioned on max LEVEL and died; P2 conditions on state+predictors with
   10y depth — one attempt, then closed.)
-- **P3 — Day-ahead distributional model (modest expectations, stated):** GBM/quantile
+- **P3 — CLOSED AS D17 (2026-07-05):** Stage A CLEARED 8/8 (CRPS 0.719 vs climo 0.768 vs persist 0.851, fold-stable, 3,246 days — the first full-stage clear in program history); Stage B FAILED the frozen economic gate vs the served council (n=6 window, half-1 flip). Pre-committed: closed. D17 carves out a future forward-window Stage-B-only prereg (model frozen, n≥40). Original design: GBM/quantile
   regression with the Taillardat-style predictor set (ensemble spread, ERA5-derived indices,
   day-state climatology; TWC if its 40-pair gate passes) vs the served residual cloud. GATE:
   frozen-A/B (record/replay) + disjoint folds on CRPS + bucket-hit past the ~4pt noise floor.
   KILL CRITERIA: if the gain is under the noise floor on either fold — expected outcome per
   our own D01–D06 history — it closes, and the literature's percentages get a local footnote:
   "does not reproduce at n available on one station."
-- **P4 — Shadow member:** any survivor serves as `tracked_forecasts source='own'` (like TWC),
+- **P4 — NOT REACHED** (P3 died at Stage B; no survivor). Original design: any survivor serves as `tracked_forecasts source='own'` (like TWC),
   earning a live record; promotion only through the same 40-pair machinery. Never asserted.
 
 ## Verification debts (named, not hidden)
