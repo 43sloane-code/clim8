@@ -6,7 +6,7 @@ executing a shell script in the Desktop folder ("Operation not permitted", exit
 126), but python3 reading a .py from the same dir IS allowed — exactly how
 accumulate.py runs. So the launchd jobs invoke `python3 tools/daily_verdict.py`.
 
-Three sections per report: (1) council verdict (Bayesian/Monte-Carlo ensemble +
+Three sections per report: (1) council verdict (bias-corrected NWP blend + residual-cloud pmf +
 live intraday lever + market compare + live scorecard), (2) WU-native intraday-
 ceiling validation gate, (3) live+historical WU pattern. run.py targets the city's
 own civil day, so lead 0 is always Singapore-today regardless of host clock.
