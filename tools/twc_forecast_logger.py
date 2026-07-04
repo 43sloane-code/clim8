@@ -125,7 +125,21 @@ def main() -> int:
         hC, lC = _f_to_c(hF), (_f_to_c(lF) if lF is not None else None)
         place = Place(name=name, country=country, latitude=lat, longitude=lon, timezone=tz)
         ts = {"kind": "station", "station": {"icao": icao, "name": sname, "id": None}}
-        storage.log_tracked_forecast("twc", place, target, hC, lC, None, None, ts)
+        # Pair the row with the council's own forecast for the same target AT CAPTURE TIME
+        # (latest verdicts row), so the eventual 40-pair head-to-head is point-in-time
+        # matched instead of joined after the fact. Best-effort: None if no verdict yet.
+        c_high = c_low = None
+        try:
+            conn = storage._connect()
+            row = conn.execute(
+                "SELECT high, low FROM verdicts WHERE place=? AND target_date=? "
+                "ORDER BY issued_at DESC LIMIT 1", (place.label(), target)).fetchone()
+            conn.close()
+            if row:
+                c_high, c_low = row
+        except Exception:
+            pass
+        storage.log_tracked_forecast("twc", place, target, hC, lC, c_high, c_low, ts)
         print(f"  {name}: logged TWC lead-{args.lead} {target}  high {hF:.0f}°F={hC:.1f}°C "
               f"(bucket {_native_reading_int(hC, 'C', False)})")
     settled = storage.settle_tracked_forecasts(src)

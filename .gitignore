@@ -40,3 +40,5 @@ logs/
 
 # Full-source dump produced for mobile handoff (regenerable, not source)
 ALL_CODE.txt
+reports/crossover_now.json
+reports/truth_config.json

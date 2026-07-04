@@ -194,6 +194,28 @@ def main() -> int:
     _ledger_step("singapore pop log", "tools/singapore_pop_logger.py")
     _ledger_step("lock ledger", "tools/lock_logger.py")
 
+    # 1e. Watchdog (Duties 1-3). Built 06-28, discovered UNSCHEDULED in the 07-04
+    # re-evaluation — a guard that never runs guards nothing. It is a COMPARATOR: it needs a
+    # freshly emitted crossover (--ab-now) and the truth config handed to it, else every
+    # baseline entry reads "missing" and it fires a false RED (found live on first wiring).
+    try:
+        env = dict(os.environ, PYTHONPATH=str(ROOT))
+        subprocess.run([PY, "tools/intraday_ceiling_backtest.py", "--city", "singapore",
+                        "--hours", "13,14,15,16", "--emit-crossover",
+                        "reports/crossover_now.json"],
+                       cwd=ROOT, env=env, capture_output=True, text=True, timeout=TIMEOUT_S)
+        with open(ROOT / "reports" / "truth_config.json", "w") as f:
+            t = subprocess.run([PY, "tools/resolve_truth_sources.py"], cwd=ROOT, env=env,
+                               capture_output=True, text=True, timeout=TIMEOUT_S)
+            f.write(t.stdout.strip() or "[]")
+        p = subprocess.run([PY, "tools/watchdog_core.py", "--cities", "WSSS",
+                            "--ab-now", "reports/crossover_now.json",
+                            "--truth-config", "reports/truth_config.json"],
+                           cwd=ROOT, env=env, capture_output=True, text=True, timeout=TIMEOUT_S)
+        _log(f"watchdog rc={p.returncode} | {_tail_status(p.stdout)}")
+    except Exception as e:                                   # noqa: BLE001 — non-fatal by design
+        _log(f"watchdog failed (non-fatal): {type(e).__name__}: {e}")
+
     # 2. Settle whatever is now observable, against each verdict's anchor station.
     rc, out = _run(["--verify"])
     last = out.strip().splitlines()[-1] if out.strip() else "(nothing ready)"
