@@ -50,10 +50,14 @@ def gather(now_sgt: _dt.datetime | None = None) -> dict:
 
     rows = load_rows()
     cov = coverage(rows)
+    week_ago = (now.date() - _dt.timedelta(days=7)).isoformat()
+    recent_hours = {h: sum(1 for r in rows if int(r["hour"]) == h
+                           and r["target_date"] >= week_ago) for h in (12, 13, 14, 15, 16, 18)}
     state["lock"] = {"rows": len(rows),
                      "settled": sum(1 for r in rows if r.get("hit") is not None),
                      "cov": {h: dict(c) for h, c in cov.items()},
-                     "status": certify(cov)}
+                     "status": certify(cov),
+                     "recent_hours": recent_hours}
     today = now.date().isoformat()
     todays = [r for r in rows if r["target_date"] == today and r["kind"] == "sharpened"]
     state["lock"]["today"] = max(todays, key=lambda r: r["hour"]) if todays else None
@@ -150,6 +154,44 @@ def brief(state: dict) -> list[str]:
     return L
 
 
+def directives(state: dict) -> list[str]:
+    """NECESSARY NEXT — what actually buys accuracy, machine-ranked from the ledgers.
+    The honest brief says where we ARE; this says the shortest path forward. Ranking logic:
+    (1) uninstrumented measurement is free accuracy (you cannot certify or catch what you
+    never read); (2) the one ADJUDICATED model defect; (3) clocks that only time can fill;
+    (X) the proven dead ends, so effort is never spent there again."""
+    L = ["NECESSARY NEXT (machine-ranked: what buys accuracy — everything else is waiting)"]
+    rank = 1
+    rec = state["lock"].get("recent_hours", {})
+    dead_hours = sorted(h for h, n in rec.items() if n == 0)
+    if dead_hours:
+        L.append(f"  {rank}. UNINSTRUMENTED certification hours {dead_hours}: no scheduled read "
+                 f"feeds these bins, so their conviction can never be certified and their-tail "
+                 f"days (late climbs live in >16:00) go unwatched. Zero-cost fix — load:")
+        if any(h >= 17 for h in dead_hours):
+            L.append("       launchctl load ~/Library/LaunchAgents/com.weatherverdict.verdict-evening.plist   (18:15 SGT — settle-grade)")
+        if any(h in (12, 13) for h in dead_hours):
+            L.append("       launchctl load ~/Library/LaunchAgents/com.weatherverdict.verdict-midday.plist    (13:15 SGT — fills 12/13)")
+        rank += 1
+    L.append(f"  {rank}. Manila band under-dispersion — the ONE adjudicated open MODEL defect "
+             f"(coverage 64% vs ~85% stated, verify_skill 2026-07-02): a hot-tail SCALE fix, "
+             f"opened ONLY through the frozen-A/B harness + disjoint-fold gate. Yield: the "
+             f"gross-miss class (35-outside-band). Prerequisite not yet built: the frozen A/B.")
+    rank += 1
+    twc = state["twc"]
+    twc_eta = max(0, (TWC_GATE - twc["n"])) // 2 or 1          # ~2 pairs/day (both cities)
+    lock15 = state["lock"]["cov"].get(15, {}).get("n", 0)
+    L.append(f"  {rank}. CLOCKS (time-bound, no action accelerates them except not missing "
+             f"days): lock 15:00 bin {lock15}/{N_FLOOR}; TWC {twc['n']}/{TWC_GATE} "
+             f"(~{twc_eta}d at 2 pairs/day); PoP {state['pop']['dry']}/{POP_GATE_DRY} dry days "
+             f"(rate-limited by the weather itself). Redundant logging already guards them.")
+    L.append("  X. Spend NOTHING on: day-ahead point/conditioning levers (0/14, physics), "
+             "consensus overrides (day-ahead market ties the council 44%=44%), retro-computed "
+             "lock rows (feed-latency leak — 07-04's 91°F posted late; live-only rows), or "
+             "relitigating the dead ledger.")
+    return L
+
+
 # -------------------------------------------------------------- selftest ----
 
 def _selftest() -> int:
@@ -175,8 +217,19 @@ def _selftest() -> int:
                         cov={15: {"n": 25, "mean_stated": 0.95, "hit_rate": 0.92, "gap": -0.03}},
                         status={15: "CERTIFIED"})
     assert "measured 92% (n=25)" in "\n".join(brief(cert))  # certified -> measured number only
+    # directives: uninstrumented hours + anti-directives + adjudicated defect
+    d_state = dict(base)
+    d_state["lock"] = dict(base["lock"], recent_hours={12: 0, 13: 0, 14: 2, 15: 3, 16: 1, 18: 0})
+    d = "\n".join(directives(d_state))
+    assert "UNINSTRUMENTED certification hours [12, 13, 18]" in d
+    assert "verdict-midday.plist" in d and "verdict-evening.plist" in d
+    assert "Manila band under-dispersion" in d and "frozen-A/B" in d
+    assert "Spend NOTHING on" in d and "0/14" in d
+    full = dict(base); full["lock"] = dict(base["lock"], recent_hours={h: 2 for h in (12,13,14,15,16,18)})
+    assert "UNINSTRUMENTED" not in "\n".join(directives(full))
     print("eval_harness selftest PASS (uncertified label, pre/post-sunset vocab, citable "
-          "sentences, certified->measured, no loose certainty words)")
+          "sentences, certified->measured, no loose certainty words, directives: gaps/"
+          "anti-directives/defect ranked)")
     return 0
 
 
@@ -186,7 +239,10 @@ def main() -> int:
     args = ap.parse_args()
     if args.selftest:
         return _selftest()
-    print("\n".join(brief(gather())))
+    state = gather()
+    print("\n".join(brief(state)))
+    print()
+    print("\n".join(directives(state)))
     return 0
 
 

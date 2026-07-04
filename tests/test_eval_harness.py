@@ -5,7 +5,7 @@ is a post-sunset word, certified hours cite only the measured number, accruing c
 counts not conclusions, and the exact citable sentences are generated verbatim."""
 import unittest
 
-from tools.eval_harness import brief, _selftest
+from tools.eval_harness import brief, directives, _selftest
 
 
 def _state(**over):
@@ -46,6 +46,21 @@ class TestEvalHarness(unittest.TestCase):
         self.assertIn("2/40 settled pairs", out)         # TWC counted, not concluded
         self.assertIn("0/15 dry days", out)              # PoP counted, not concluded
         self.assertIn("do not relitigate", out)          # dead ledger stated
+
+    def test_directives_rank_instrumentation_gaps_first(self):
+        s = _state()
+        s["lock"] = dict(s["lock"], recent_hours={12: 0, 13: 0, 14: 2, 15: 3, 16: 1, 18: 0})
+        out = "\n".join(directives(s))
+        self.assertIn("UNINSTRUMENTED certification hours [12, 13, 18]", out)
+        self.assertIn("verdict-midday.plist", out)
+        self.assertIn("verdict-evening.plist", out)
+        self.assertIn("Manila band under-dispersion", out)      # the adjudicated defect ranks
+        self.assertIn("Spend NOTHING on", out)                  # anti-directives always present
+
+    def test_directives_quiet_when_fully_instrumented(self):
+        s = _state()
+        s["lock"] = dict(s["lock"], recent_hours={h: 2 for h in (12, 13, 14, 15, 16, 18)})
+        self.assertNotIn("UNINSTRUMENTED", "\n".join(directives(s)))
 
     def test_selftest_passes(self):
         self.assertEqual(_selftest(), 0)
