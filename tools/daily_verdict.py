@@ -49,6 +49,8 @@ def main() -> int:
         _run(["tools/lock_logger.py"]),
         _run(["tools/twc_forecast_logger.py"]),
         _run(["tools/singapore_pop_logger.py"]),
+        "### 5. SELF-EVALUATION (machine-generated brief — the agent relays this verbatim) ###",
+        _run(["tools/eval_harness.py"]),
         f"===== END ({dt.datetime.now(ZoneInfo('Asia/Singapore')):%Y-%m-%dT%H:%M:%S%z}) =====\n",
     ]
     with open(out, "w") as f:
