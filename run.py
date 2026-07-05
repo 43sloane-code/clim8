@@ -829,7 +829,20 @@ def _bucket_call_lines(v: Verdict, ceiling=None, comparison=None) -> list[str]:
         # LEAD with the intraday lock — the accurate, settlement-grounded prediction. It is
         # grounded in today's running max PLUS prior days' intraday records (n_rise), which is
         # the whole engine: where today is now + how every earlier day rose from here to its peak.
-        L.append(f"    ► INTRADAY LOCK   : {c['bucket']}°C  —  {c['tier']} {c['prob']*100:.0f}%")
+        # HONESTY CAP (user-caught 2026-07-05): the served lock % is the BLENDED / peak-formed
+        # rate. While the day is HOLDING the peak is not demonstrably in, and holding days still
+        # climb a bucket materially often — measured on 10y EGLC, July holding@16:00 settles the
+        # current bucket only ~63% (declining@16:00 95.6%). So never present a HIGH lock while
+        # holding: lead with the banked FLOOR, mark it PROVISIONAL, and defer the confidence claim
+        # to the declining state. Full state×season recalibration is gated:
+        # ledger/preregistered/lock_state_season_calibration.md
+        _st_hold = getattr(ceiling, "day_state", None) if ceiling is not None else None
+        if _st_hold == "holding":
+            L.append(f"    ► INTRADAY FLOOR  : {c['bucket']}°C banked — PROVISIONAL (peak NOT formed; "
+                     f"day HOLDING). The {c['prob']*100:.0f}% lock assumes the peak is in — it is not; "
+                     f"high-confidence is earned only once the day DECLINES.")
+        else:
+            L.append(f"    ► INTRADAY LOCK   : {c['bucket']}°C  —  {c['tier']} {c['prob']*100:.0f}%")
         L.append(f"      grounded in: {c['source']}")
         # BANKED vs FINAL — the 07-04 lesson. The lock is calibrated at its own hour (replay
         # 95.0% vs stated 94.1%, n=180) but ~5.9% of days the bucket is NOT yet banked at 15:00
