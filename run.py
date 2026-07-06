@@ -67,6 +67,14 @@ SETTLEMENT_REFERENCE: dict[str, dict[str, str]] = {
         "name": "Changi Airport",
         "url": "https://www.wunderground.com/history/daily/sg/singapore/WSSS",
     },
+    "san francisco": {
+        "icao": "KSFO",
+        "name": "San Francisco Intl",
+        # US station: WU displays °F and the SF high-temp market settles on the
+        # whole-°F record (KSFO obs are 100% integral in °F, 19% in °C). The
+        # settlement grain is detected from the raw obs, so this anchors correctly.
+        "url": "https://www.wunderground.com/history/daily/us/ca/san-francisco/KSFO",
+    },
 }
 
 # Cities anchored on a NON-airport settlement station, with a nearby airport shown
