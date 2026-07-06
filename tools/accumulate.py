@@ -212,7 +212,7 @@ def main() -> int:
             t = subprocess.run([PY, "tools/resolve_truth_sources.py"], cwd=ROOT, env=env,
                                capture_output=True, text=True, timeout=TIMEOUT_S)
             f.write(t.stdout.strip() or "[]")
-        p = subprocess.run([PY, "tools/watchdog_core.py", "--cities", "WSSS",
+        p = subprocess.run([PY, "tools/watchdog_core.py", "--cities", "RPLL,WSSS,EGLC",
                             "--ab-now", "reports/crossover_now.json",
                             "--truth-config", "reports/truth_config.json"],
                            cwd=ROOT, env=env, capture_output=True, text=True, timeout=TIMEOUT_S)

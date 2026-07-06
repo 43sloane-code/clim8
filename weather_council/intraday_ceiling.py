@@ -100,29 +100,46 @@ def _final_max(obs: list[tuple[int, float]]) -> float | None:
 
 
 def _day_state(obs, hour, delta=0.3):
-    """PURE: has today's peak demonstrably formed by `hour`? "declining" once the latest
-    reading sits >delta below the running max, else "holding" (still at/near the max — the
-    peak may not have happened yet). None without data. delta=0.3C ~= within one deg-F tick."""
+    """PURE: has today's peak demonstrably formed by `hour`? "declining" only once the
+    peak-passed signal PERSISTS — the last TWO readings both sit >delta below the running
+    max. A single-read decline is a FALSE peak-passed signal on 16-30% of July days (the
+    07-04 EGLC trap); requiring persistence thirds it for +30min median delay — CERTIFIED
+    2026-07-06 on the frozen gate (persistent_decline_lock.md: reliability 80.7->91.6 /
+    78.2->89.8 EGLC, 75.7->88.3 / 75.9->89.5 WSSS, all four half-cells PASS). "holding"
+    otherwise (still at/near the max — the peak may not have happened yet). None without
+    data. delta=0.3C ~= within one deg-F tick."""
     prior = [(hh, c) for hh, c in sorted(obs) if hh <= hour]
     rm = _running_max(obs, hour)
     if not prior or rm is None:
         return None
-    return "holding" if prior[-1][1] >= rm - delta else "declining"
+    below = [c < rm - delta for _, c in prior[-2:]]
+    return "declining" if len(below) == 2 and all(below) else "holding"
 
 
-def state_late_risk(history, hour, state, sub_degree, min_n=20):
+def state_late_risk(history, hour, state, sub_degree, min_n=20, month=None):
     """PURE, leak-free: over strictly-earlier days in `state` at `hour`, the empirical rate of
     the SETTLED bucket ending above the running-max bucket — the state-conditional raise risk
-    behind the NOT-FINAL line. None when the state cell is thinner than min_n."""
-    sel = []
-    for obs in history.values():
+    behind the NOT-FINAL line. With `month` given, conditions on the (state x meteorological
+    season) cell when it holds n>=30 prior days — CERTIFIED 2026-07-06 on the frozen gate
+    (lock_state_season_calibration.md: Brier beats the blended rate on BOTH halves BOTH
+    cities, +6.4..14.1%); thinner cells fall back to the state-only rate (n>=min_n), else
+    None. History keys are ISO dates; undated keys simply skip the season cell."""
+    sea = (month % 12) // 3 if month is not None else None
+    cell, st_only = [], []
+    for day, obs in history.items():
         if _day_state(obs, hour) != state:
             continue
         rm, fm = _running_max(obs, hour), _final_max(obs)
         if rm is None or fm is None:
             continue
-        sel.append(_native_reading_int(fm, "C", sub_degree) > _native_reading_int(rm, "C", sub_degree))
-    return (sum(sel) / len(sel)) if len(sel) >= min_n else None
+        up = _native_reading_int(fm, "C", sub_degree) > _native_reading_int(rm, "C", sub_degree)
+        st_only.append(up)
+        if (sea is not None and len(day) >= 7 and day[5:7].isdigit()
+                and (int(day[5:7]) % 12) // 3 == sea):
+            cell.append(up)
+    if sea is not None and len(cell) >= 30:
+        return sum(cell) / len(cell)
+    return (sum(st_only) / len(st_only)) if len(st_only) >= min_n else None
 
 
 def remaining_rise_samples(history: dict[str, list[tuple[int, float]]],
@@ -294,7 +311,7 @@ def intraday_ceiling(place: Place, target: dt.date, *,
 
     pmf = sharpen_pmf(running_max, rises, sub_degree)
     modal_b, modal_p = pmf[0]
-    s_risk = (state_late_risk(history, hour, day_state, sub_degree)
+    s_risk = (state_late_risk(history, hour, day_state, sub_degree, month=target.month)
               if day_state is not None else None)
     return IntradayCeiling(
         kind="sharpened", city=city, target=tgt_iso, sub_degree=sub_degree,

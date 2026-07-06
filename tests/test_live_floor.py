@@ -65,8 +65,13 @@ class TestDayState(unittest.TestCase):
     def test_holding_vs_declining_and_risk(self):
         from weather_council.intraday_ceiling import _day_state, state_late_risk
         holding = [(10, 30.0), (12, 32.2), (15, 32.2)]          # still AT the max at 15:00
-        declin = [(10, 30.0), (12, 32.2), (15, 30.6)]           # fallen >0.3C below the max
+        # CERTIFIED 2026-07-06 (persistent_decline_lock.md): "declining" needs the signal to
+        # PERSIST — the last TWO reads below the floor. A single below-read is the false-
+        # decline trap (07-04 EGLC: dip at 15:50 then a new max at 16:50) and stays HOLDING.
+        one_dip = [(10, 30.0), (12, 32.2), (15, 30.6)]          # 1 read below -> trap, holding
+        declin = [(10, 30.0), (12, 32.2), (14, 30.8), (15, 30.6)]   # 2 consecutive below
         self.assertEqual(_day_state(holding, 15), "holding")
+        self.assertEqual(_day_state(one_dip, 15), "holding")
         self.assertEqual(_day_state(declin, 15), "declining")
         self.assertIsNone(_day_state([], 15))
         # leak-free state-conditional rate: 25 holding days, 5 of which climbed a bucket late
@@ -76,3 +81,12 @@ class TestDayState(unittest.TestCase):
             hist[f"d{k}"] = [(12, 32.2), (15, 32.2), (17, 32.2 + rise)]
         self.assertAlmostEqual(state_late_risk(hist, 15, "holding", False), 0.2)
         self.assertIsNone(state_late_risk(hist, 15, "declining", False))   # thin cell -> None
+        # season cell (CERTIFIED lock_state_season_calibration.md): dated keys, n>=30 in-season
+        # -> the cell rate (July=JJA here: 10/40 raise); off-season months fall back state-only.
+        sh = {}
+        for k in range(40):
+            rise = 1.0 if k < 10 else 0.0
+            sh[f"2025-07-{(k % 28) + 1:02d}x{k}"[:10] if False else f"2025-07-{k+1:02d}"] =                 [(12, 32.2), (15, 32.2), (17, 32.2 + rise)]
+        sh = {f"2025-0{7 if k < 28 else 8}-{(k % 28) + 1:02d}": [(12, 32.2), (15, 32.2), (17, 32.2 + (1.0 if k < 10 else 0.0))] for k in range(40)}
+        self.assertAlmostEqual(state_late_risk(sh, 15, "holding", False, month=7), 10/40, places=2)
+        self.assertAlmostEqual(state_late_risk(sh, 15, "holding", False, month=1), 10/40)  # DJF thin -> state-only

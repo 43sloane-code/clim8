@@ -111,6 +111,11 @@ def gather(now_sgt: _dt.datetime | None = None) -> dict:
     except (OSError, ValueError):
         live["pop_ledger"] = None
     try:
+        p2b_lines = (ROOT / "ledger" / "p2b_1200.jsonl").read_text().strip().splitlines()
+        live["p2b_ledger"] = json.loads(p2b_lines[-1])["issued_ts"][:16] if p2b_lines else None
+    except (OSError, ValueError, IndexError):
+        live["p2b_ledger"] = None
+    try:
         con = sqlite3.connect(ROOT / "verdicts.db")
         r = con.execute("SELECT max(issued_at) FROM tracked_forecasts WHERE source='twc'").fetchone()
         con.close()
@@ -177,7 +182,7 @@ def brief(state: dict) -> list[str]:
     stale = [k for k, v in lv.items() if v is None]
     L.append("  AUTONOMY LIVENESS (a guard that never runs guards nothing — 07-04 lesson: the "
              "watchdog sat unscheduled for 6 days):")
-    for k in ("accumulate", "watchdog", "lock_ledger", "twc_ledger", "pop_ledger"):
+    for k in ("accumulate", "watchdog", "lock_ledger", "twc_ledger", "pop_ledger", "p2b_ledger"):
         L.append(f"    {k:12} last activity: {lv.get(k) or 'NEVER / NOT FOUND'}"
                  + ("   <- DORMANT — rewire or explain TODAY" if lv.get(k) is None else ""))
     if stale:
@@ -269,10 +274,10 @@ def _selftest() -> int:
     lv_state = dict(base)
     lv_state["liveness"] = {"accumulate": "2026-07-04T10:15", "watchdog": None,
                             "lock_ledger": "2026-07-04T15:0", "twc_ledger": None,
-                            "pop_ledger": "2026-07-03T00:44"}
+                            "pop_ledger": "2026-07-03T00:44", "p2b_ledger": None}
     lout = "\n".join(brief(lv_state))
-    assert "AUTONOMY LIVENESS" in lout and lout.count("DORMANT") == 2
-    assert "2 component(s) show no heartbeat" in lout
+    assert "AUTONOMY LIVENESS" in lout and lout.count("DORMANT") == 3
+    assert "3 component(s) show no heartbeat" in lout
     print("eval_harness selftest PASS (uncertified label, pre/post-sunset vocab, citable "
           "sentences, certified->measured, no loose certainty words, liveness dormancy flags, directives: gaps/"
           "anti-directives/defect ranked)")

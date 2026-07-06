@@ -30,3 +30,10 @@ delaying it, out-of-sample, both cities.
 ## Status
 PRE-REGISTERED, pending the frozen-A/B run. Do NOT hand-patch the declining threshold live.
 Related: the 07-04 curve decipher, [[feedback_lock_overconfident_while_holding]].
+
+## VERDICT — CERTIFIED 2026-07-06 (shipped)
+Probe per the frozen design (10y, both cities, chronological halves):
+reliability single-read -> 2-consecutive: EGLC 80.7->91.6 (h1) / 78.2->89.8 (h2);
+WSSS 75.7->88.3 / 75.9->89.5 — ALL FOUR cells PASS; median delay +30min (<=45 bound) PASS.
+Shipped into `intraday_ceiling._day_state` (last TWO reads below floor = declining), KAT
+pins the one-dip trap as HOLDING. First served-behavior candidate to clear a full gate.

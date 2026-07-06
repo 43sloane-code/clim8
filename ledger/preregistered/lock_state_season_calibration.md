@@ -35,3 +35,12 @@ manufacturing confidence.
 INSTRUMENTED-PENDING. The interim labeling cap is the immediate honest fix; the full
 state×season table is the gated change. Do NOT hand-tune per-day. Related: the shipped state
 split (holding/declining), verify_skill.py, the certification ledger.
+
+## VERDICT — CERTIFIED 2026-07-06 (shipped)
+Probe per the frozen design (10y, warmup 400d, leak-free cells n>=30, fallback blended;
+season-bin = meteorological quarter): Brier blended -> state x season improves on BOTH
+halves BOTH cities — EGLC 0.1654->0.1455 (+12.1%) / 0.1645->0.1412 (+14.1%); WSSS
+0.1002->0.0938 (+6.4%) / 0.1032->0.0943 (+8.7%). Modal untouched by construction.
+Shipped into `state_late_risk(..., month=)` — the served raise-risk now conditions on
+(state x season x hour) with state-only fallback. Gated together with the 2-consecutive
+day-state per this file's composition rule.
