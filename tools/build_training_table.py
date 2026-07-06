@@ -11,6 +11,9 @@ Per-day fields:
   outcomes:   tmax_c, bucket (round-half-up whole °C — TRAINING grain, not WU settlement),
               peak_hh (first hour of the max), rise12/13/14/15 (final − runmax@H),
               late14/late15 (settled bucket still rises after H), state14/state15
+              (NOTE: state cols in the existing frozen artifact were built with the pre-
+              2026-07-06 SINGLE-READ day-state; the live lever now uses the certified
+              2-consecutive rule — regenerate before conditioning any new probe on them)
   obs preds:  runmax12, cur12, prev_tmax, prev_peak_hh, doy_sin, doy_cos
   era5 preds: cloud_8_13 (mean %), sw_8_13 (sum W/m2), precip_0_13 (sum mm), wind_11_14 (mean)
 
