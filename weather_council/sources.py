@@ -52,6 +52,11 @@ WU_HISTORY_URL = "https://api.weather.com/v1/location/{loc}/observations/histori
 WU_API_KEY = "e1f10a1e78da46f5b10a1e78da96f525"
 # Settlement-station geocodes for the v3 current-conditions feed (same host + key).
 WU_GEO = {"WSSS": (1.3502, 103.994), "RPLL": (14.5086, 121.0198), "EGLC": (51.5053, 0.0553)}
+# Airports whose stale/distant Meteostat bulk file is overlaid with the live IEM ASOS METAR
+# record (icao -> tz for local-day extremes). EGLC (Abbey Wood file ~17km, weeks stale) and
+# KSFO (Meteostat lags ~100d). fetch_station_daily gates on this; keeps the pattern one-line
+# extensible per city instead of an is_<city> method each.
+_IEM_OVERLAY_TZ = {"EGLC": "Europe/London", "KSFO": "America/Los_Angeles"}
 V3_CURRENT_URL = "https://api.weather.com/v3/wx/observations/current"
 WU_LOCATION = {"EGLC": "EGLC:9:GB", "RPLL": "RPLL:9:PH",
                "WSSS": "WSSS:9:SG"}  # ICAO -> Weather Company location id
@@ -743,10 +748,18 @@ class Sources:
         # identical settlement-grade record run.py uses for its reference — so the
         # council backtests against the same instrument the market resolves on.
         # Recent METAR days win; older days keep the Meteostat value.
-        elif self.is_london_eglc(station):
-            modern = self.london_eglc_truth_series(dt.date.today())
-            if modern:
-                out = {**out, **modern}
+        else:
+            # Airports whose Meteostat bulk file is stale/distant but which carry a live
+            # IEM ASOS METAR record we can overlay (the EGLC pattern, generalised): EGLC and
+            # now KSFO (San Francisco). Recent METAR days win; older days keep Meteostat.
+            # KSFO's Meteostat file lags ~100 days, so without this the SF verdict backtests
+            # on out-of-season truth — this is the fix that makes it current.
+            ov_tz = _IEM_OVERLAY_TZ.get((station.icao or "").upper())
+            if ov_tz:
+                modern = self.iem_overlay_truth_series((station.icao or "").upper(),
+                                                       ov_tz, dt.date.today())
+                if modern:
+                    out = {**out, **modern}
         return out
 
     def _fetch_hko_dataset(self, data_type: str, years: list[int]) -> dict[str, float]:
@@ -901,6 +914,20 @@ class Sources:
         city/station table. This is the gate for overlaying the modern IEM ASOS
         METAR record in place of that stale, distant bulk file."""
         return (station.icao or "").upper() == "EGLC"
+
+    def iem_overlay_truth_series(self, icao: str, timezone: str, target: dt.date,
+                                 back_years: int = 2) -> DailySeries:
+        """Modern daily (high, low) at an IEM-overlay airport (EGLC, KSFO) reconstructed
+        from raw IEM ASOS METAR over the local calendar day — the settlement-grade sensor
+        the market resolves on, replacing the stale/distant Meteostat bulk file. Spans the
+        last `back_years` up to `target`; days with too few obs fall back to Meteostat. One
+        cached request; returns {} on any failure so truth resolution never aborts."""
+        start = dt.date(target.year - back_years, 1, 1)
+        try:
+            res = self.fetch_metar_daily(icao, start, target, timezone)
+        except Exception:
+            return {}
+        return dict(res.get("daily", {}))
 
     def london_eglc_truth_series(self, target: dt.date,
                                  back_years: int = 2) -> DailySeries:
@@ -1236,7 +1263,13 @@ class Sources:
             daily[day] = (max(cs), min(cs))
         frac_c = n_c / total if total else 0.0
         frac_f = n_f / total if total else 0.0
-        grain = "F" if (frac_f >= 0.9 and frac_f > frac_c) else "C"
+        # Native grain = whichever unit the sensor emits as whole integers MORE OFTEN,
+        # with a floor so weak evidence defaults to the international °C standard. US ASOS
+        # reports a mix of whole-°F and 0.1-°C, so frac_f sits ~0.5-0.8 and never reaches the
+        # old 0.9 bar — KSFO was misread as °C, garbling its whole-°F settlement. °C stations
+        # are ~1.0 integral-in-C (verified EGLC/WSSS/RPLL 1.00 vs frac_f ≤ 0.09), so
+        # frac_f > frac_c never fires for them: this flips ONLY the genuine °F stations.
+        grain = "F" if (frac_f > frac_c and frac_f >= 0.4) else "C"
         return {"daily": daily, "grain": grain,
                 "grain_evidence": {"C": round(frac_c, 3), "F": round(frac_f, 3)}}
 

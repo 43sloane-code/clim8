@@ -1,25 +1,29 @@
-# San Francisco (KSFO) — added as DATA/PATTERN layer; live VERDICT path is BLOCKED
+# San Francisco (KSFO) — 2 of 3 blockers FIXED; native-°F bucketing remains before basket promotion
 
-*2026-07-06. Added SF on the same scaffold as London (SETTLEMENT_REFERENCE, PINNED_ANCHOR_ICAO,
-STRICT_ANCHOR_ICAO, backfill _TZ, 10y KSFO IEM archive). But unlike London, the live COUNCIL
-verdict is NOT reliable for SF — three architectural blockers, each verified live:*
+*2026-07-06. Added SF on the London scaffold; a live verdict run exposed 3 blockers. Two are now
+FIXED and tested (420/420); the third is identified and is the remaining gate for promotion.*
 
-1. **TRUTH FEED.** `fetch_station_daily` has a modern IEM/HKO overlay only for EGLC + the HK
-   Observatory. KSFO has none, so the SF verdict fell back to the Meteostat bulk archive, which
-   lags ~101 days — it served MARCH truth for a July target ("recent observed 2026-03-25...").
-   FIX: add a KSFO live-IEM overlay to fetch_station_daily (the EGLC pattern).
-2. **SETTLEMENT GRAIN.** SF markets settle WHOLE-°F (KSFO obs 100% integral-in-°F, 19% in-°C).
-   The grain detector defaulted to °C ("12% integral in C") and the market cross-check compared
-   council 20°C vs market 66°F — garbled. FIX: detect + carry °F grain end-to-end (the market
-   is already whole-°F; the bucket/quantizer must follow).
-3. **BACKTEST SEASON.** The Meteostat lag makes the bias/skill backtest out-of-season
-   (bias +2.47°C, "regime ~103d off") — untrustworthy until (1) is fixed.
+## FIXED
+1. **TRUTH FEED (fixed, commit follows).** `fetch_station_daily`'s EGLC IEM overlay generalised
+   to a `_IEM_OVERLAY_TZ` table (EGLC + KSFO) via `iem_overlay_truth_series`. SF now backtests on
+   live KSFO METAR: "recent observed" is current (July, ~0-day lag, was March/~101d), regime is
+   in-season, and the council shows real skill (CRPS 0.489 vs climatology 1.002, +51%, 82 days).
+2. **GRAIN DETECTION (fixed).** `fetch_metar_daily` grain rule was `frac_f >= 0.9` — too strict
+   for US ASOS (mixed whole-°F / 0.1-°C → frac_f ~0.5-0.8). Now `frac_f > frac_c and frac_f >= 0.4`:
+   flips ONLY genuine °F stations (EGLC/WSSS/RPLL are 1.00 integral-in-C, unaffected — verified).
+   SF settlement now reads whole-°F correctly (settles 67°F; "model 68-69°F vs market 66-67°F").
 
-WHAT WORKS NOW (clean): the 10y KSFO IEM archive (`data/ksfo_hourly_iem.jsonl`) → pattern
-recognition + intraday lock schedule in native °F. SF is the EASIEST of the four to lock
-(false-decline trap 14% vs London 30% / Singapore 19%; cool tight marine-layer single peaks;
-July high median 70°F, P10-P90 66-77°F; declining@15:00 settles 96%).
+## REMAINING (blocks basket promotion)
+3. **NATIVE-°F BUCKET PMF.** The headline BUCKET CALL + pmf + band + the intraday lock are computed
+   in whole-°C throughout (residual cloud, bucket_contract, intraday_ceiling), and only the
+   SETTLEMENT-ALIGNMENT section converts to °F. For the °C cities °C-bucket == settlement-bucket, so
+   it's fine; for SF the °F market is finer (1°F ≈ 0.56°C), so the °C headline (20°C) is ~2 °F-buckets
+   coarse. The °F info IS available (settlement section: 67-69°F) but the primary served pmf/lock are
+   not native-°F. Serving SF headline + snapshotting it into the tracked basket needs the bucket
+   pipeline to run in the detected grain end-to-end. NOT attempted here (touches the core pmf path
+   for all cities — must clear the frozen gate). Until then SF is on-demand + archive-pattern only.
 
-STATUS: SF is NOT promoted to the tracked basket (CITIES/TWC) — that waits on blockers 1+2.
-The scaffold + archive are committed so the pattern layer works and the fix has a home.
-Do NOT claim a live SF verdict number off the council path until the IEM overlay + °F grain land.
+## STATUS
+On-demand SF verdict now SOUND (current truth, in-season, +51% skill, correct °F settlement read);
+pattern/intraday layer works in native °F from the archive. NOT promoted to CITIES/TWC — waits on
+blocker 3. Do not snapshot SF into the basket until the °F bucket pipeline lands + gates.

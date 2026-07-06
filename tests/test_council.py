@@ -512,13 +512,17 @@ class TestLondonEGLCMetarOverlay(unittest.TestCase):
         csv = f"{old_day},3,1,5\n{recent_day},25,20,30\n"
         s.http = SimpleNamespace(get_gzip_text=lambda url: csv)
         s.is_hko_observatory = lambda st: False
-        # Fresh METAR for the recent day only; older day stays Meteostat.
-        s.london_eglc_truth_series = lambda target, back_years=2: {
+        # Fresh METAR for the recent day only; older day stays Meteostat. Stubs the
+        # generic IEM-overlay method (fires for every _IEM_OVERLAY_TZ icao: EGLC, KSFO).
+        s.iem_overlay_truth_series = lambda icao, timezone, target, back_years=2: {
             recent_day: (14.0, 8.0)}
         out = s.fetch_station_daily(self._station("EGLC"))   # real method, real overlay
         self.assertEqual(out[old_day], (5.0, 1.0))     # old Meteostat day untouched
         self.assertEqual(out[recent_day], (14.0, 8.0)) # recent day = METAR, not 99
-        # A non-EGLC station gets no overlay — the wrong 30/20 survives.
+        # KSFO (San Francisco) is now an overlay station too — recent day = METAR.
+        out_sf = s.fetch_station_daily(self._station("KSFO"))
+        self.assertEqual(out_sf[recent_day], (14.0, 8.0))
+        # A non-overlay station gets no overlay — the wrong 30/20 survives.
         out2 = s.fetch_station_daily(self._station("EGLL"))
         self.assertEqual(out2[recent_day], (30.0, 20.0))
 
