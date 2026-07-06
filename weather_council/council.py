@@ -136,7 +136,7 @@ SEASON_MATCH_DAYS = 31
 # settles on. Keyed by case-insensitive city-name substring -> the anchor's ICAO.
 # London weather markets settle on London City Airport (EGLC), ~17 km east of the
 # nearest station (the central London Weather Centre), so we prefer EGLC.
-PINNED_ANCHOR_ICAO = {"london": "EGLC", "san francisco": "KSFO"}
+PINNED_ANCHOR_ICAO = {"london": "EGLC"}
 
 # ICAO-pinned cities whose anchor is STRICT — the same rule as the HKO anchor:
 # when the pinned airport's feed is stale/unavailable, the verdict must NOT
@@ -145,7 +145,7 @@ PINNED_ANCHOR_ICAO = {"london": "EGLC", "san francisco": "KSFO"}
 # two physical sensors that read differently, making the verdict jump between
 # stations and read as model imprecision. So for these cities it is EGLC-or-honest
 # -ERA5-grid, never a substitute station. (See _resolve_truth.)
-STRICT_ANCHOR_ICAO = {"london", "san francisco"}
+STRICT_ANCHOR_ICAO = {"london"}
 
 # Cities pinned to the Hong Kong Royal Observatory anchor. The Observatory has no
 # ICAO (it is not an airport), so it is identified structurally by
@@ -170,6 +170,10 @@ _WU_TRUTH_STATIONS = {
                "lat": 14.5086, "lon": 121.0194},
     "singapore": {"icao": "WSSS", "name": "Changi",
                   "lat": 1.3502, "lon": 103.9944},
+    # San Francisco settles on the Wunderground KSFO record (whole-°F), a live WU feed
+    # like RPLL/WSSS — so it anchors on the oracle, not the Meteostat/IEM path.
+    "san francisco": {"icao": "KSFO", "name": "San Francisco Intl",
+                      "lat": 37.6189, "lon": -122.375},
 }
 
 

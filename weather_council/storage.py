@@ -375,7 +375,8 @@ def _bucket_for_reading(buckets: list[dict], reading_int: int) -> str | None:
 # covers. icao -> tz (for local-day grouping). Mirrors council._WU_TRUTH_STATIONS.
 # London (EGLC) is deliberately EXCLUDED though it is in WU_LOCATION — it settles on
 # the IEM-EGLC record. Both settle_market_snapshots and verify route these here.
-_WU_SETTLE_TZ = {"RPLL": "Asia/Manila", "WSSS": "Asia/Singapore"}
+_WU_SETTLE_TZ = {"RPLL": "Asia/Manila", "WSSS": "Asia/Singapore",
+                 "KSFO": "America/Los_Angeles"}   # SF: live WU oracle, whole-°F
 
 
 def settle_market_snapshots(sources: Sources | None = None) -> list[str]:

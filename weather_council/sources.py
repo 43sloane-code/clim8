@@ -51,15 +51,17 @@ METAR_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
 WU_HISTORY_URL = "https://api.weather.com/v1/location/{loc}/observations/historical.json"
 WU_API_KEY = "e1f10a1e78da46f5b10a1e78da96f525"
 # Settlement-station geocodes for the v3 current-conditions feed (same host + key).
-WU_GEO = {"WSSS": (1.3502, 103.994), "RPLL": (14.5086, 121.0198), "EGLC": (51.5053, 0.0553)}
+WU_GEO = {"WSSS": (1.3502, 103.994), "RPLL": (14.5086, 121.0198), "EGLC": (51.5053, 0.0553),
+          "KSFO": (37.6189, -122.375)}
 # Airports whose stale/distant Meteostat bulk file is overlaid with the live IEM ASOS METAR
-# record (icao -> tz for local-day extremes). EGLC (Abbey Wood file ~17km, weeks stale) and
-# KSFO (Meteostat lags ~100d). fetch_station_daily gates on this; keeps the pattern one-line
-# extensible per city instead of an is_<city> method each.
-_IEM_OVERLAY_TZ = {"EGLC": "Europe/London", "KSFO": "America/Los_Angeles"}
+# record (icao -> tz for local-day extremes). EGLC's Abbey Wood file is ~17km and weeks stale.
+# fetch_station_daily gates on this; one-line extensible per city instead of an is_<city> method.
+# (KSFO is NOT here — SF anchors on its live Wunderground oracle feed, like RPLL/WSSS.)
+_IEM_OVERLAY_TZ = {"EGLC": "Europe/London"}
 V3_CURRENT_URL = "https://api.weather.com/v3/wx/observations/current"
 WU_LOCATION = {"EGLC": "EGLC:9:GB", "RPLL": "RPLL:9:PH",
-               "WSSS": "WSSS:9:SG"}  # ICAO -> Weather Company location id
+               "WSSS": "WSSS:9:SG",
+               "KSFO": "KSFO:9:US"}  # ICAO -> Weather Company location id
 # Minimum hourly obs in a WU local day before its max/min are trustworthy as a
 # settlement-truth extreme — a partial final day would understate the peak. A
 # complete RPLL/EGLC day reports ~24 hourly observations.

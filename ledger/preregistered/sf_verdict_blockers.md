@@ -1,29 +1,27 @@
-# San Francisco (KSFO) — 2 of 3 blockers FIXED; native-°F bucketing remains before basket promotion
+# San Francisco (KSFO) — now WU-ORACLE anchored (like RPLL/WSSS); 1 blocker remains
 
-*2026-07-06. Added SF on the London scaffold; a live verdict run exposed 3 blockers. Two are now
-FIXED and tested (420/420); the third is identified and is the remaining gate for promotion.*
+*2026-07-06. SF settles on the live Wunderground KSFO feed (the user's correction — KSFO HAS a WU
+feed). Re-anchored SF on the WU oracle, the exact record the market pays on, superseding the
+earlier IEM-overlay detour. Config now mirrors Singapore/Manila exactly.*
 
 ## FIXED
-1. **TRUTH FEED (fixed, commit follows).** `fetch_station_daily`'s EGLC IEM overlay generalised
-   to a `_IEM_OVERLAY_TZ` table (EGLC + KSFO) via `iem_overlay_truth_series`. SF now backtests on
-   live KSFO METAR: "recent observed" is current (July, ~0-day lag, was March/~101d), regime is
-   in-season, and the council shows real skill (CRPS 0.489 vs climatology 1.002, +51%, 82 days).
-2. **GRAIN DETECTION (fixed).** `fetch_metar_daily` grain rule was `frac_f >= 0.9` — too strict
-   for US ASOS (mixed whole-°F / 0.1-°C → frac_f ~0.5-0.8). Now `frac_f > frac_c and frac_f >= 0.4`:
-   flips ONLY genuine °F stations (EGLC/WSSS/RPLL are 1.00 integral-in-C, unaffected — verified).
-   SF settlement now reads whole-°F correctly (settles 67°F; "model 68-69°F vs market 66-67°F").
+1. **TRUTH FEED — via the WU oracle (best form).** Added KSFO to `WU_GEO`, `WU_LOCATION`
+   ("KSFO:9:US"), `council._WU_TRUTH_STATIONS`, `storage._WU_SETTLE_TZ`. SF now anchors on the
+   live Wunderground/Weather Company KSFO record + v3 current-conditions feed (cur_f + 24h
+   register) — current, no archive lag, "the market's own oracle". The London-style IEM
+   scaffolding (PINNED/STRICT_ANCHOR, _IEM_OVERLAY KSFO) was REVERTED — SF is a WU city, not IEM.
+   Verified: daily 07-01..05 = 70/70/69/68/68°F; live current 62°F, 24h-register 69°F.
+2. **GRAIN — whole °F.** `fetch_metar_daily` rule fixed (`frac_f>frac_c and frac_f>=0.4`); SF
+   settlement reads whole-°F (66-68°F). °C cities unaffected (1.00 integral-in-C), KAT'd.
 
 ## REMAINING (blocks basket promotion)
-3. **NATIVE-°F BUCKET PMF.** The headline BUCKET CALL + pmf + band + the intraday lock are computed
-   in whole-°C throughout (residual cloud, bucket_contract, intraday_ceiling), and only the
-   SETTLEMENT-ALIGNMENT section converts to °F. For the °C cities °C-bucket == settlement-bucket, so
-   it's fine; for SF the °F market is finer (1°F ≈ 0.56°C), so the °C headline (20°C) is ~2 °F-buckets
-   coarse. The °F info IS available (settlement section: 67-69°F) but the primary served pmf/lock are
-   not native-°F. Serving SF headline + snapshotting it into the tracked basket needs the bucket
-   pipeline to run in the detected grain end-to-end. NOT attempted here (touches the core pmf path
-   for all cities — must clear the frozen gate). Until then SF is on-demand + archive-pattern only.
+3. **NATIVE-°F BUCKET PMF.** Headline BUCKET pmf/band + intraday lock still compute in whole-°C;
+   only the settlement section converts to °F. Fine for °C cities; for SF's finer °F market the
+   °C headline (~20°C) is ~2 °F-buckets coarse. The °F read IS served (settlement: 66-68°F). Needs
+   the core bucket pipeline to run in the detected grain end-to-end → must clear the frozen gate.
+   NOT attempted. Until then SF is on-demand + archive-pattern; NOT snapshotted into the basket.
 
 ## STATUS
-On-demand SF verdict now SOUND (current truth, in-season, +51% skill, correct °F settlement read);
-pattern/intraday layer works in native °F from the archive. NOT promoted to CITIES/TWC — waits on
-blocker 3. Do not snapshot SF into the basket until the °F bucket pipeline lands + gates.
+SF on-demand verdict now anchors on the live WU settlement oracle (current, °F) exactly like
+RPLL/WSSS — truth + grain SOLVED. Only native-°F headline bucketing remains before CITIES/TWC
+promotion. On-demand + archive-pattern layer fully usable now.

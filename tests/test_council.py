@@ -519,9 +519,10 @@ class TestLondonEGLCMetarOverlay(unittest.TestCase):
         out = s.fetch_station_daily(self._station("EGLC"))   # real method, real overlay
         self.assertEqual(out[old_day], (5.0, 1.0))     # old Meteostat day untouched
         self.assertEqual(out[recent_day], (14.0, 8.0)) # recent day = METAR, not 99
-        # KSFO (San Francisco) is now an overlay station too — recent day = METAR.
+        # KSFO (San Francisco) anchors on its live Wunderground oracle, NOT an IEM overlay —
+        # so fetch_station_daily does NOT overlay it; the wrong 30/20 survives here.
         out_sf = s.fetch_station_daily(self._station("KSFO"))
-        self.assertEqual(out_sf[recent_day], (14.0, 8.0))
+        self.assertEqual(out_sf[recent_day], (30.0, 20.0))
         # A non-overlay station gets no overlay — the wrong 30/20 survives.
         out2 = s.fetch_station_daily(self._station("EGLL"))
         self.assertEqual(out2[recent_day], (30.0, 20.0))
