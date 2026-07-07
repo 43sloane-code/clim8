@@ -649,5 +649,50 @@ class TestServedRecencyBias(unittest.TestCase):
         self.assertLess(served.council_mae_high, plain.council_mae_high)
 
 
+class TestSettlementReferenceGrain(unittest.TestCase):
+    """The SETTLEMENT RECORD block renders in the MARKET's native grain — whole °F for
+    San Francisco (KSFO), whole °C for London/Manila/Singapore. Regression guard for the
+    2026-07-07 SF fix: the block used to hardcode °C, so SF's whole-°F record showed as a
+    ~2-bucket-coarse °C reading with a "→ contract whole °C" label on a °F contract."""
+
+    def _ref(self, grain, target_c, verdict_c, wu_max_c, wu_bucket):
+        return {
+            "icao": "KSFO" if grain == "F" else "EGLC",
+            "name": "Test Station", "url": "http://example/x", "grain": grain,
+            "target_date": "2026-07-07", "target_status": "forecast",
+            "target_record": (target_c, target_c - 4.0),
+            "verdict_high": verdict_c, "verdict_low": verdict_c - 5.0,
+            "anchor_offset": None, "anchor_is_same": True,
+            "recent": [{"date": "2026-07-05", "high": target_c, "low": target_c - 5.0}],
+            "wunderground": {"days": [{"date": "2026-07-05", "wu_max_c": wu_max_c,
+                                       "wu_bucket": wu_bucket, "iem_bucket": wu_bucket,
+                                       "agree": True}], "agree": 1, "total": 1},
+        }
+
+    def test_san_francisco_renders_fahrenheit(self):
+        import run
+        # 13.9°C -> 57°F; a whole-°F market. Nothing should read in °C.
+        ref = self._ref("F", target_c=13.9, verdict_c=17.2, wu_max_c=20.0, wu_bucket=68)
+        text = "\n".join(run._settlement_reference_lines(ref))
+        self.assertIn("high 57°F", text)                 # 13.9°C rendered in °F
+        self.assertIn("contract whole °F", text)         # not "→ contract whole °C"
+        self.assertIn("WU max 68.0°F → bucket 68°F", text)
+        self.assertNotIn("°C", text)                     # no °C leakage on a °F market
+
+    def test_celsius_cities_unchanged(self):
+        import run
+        # London whole-°C: identity conversion — DATA must stay in °C. (The ANCHOR header
+        # legitimately says "whole °F → contract whole °C" because WU's SOURCE unit is
+        # always °F; that's the source descriptor, not a data value.)
+        ref = self._ref("C", target_c=32.2, verdict_c=31.4, wu_max_c=32.2, wu_bucket=32)
+        text = "\n".join(run._settlement_reference_lines(ref))
+        self.assertIn("high 32°C", text)
+        self.assertIn("contract whole °C", text)
+        self.assertIn("WU max 32.2°C → bucket 32°C", text)
+        self.assertIn("high 32°C  low 27°C", text)       # recent line stays °C
+        self.assertNotIn("90°F", text)                   # 32.2°C NOT °F-converted in the data
+        self.assertNotIn("bucket 90", text)
+
+
 if __name__ == "__main__":
     unittest.main()

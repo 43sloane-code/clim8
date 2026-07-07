@@ -180,6 +180,7 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
     wu_days: list[dict] = []
     wu_agree = wu_total = 0
     wu_target_high = None                     # the WU settlement high for the target day
+    grain = md.get("grain") or "C"            # the market's native settlement grain (°F for KSFO)
     today = place_today(place)
     wu_dates = [d for d in recent[-4:]]
     if target <= today and target.isoformat() not in wu_dates:
@@ -191,8 +192,11 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
             w = None
         if not w:
             continue
-        wu_b = _native_reading_int(w["max_c"], "C", False)          # airport cities settle round-half-up
-        iem_b = _native_reading_int(daily[d][0], "C", False) if d in daily else None
+        # Bucket in the market's NATIVE grain — SF settles whole-°F, so a °C bucket here
+        # (the old hardcode) was ~2 °F-buckets coarse and mislabelled. _native_reading_int
+        # converts °C->°F internally when grain=="F".
+        wu_b = _native_reading_int(w["max_c"], grain, False)        # airport cities settle round-half-up
+        iem_b = _native_reading_int(daily[d][0], grain, False) if d in daily else None
         if iem_b is not None:
             wu_total += 1
             wu_agree += 1 if iem_b == wu_b else 0
@@ -510,7 +514,18 @@ def _market_lines(c: VerdictMarketComparison) -> list[str]:
 
 
 def _settlement_reference_lines(ref: dict) -> list[str]:
-    """Render the user-pinned 'compare & contrast vs Wunderground airport' block."""
+    """Render the user-pinned 'compare & contrast vs Wunderground airport' block.
+
+    Grain-aware: the record is rendered in the MARKET's native settlement unit
+    (SF/KSFO settles whole °F; London/Manila/Singapore whole °C). For °C cities
+    every conversion below is the identity, so their output is byte-for-byte
+    unchanged; only SF now reads in °F (the record the market actually pays on)."""
+    grain = ref.get("grain") or "C"
+    u = grain
+    def _nat(c):        # a °C value rendered in the market's native grain
+        return c * 9 / 5 + 32 if grain == "F" else c
+    def _dnat(dc):      # a °C DELTA rendered in native grain (scale only, no +32 offset)
+        return dc * 9 / 5 if grain == "F" else dc
     L = [f"  SETTLEMENT RECORD — Wunderground {ref['icao']} ({ref['name']}) [user-pinned]"]
     L.append(f"    source   : {ref['url']}")
     if ref.get("error"):
@@ -530,44 +545,45 @@ def _settlement_reference_lines(ref: dict) -> list[str]:
         el = vl - rl if (vl is not None and rl is not None) else None
         settled = ref.get("target_status") != "forecast"
         word = "RECORDED" if settled else "so far (day not finished)"
-        low_txt = f"  low {rl:.0f}°" if rl is not None else ""
-        L.append(f"    {ref['target_date']} {ref['icao']} {word}: high {rh:.0f}°{low_txt}")
+        low_txt = f"  low {_nat(rl):.0f}°{u}" if rl is not None else ""
+        L.append(f"    {ref['target_date']} {ref['icao']} {word}: high {_nat(rh):.0f}°{u}{low_txt}")
         if eh is not None:
-            el_txt = f", low {el:+.1f} °C" if el is not None else ""
-            L.append(f"    verdict vs record: verdict {vh:.1f}/{vl:.1f} °C — "
-                     f"high {eh:+.1f} °C{el_txt} vs the {ref['icao']} record"
+            el_txt = f", low {_dnat(el):+.1f} °{u}" if el is not None else ""
+            L.append(f"    verdict vs record: verdict {_nat(vh):.1f}/{_nat(vl):.1f} °{u} — "
+                     f"high {_dnat(eh):+.1f} °{u}{el_txt} vs the {ref['icao']} record"
                      + ("" if settled else " (provisional)"))
     else:
         L.append(f"    {ref['target_date']}: no {ref['icao']} record yet (target not "
-                 f"finished or not in the archive) — verdict {vh:.1f}/{vl:.1f} °C stands "
-                 f"to be checked against it once the day settles.")
+                 f"finished or not in the archive) — verdict {_nat(vh):.1f}/{_nat(vl):.1f} °{u} "
+                 f"stands to be checked against it once the day settles.")
     off = ref.get("anchor_offset")
     if ref.get("anchor_is_same"):
         L.append(f"    anchor   : the council already backtests on {ref['icao']} — the "
                  f"settlement record and the verdict's truth source are the same station.")
     elif off is not None:
-        L.append(f"    contrast : {ref['icao']} runs {off['high_mean']:+.2f} °C vs the "
+        L.append(f"    contrast : {ref['icao']} runs {_dnat(off['high_mean']):+.2f} °{u} vs the "
                  f"council's anchor station {off['anchor_icao']} on the daily high "
-                 f"(median {off['high_median']:+.2f}, n={off['n']} overlapping days) — "
+                 f"(median {_dnat(off['high_median']):+.2f}, n={off['n']} overlapping days) — "
                  f"the settlement and backtest stations differ; read the verdict against "
                  f"{ref['icao']} accordingly.")
     rec = ref.get("recent") or []
     if rec:
         L.append(f"    recent {ref['icao']} daily record (most recent {len(rec)} days):")
         for r in rec:
-            L.append(f"      {r['date']}  high {r['high']:.0f}°  low {r['low']:.0f}°")
-    # Wunderground ANCHOR — the actual settlement oracle (whole °F → contract whole °C),
-    # with IEM as the cross-reference. Surfaces the °F/°C boundary divergence that flips
-    # a bucket (e.g. WU 87°F → 31°C while IEM reads 30°C).
+            L.append(f"      {r['date']}  high {_nat(r['high']):.0f}°{u}  low {_nat(r['low']):.0f}°{u}")
+    # Wunderground ANCHOR — the actual settlement oracle. WU stores whole °F; the contract
+    # rounds to the market's grain (whole °C for London/Manila/Singapore, whole °F for SF).
+    # Surfaces the °F/°C boundary divergence that flips a °C bucket (e.g. WU 87°F → 31°C
+    # while IEM reads 30°C); for SF, source and contract are both °F so no such flip.
     wu = ref.get("wunderground") or {}
     wud = wu.get("days") or []
     if wud:
-        L.append(f"    ANCHOR — Wunderground {ref['icao']} (the settlement oracle, whole °F → contract whole °C):")
+        L.append(f"    ANCHOR — Wunderground {ref['icao']} (the settlement oracle, whole °F → contract whole °{u}):")
         for w in wud:
             ib = w.get("iem_bucket")
-            xref = f" | IEM {ib}°C" if ib is not None else ""
-            flag = "" if (ib is None or ib == w["wu_bucket"]) else "  ⚠ DIVERGES (°F/°C boundary flips the bucket)"
-            L.append(f"      {w['date']}  WU max {w['wu_max_c']:.1f}°C → bucket {w['wu_bucket']}°C{xref}{flag}")
+            xref = f" | IEM {ib}°{u}" if ib is not None else ""
+            flag = "" if (ib is None or ib == w["wu_bucket"]) else f"  ⚠ DIVERGES (°F/°{u} boundary flips the bucket)"
+            L.append(f"      {w['date']}  WU max {_nat(w['wu_max_c']):.1f}°{u} → bucket {w['wu_bucket']}°{u}{xref}{flag}")
         if wu.get("total"):
             L.append(f"    WU↔IEM cross-check: agree {wu['agree']}/{wu['total']} settled days "
                      f"(WU anchors the settlement; IEM is the cross-reference)")
