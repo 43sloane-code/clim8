@@ -176,6 +176,15 @@ _WU_TRUTH_STATIONS = {
                       "lat": 37.6189, "lon": -122.375},
 }
 
+# Airports whose SETTLEMENT (today's realized bucket) reads the Wunderground daily high —
+# the record the contract pays on — even when their multi-year BACKTEST anchor is the deep
+# IEM archive. London (EGLC) is here but NOT in _WU_TRUTH_STATIONS: it settles on WU (07-07:
+# a 17:20 spike hit 90°F=32 that WU published and the market paid on; the whole-°C IEM METAR
+# rounded it to 31) while its backtest keeps IEM's 10y history. WSSS/RPLL already anchor on WU;
+# listing them keeps _settlement consistent. These three settle whole °C (round-half-up); KSFO
+# settles whole °F and keeps the grain-detected fetch_metar_daily path, so it is NOT here.
+_WU_SETTLE_C_ICAOS = {"EGLC", "WSSS", "RPLL"}
+
 
 def _wu_truth_station(place) -> dict | None:
     """The Wunderground settlement-oracle station to anchor this city's backtest
@@ -1238,7 +1247,17 @@ class Council:
         if not icao:
             return None
         try:
-            md = self.sources.fetch_metar_daily(icao, w_start, w_end, fp.timezone)
+            # WU-settled °C cities (London/Singapore/Manila) settle on the Wunderground daily
+            # high — the exact record the market pays on, which CATCHES between-obs peaks the
+            # whole-°C IEM METAR rounds away (07-07 EGLC: WU 90°F=32 vs IEM 31). Read it as the
+            # settlement truth so the served bucket == the settled bucket. Other stations keep
+            # the IEM/grain-detected path (KSFO is whole-°F; that detection stays correct).
+            if icao.upper() in _WU_SETTLE_C_ICAOS:
+                wu = self.sources.wunderground_daily_series(icao, w_start, w_end, fp.timezone)
+                md = {"daily": dict(wu), "grain": "C",
+                      "grain_evidence": {"C": 1.0, "F": 0.0}}
+            else:
+                md = self.sources.fetch_metar_daily(icao, w_start, w_end, fp.timezone)
         except Exception:
             return None
 
@@ -1262,7 +1281,9 @@ class Council:
                 "tail_days_ge3": sum(1 for x in dh if abs(x) >= 3.0),
             }
         return {
-            "source": "raw airport METAR (IEM ASOS archive)",
+            "source": ("Wunderground station record (settlement oracle)"
+                       if icao.upper() in _WU_SETTLE_C_ICAOS
+                       else "raw airport METAR (IEM ASOS archive)"),
             "grain": grain,
             "grain_evidence": md["grain_evidence"],
             "high_settle": round(high_settle, 1),

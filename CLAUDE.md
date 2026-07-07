@@ -32,9 +32,17 @@ the ledger certifies.
 |-----------|------------------|------------------------------|----------------------------|--------|
 | Singapore | WSSS Changi      | WU oracle (live, current)    | whole-°F → °C round-half-up| YES    |
 | Manila    | RPLL             | WU oracle (live)             | whole-°F → °C round-half-up| YES (serving only; improvement OUT OF SCOPE by user directive) |
-| London    | EGLC City Airport| IEM-EGLC METAR (NOT WU path) | whole-°C, round==floor     | YES    |
+| London    | EGLC City Airport| SETTLE: WU oracle (live) · BACKTEST: IEM-EGLC (10y deep) | whole-°C, round-half-up (17.6→18) | YES    |
 | San Francisco | KSFO         | WU oracle (live)             | WHOLE-°F (2°F market buckets)| NO — on-demand; headline pmf still °C (registered blocker: sf_verdict_blockers.md). For SF quote the SETTLEMENT-section °F number, never the °C headline. |
 | Hong Kong | HKO Observatory  | HKO open-data                | 0.1°C, FLOOR (28.6→28)     | removed |
+
+> London's SETTLE≠BACKTEST split (user directive "wunderground only", 2026-07-07): the market
+> pays on the WU EGLC record, so SETTLEMENT (live lock, forward scoring, the SETTLEMENT-RECORD
+> display) reads `wunderground_daily_series` — it catches between-obs peaks the whole-°C IEM
+> METAR rounds away (07-07: WU 90°F=32 vs IEM 31). The multi-year BACKTEST keeps the deep IEM
+> archive (WU history is too shallow to calibrate 10y). Config: EGLC ∈ storage._WU_SETTLE_TZ
+> and council._WU_SETTLE_C_ICAOS, but "london" ∉ council._WU_TRUTH_STATIONS. Do not collapse
+> the two or revert settlement to IEM (KAT: test_london_settlement_is_wunderground_backtest_is_iem).
 
 ## INTRADAY LOCK — the only conviction lever (certified semantics, 2026-07-06)
 - The running max is a RATCHET: "banked ≥ N" = observation-grade floor, can never go down.

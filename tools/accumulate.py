@@ -58,10 +58,11 @@ LOCK = LOGS / ".accumulate.lock"
 
 # place.label() renders as "Manila, Philippines" / "Singapore, Singapore" /
 # "London, United Kingdom", so a LIKE 'City%' prefix matches the stored rows
-# without hard-coding the suffix. London anchors on EGLC via PINNED_ANCHOR_ICAO and
-# settles on the IEM-EGLC record (its own path — deliberately NOT the WU-oracle
-# _WU_TRUTH_STATIONS/_WU_SETTLE_TZ registries, which hold the WU-feed cities:
-# Manila, Singapore, and San Francisco/KSFO — SF is on-demand, not in CITIES).
+# without hard-coding the suffix. London SETTLES on the WU EGLC oracle (EGLC ∈
+# storage._WU_SETTLE_TZ as of 2026-07-07, user directive "wunderground only") — so
+# these snapshots settle against the record the market pays on — while its multi-year
+# BACKTEST anchor stays the deep IEM-EGLC archive (London ∉ council._WU_TRUTH_STATIONS).
+# Manila/Singapore anchor AND settle on WU; SF/KSFO too but is on-demand, not in CITIES.
 CITIES = ["Manila", "Singapore", "London"]
 LEAD = 1                                   # day-ahead: the fair edge test
 TIMEOUT_S = 600                            # generous per-subprocess cap

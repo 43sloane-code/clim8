@@ -83,8 +83,29 @@ class TestWundergroundTruth(_HermeticCache, unittest.TestCase):
         hk = Place("Hong Kong", "HK", 22.3, 114.2, "Asia/Hong_Kong")
         self.assertEqual((_wu_truth_station(manila) or {}).get("icao"), "RPLL")
         self.assertEqual((_wu_truth_station(singapore) or {}).get("icao"), "WSSS")
-        self.assertIsNone(_wu_truth_station(london))   # London stays on IEM-EGLC truth
+        # London's BACKTEST anchor stays on the deep IEM-EGLC archive (WU history is too
+        # shallow to calibrate 10y on) — its SETTLEMENT, however, is WU (next test).
+        self.assertIsNone(_wu_truth_station(london))
         self.assertIsNone(_wu_truth_station(hk))
+
+    def test_london_settlement_is_wunderground_backtest_is_iem(self):
+        """The deliberate 2026-07-07 split (user directive "wunderground only"): London
+        SETTLES on the WU oracle (EGLC in the settlement registries) so the served bucket
+        matches the record the market pays on — 07-07 a 17:20 spike hit 90°F=32 that WU
+        published and IEM's whole-°C METAR rounded to 31 — while its multi-year BACKTEST
+        anchor stays the deep IEM archive (EGLC NOT a WU truth-station). Guards a future
+        dev from either collapsing the split or silently reverting settlement to IEM."""
+        from weather_council.storage import _WU_SETTLE_TZ
+        from weather_council.council import _WU_SETTLE_C_ICAOS, _WU_TRUTH_STATIONS
+        # SETTLEMENT + display read WU:
+        self.assertIn("EGLC", _WU_SETTLE_TZ)
+        self.assertEqual(_WU_SETTLE_TZ["EGLC"], "Europe/London")
+        self.assertIn("EGLC", _WU_SETTLE_C_ICAOS)
+        # BACKTEST anchor stays IEM (London is NOT a WU truth-station):
+        self.assertNotIn("london", _WU_TRUTH_STATIONS)
+        # The WU-settled °C set and the WU truth-stations are intentionally NOT identical.
+        wu_truth_icaos = {s["icao"] for s in _WU_TRUTH_STATIONS.values()}
+        self.assertIn("EGLC", _WU_SETTLE_C_ICAOS - wu_truth_icaos)
 
     def test_hourly_observations_shape_fc_sorted(self):
         # 4 obs on one local day; whole-°F -> °C, drop-in (ts, temp_c) shape.

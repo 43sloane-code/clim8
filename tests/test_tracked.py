@@ -124,20 +124,23 @@ class TestTrackedLedger(unittest.TestCase):
         conn.close()
         self.assertEqual(row, ("EGLC", "London / City Airport"))
 
-        # Fake sources that CAPTURE the Station settlement rebuilds and report a
-        # 19/11 day for the target — the value the real EGLC record holds.
+        # Fake sources that CAPTURE the settlement fetch and report a 19/11 day for
+        # the target — the value the real EGLC record holds. London settles on the WU
+        # oracle (icao in storage._WU_SETTLE_TZ), so settlement calls
+        # wunderground_daily_series(icao, ...) — the persisted station_icao routes it.
         seen = []
-        def fake_fetch(st):
-            seen.append(st)
+        def fake_wu(icao, start, end, tz):
+            seen.append(icao)
             return {self.target: (19.0, 11.0)}
-        fake = types.SimpleNamespace(fetch_station_daily=fake_fetch)
+        fake = types.SimpleNamespace(
+            wunderground_daily_series=fake_wu,
+            fetch_station_daily=lambda st: {self.target: (19.0, 11.0)})
 
         notes = storage.settle_tracked_forecasts(fake)
         self.assertEqual(len(notes), 1)
-        # The regression assertion: the rebuilt Station carries the real identity,
-        # not a blank one. Pre-fix this was icao=None, name="".
-        self.assertEqual((seen[0].icao, seen[0].name),
-                         ("EGLC", "London / City Airport"))
+        # The regression assertion: the persisted identity (station_icao) routes
+        # settlement to the right WU record. Pre-fix the icao was blank -> never settled.
+        self.assertEqual(seen[0], "EGLC")
 
         sc = storage.tracked_forecast_scores("weatherbit")
         self.assertEqual(sc["n"], 1)

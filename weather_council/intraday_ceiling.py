@@ -193,11 +193,12 @@ _NO_HOURLY = {"hong kong": True}    # settles on a daily-max-only record (no hou
 # via reports/_wu_native_intraday_sg.py.
 _WU_INTRADAY = {"singapore"}
 # Cities that consult the live WU v3 current/24h-register (floor-raise-only) — SEPARATE from
-# which hourly feed backs the running max. London settles on IEM whole-°C hourly, but that feed
-# is coarse and misses between-obs peaks: 07-07 EGLC hourly topped at 88°F (31°C) while the WU
-# register caught 90°F and the market SETTLED 32 — our lock said 31 purely because London was
-# excluded from this consult. The current reading is a real station value; fusing it closes the
-# whole-°C undershoot at the °F boundary. (Register still gated vs yesterday inside _fuse_live_floor.)
+# which hourly feed backs the running max. London's hourly running-max BACKBONE reads IEM
+# whole-°C, but that feed is coarse and misses between-obs peaks, whereas London SETTLES on WU
+# (EGLC ∈ storage._WU_SETTLE_TZ): 07-07 EGLC hourly topped at 88°F (31°C) while the WU register
+# caught 90°F and the market SETTLED 32 — our lock said 31 purely because London was excluded
+# from this consult. The current reading is a real station value; fusing it closes the whole-°C
+# undershoot at the °F boundary. (Register still gated vs yesterday inside _fuse_live_floor.)
 _LIVE_REGISTER = {"singapore", "london"}
 
 

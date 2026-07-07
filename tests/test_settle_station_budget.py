@@ -1,10 +1,10 @@
 """Network-free regression test pinning the per-station request-budget fix in
 `storage.settle_market_snapshots`.
 
-THE BUG. `fetch_station_daily` returns the weeks-stale Meteostat bulk file PLUS a
-modern recent-day overlay (HKO open-data for the Observatory, IEM ASOS METAR for
-EGLC). The overlay alone costs many requests, all drawn from the SafeHTTPClient's
-shared per-run budget (`MAX_REQUESTS_PER_RUN`). Settlement used to build ONE
+THE BUG. Recent-day settlement fetches (the `fetch_station_daily` Meteostat+overlay
+path for station-id anchors like the HKO Observatory, and the `wunderground_daily_series`
+oracle path for icao anchors like EGLC London) each cost requests drawn from the
+SafeHTTPClient's shared per-run budget (`MAX_REQUESTS_PER_RUN`). Settlement used to build ONE
 `Sources()` and reuse it — hence one shared budget — across every station's fetch.
 A heavy early fetch exhausted the budget, after which a LATER station's overlay
 silently failed and the series fell back to the bulk file (lagging ~weeks). The
@@ -102,6 +102,15 @@ class _BudgetStarvedSources:
             series[_TARGET] = (_OVERLAY_HIGH, _OVERLAY_LOW)
         return series
 
+    def wunderground_daily_series(self, icao, start, end, timezone):
+        # London (EGLC) settles on the WU oracle now, but the fetch still draws from
+        # the SAME shared per-run budget — so a heavy earlier station can starve it
+        # exactly as the overlay did. Present only while this instance has budget.
+        if self._overlays_left > 0:
+            self._overlays_left -= 1
+            return {_TARGET: (_OVERLAY_HIGH, _OVERLAY_LOW)}
+        return {}
+
 
 class TestSettleStationBudget(unittest.TestCase):
 
@@ -160,14 +169,21 @@ class TestSettleStationBudget(unittest.TestCase):
             seen.append(station.id)
             return {_TARGET: (19.0, 11.0)}
 
-        stub = types.SimpleNamespace(fetch_station_daily=fake_fetch)
+        def fake_wu(icao, start, end, timezone):     # London's WU-oracle settle path
+            seen.append(icao)
+            return {_TARGET: (19.0, 11.0)}
+
+        stub = types.SimpleNamespace(fetch_station_daily=fake_fetch,
+                                     wunderground_daily_series=fake_wu)
         # If settlement ignored the injection and built its own Sources, this stub
         # would never be called and `seen` would stay empty.
         with mock.patch.object(storage, "Sources", _BudgetStarvedSources):
             report = storage.settle_market_snapshots(stub)
 
         self.assertEqual(len(report), 2)
-        self.assertEqual(sorted(seen), ["45005", "EGLC0"])
+        # HK settles via fetch_station_daily (station id 45005); London via the WU
+        # oracle (icao EGLC) — each still routed by its persisted identity.
+        self.assertEqual(sorted(seen), ["45005", "EGLC"])
         self.assertEqual(_BudgetStarvedSources.instances, 0)   # no real Sources built
         self.assertEqual(self._settled_label("Hong Kong, HK"), "19°C")
         self.assertEqual(self._settled_label("London, United Kingdom"), "19°C")

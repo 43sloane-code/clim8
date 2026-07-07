@@ -122,7 +122,9 @@ class TestFloorSettlement(unittest.TestCase):
     def test_london_whole_degree_rounds_17_6_to_18(self):
         """London (City Airport, EGLC) settles at WHOLE °C — round-half-up, NOT
         floor — so 17.6°C -> 18°C. Pins that the floor rule does NOT leak into
-        whole-degree markets."""
+        whole-degree markets. London settles on the WU oracle (icao in
+        storage._WU_SETTLE_TZ) as of 2026-07-07, so the settlement truth is
+        wunderground_daily_series, not fetch_station_daily."""
         london = _Place("London, United Kingdom", 51.5, 0.1167)
         ts = {"kind": "station",
               "station": {"id": "EGLC0", "name": "London / City Airport",
@@ -132,6 +134,7 @@ class TestFloorSettlement(unittest.TestCase):
         storage.log_market_snapshot(_verdict(london, self.target, 17.0, 12.0, ts), cmp_)
 
         fake = types.SimpleNamespace(
+            wunderground_daily_series=lambda ic, s, e, tz: {self.target: (17.6, 12.0)},
             fetch_station_daily=lambda st: {self.target: (17.6, 12.0)})
         report = storage.settle_market_snapshots(fake)
 

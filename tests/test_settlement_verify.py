@@ -136,7 +136,9 @@ class TestSettlementVerify(unittest.TestCase):
 
     def test_verify_does_not_use_inventory_when_identity_present(self):
         """When icao/name are already persisted, verify must NOT consult the
-        inventory — the frozen-at-log identity wins (robust to inventory drift)."""
+        inventory — the frozen-at-log identity wins (robust to inventory drift).
+        London settles on the WU oracle (icao in storage._WU_SETTLE_TZ), so verify
+        reads wunderground_daily_series; the no-inventory guarantee is unchanged."""
         ts = {"kind": "station",
               "station": {"id": "EGLC0", "name": "London / City Airport",
                           "icao": "EGLC"}}
@@ -147,6 +149,7 @@ class TestSettlementVerify(unittest.TestCase):
             raise AssertionError("station_by_id used despite persisted identity")
         fake = types.SimpleNamespace(
             station_by_id=boom,
+            wunderground_daily_series=lambda ic, s, e, tz: {self.target: (21.0, 12.0)},
             fetch_station_daily=lambda st: {self.target: (21.0, 12.0)})
         notes = storage.verify(fake)
         self.assertEqual(len(notes), 1)
