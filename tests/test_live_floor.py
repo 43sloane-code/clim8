@@ -90,3 +90,26 @@ class TestDayState(unittest.TestCase):
         sh = {f"2025-0{7 if k < 28 else 8}-{(k % 28) + 1:02d}": [(12, 32.2), (15, 32.2), (17, 32.2 + (1.0 if k < 10 else 0.0))] for k in range(40)}
         self.assertAlmostEqual(state_late_risk(sh, 15, "holding", False, month=7), 10/40, places=2)
         self.assertAlmostEqual(state_late_risk(sh, 15, "holding", False, month=1), 10/40)  # DJF thin -> state-only
+
+
+class TestLondonRegisterConsult(unittest.TestCase):
+    """Regression for the 2026-07-07 London settlement UNDERSHOOT (user-caught): EGLC hourly
+    topped 31°C while the WU register caught 90°F and the market SETTLED 32. London was excluded
+    from the live-register consult (_WU_INTRADAY = {'singapore'} only), so the lock served 31."""
+
+    def test_london_now_in_register_consult(self):
+        from weather_council.intraday_ceiling import _LIVE_REGISTER, _WU_INTRADAY
+        self.assertIn("london", _LIVE_REGISTER)          # the fix: London consults the register
+        self.assertIn("singapore", _LIVE_REGISTER)       # Singapore unchanged
+        self.assertEqual(_WU_INTRADAY, {"singapore"})    # hourly source unchanged (London stays IEM)
+
+    def test_fusion_recovers_the_settled_32(self):
+        import math
+        from weather_council.sources import _fuse_live_floor
+        # EGLC 07-07: IEM hourly 31.0°C, WU current 89°F, register 90°F, yesterday 32°C.
+        floor, note = _fuse_live_floor(31.0, 89.0, 90.0, 32.0)
+        self.assertEqual(math.floor(floor + 0.5), 32)    # was 31 (hourly only) -> now 32
+        self.assertIsNotNone(note)
+        # the current reading ALONE (a real station value) already recovers it
+        floor2, _ = _fuse_live_floor(31.0, 89.0, None, 32.0)
+        self.assertEqual(math.floor(floor2 + 0.5), 32)

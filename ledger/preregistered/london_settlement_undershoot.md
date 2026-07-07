@@ -38,3 +38,17 @@ divergence loudly instead of dismissing it.
 
 ## Immediate correction
 London 07-07 = 32°C (settled). Our 31 lock was wrong. Recorded as a served-miss, not argued away.
+
+## FIXED — 2026-07-07 (same session, not deferred)
+Root cause pinned: London was excluded from the live-register consult — `_WU_INTRADAY =
+{"singapore"}` gated BOTH the hourly source AND the register consult, so EGLC never saw its own
+WU v3 current (89°F=31.7°C) / register (90°F=32.2°C). It locked off the IEM whole-°C hourly (31)
+alone. FIX: split the two concerns — new `_LIVE_REGISTER = {"singapore","london"}` gates the
+register consult independently of the hourly source; London keeps its IEM hourly but now fuses
+the WU live current/register (floor-raise-only). Re-run: London 07-07 now banks 32°C (runmax
+32.2 via the fused 90°F) — the settled bucket. KAT: tests/test_live_floor.py::TestLondonRegisterConsult
+pins both the config and the fusion recovering 32. Suite 420/420.
+Residual (still open, honestly): the register can also OVER-read (Singapore 07-07 its 91°F was
+noise, settled 32) — the register_overread_gate.md reconciliation vs the authoritative settled
+high is the remaining gated piece. But the London UNDERSHOOT — the bucket miss that actually
+happened — is fixed and tested now.

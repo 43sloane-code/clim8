@@ -192,6 +192,13 @@ _NO_HOURLY = {"hong kong": True}    # settles on a daily-max-only record (no hou
 # WU-native lever reports honest, settlement-correct conviction. Validated stable
 # via reports/_wu_native_intraday_sg.py.
 _WU_INTRADAY = {"singapore"}
+# Cities that consult the live WU v3 current/24h-register (floor-raise-only) — SEPARATE from
+# which hourly feed backs the running max. London settles on IEM whole-°C hourly, but that feed
+# is coarse and misses between-obs peaks: 07-07 EGLC hourly topped at 88°F (31°C) while the WU
+# register caught 90°F and the market SETTLED 32 — our lock said 31 purely because London was
+# excluded from this consult. The current reading is a real station value; fusing it closes the
+# whole-°C undershoot at the °F boundary. (Register still gated vs yesterday inside _fuse_live_floor.)
+_LIVE_REGISTER = {"singapore", "london"}
 
 
 def _city_key(place: Place) -> str | None:
@@ -285,7 +292,7 @@ def intraday_ceiling(place: Place, target: dt.date, *,
     live_cur = live_max24 = None
     feed = "v1"
     live_note = None
-    if use_wu and now_hour is None:              # live runs only — replays/backtests stay v1
+    if key in _LIVE_REGISTER and now_hour is None:   # live runs only — replays/backtests stay v1
         try:
             live = sources.wunderground_current_v3(icao)
             if live is not None:
