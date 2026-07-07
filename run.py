@@ -112,9 +112,11 @@ def _settlement_reference_for(place) -> dict[str, str] | None:
 
 def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict | None:
     """Build the 'compare & contrast vs the cited Wunderground airport record'
-    block for a user-pinned city (e.g. London -> EGLC). Pulls the EGLC daily
-    record from the IEM METAR archive (the feed WU displays) and contrasts it
-    with (a) the verdict for the target day, when that day has settled, and
+    block for a user-pinned city (e.g. London -> EGLC). The settlement HIGH is the
+    Wunderground oracle (the record the contract pays on); the IEM METAR archive
+    provides the window context + a whole-°C cross-reference that surfaces the °F/°C
+    boundary divergence (07-07 EGLC: WU 90°F=32 vs IEM 31). Contrasts the settlement
+    record with (a) the verdict for the target day, when that day has settled, and
     (b) the council's own anchor station over the backtest window, so any
     settlement-vs-backtest divergence is visible — the lesson from the HK miss.
 
@@ -177,6 +179,7 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
     # Bounded to the target day + the last few settled days to keep the fetch light.
     wu_days: list[dict] = []
     wu_agree = wu_total = 0
+    wu_target_high = None                     # the WU settlement high for the target day
     today = place_today(place)
     wu_dates = [d for d in recent[-4:]]
     if target <= today and target.isoformat() not in wu_dates:
@@ -193,9 +196,18 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
         if iem_b is not None:
             wu_total += 1
             wu_agree += 1 if iem_b == wu_b else 0
+        if d == target.isoformat():
+            wu_target_high = w["max_c"]
         wu_days.append({"date": d, "wu_max_c": round(w["max_c"], 1),
                         "wu_bucket": wu_b, "iem_bucket": iem_b,
                         "agree": (iem_b == wu_b)})
+    # "wunderground only" (user directive 2026-07-07): the HEADLINE target record is the WU
+    # oracle high — the value the contract pays on — even when IEM read lower at the °F
+    # boundary (07-07: WU 90°F=32 vs IEM 31). IEM stays the cross-ref in the ANCHOR block.
+    # Keep IEM's low (WU daily-max carries no min); the settlement number is the high.
+    if wu_target_high is not None:
+        iem_low = target_record[1] if target_record is not None else None
+        target_record = (wu_target_high, iem_low)
     return {
         "icao": icao,
         "name": ref["name"],
@@ -508,20 +520,22 @@ def _settlement_reference_lines(ref: dict) -> list[str]:
                  f"run. Verdict {vh:.1f}/{vl:.1f} °C still stands to be checked against it.")
         L.append("")
         return L
-    L.append(f"               (pulled from the IEM ASOS METAR archive — the same raw "
-             f"feed this page shows; native grain whole °{ref['grain']})")
+    L.append(f"               (settlement HIGH is the Wunderground oracle — the record the "
+             f"contract pays on; IEM ASOS METAR is the cross-ref below; grain whole °{ref['grain']})")
     tr = ref.get("target_record")
     vh, vl = ref.get("verdict_high"), ref.get("verdict_low")
     if tr is not None:
         rh, rl = tr
         eh = vh - rh if vh is not None else None
-        el = vl - rl if vl is not None else None
+        el = vl - rl if (vl is not None and rl is not None) else None
         settled = ref.get("target_status") != "forecast"
         word = "RECORDED" if settled else "so far (day not finished)"
-        L.append(f"    {ref['target_date']} {ref['icao']} {word}: high {rh:.0f}°  low {rl:.0f}°")
-        if eh is not None and el is not None:
+        low_txt = f"  low {rl:.0f}°" if rl is not None else ""
+        L.append(f"    {ref['target_date']} {ref['icao']} {word}: high {rh:.0f}°{low_txt}")
+        if eh is not None:
+            el_txt = f", low {el:+.1f} °C" if el is not None else ""
             L.append(f"    verdict vs record: verdict {vh:.1f}/{vl:.1f} °C — "
-                     f"high {eh:+.1f} °C, low {el:+.1f} °C vs the {ref['icao']} record"
+                     f"high {eh:+.1f} °C{el_txt} vs the {ref['icao']} record"
                      + ("" if settled else " (provisional)"))
     else:
         L.append(f"    {ref['target_date']}: no {ref['icao']} record yet (target not "
