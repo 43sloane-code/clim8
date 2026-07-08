@@ -405,16 +405,26 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
     request budget; an injected `Sources` (tests / explicit callers) is used as-is."""
     injected = sources is not None
     sources = sources or Sources()
-    cutoff = (dt.date.today() - dt.timedelta(days=2)).isoformat()
+    # Broad host-clock prefilter only; the REAL readiness test is per-row below,
+    # because "is the settlement day over" is a CITY-LOCAL question. A WU-oracle
+    # station carries a CURRENT feed and is gradable the moment its city-local day
+    # ends (T-1) — matching settle_tracked_forecasts. A blanket host today-2 cutoff
+    # both stranded completed tropical days (host runs behind SGT) and needlessly
+    # quarantined a settled WU day for an extra ~24h, leaving the proxy-vs-contract
+    # alarm blind on the freshest resolved day (2026-07-08 London 07-07 audit).
+    # Lagged-truth stations (Meteostat bulk file) keep the conservative 2-day buffer.
+    today = dt.date.today()
+    bulk_cutoff = (today - dt.timedelta(days=2)).isoformat()
     conn = _connect()
     rows = conn.execute(
         "SELECT issued_at, place, target_date, grain, buckets_json, "
         "       truth_kind, station_id, station_icao, station_name, "
         "       fc_lat, fc_lon, sub_degree FROM market_snapshots "
         "WHERE realized_label IS NULL AND target_date <= ?",
-        (cutoff,),
+        (today.isoformat(),),
     ).fetchall()
 
+    from zoneinfo import ZoneInfo
     station_cache: dict[str, dict] = {}
     report: list[str] = []
     for (issued_at, place_label, target, grain, buckets_json,
@@ -422,7 +432,18 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
          fc_lat, fc_lon, sub_degree) in rows:
         actual = None
         icao_up = (station_icao or "").upper()
-        if truth_kind == "station" and icao_up in _WU_SETTLE_TZ:
+        is_wu = truth_kind == "station" and icao_up in _WU_SETTLE_TZ
+        # Per-row readiness: a WU-oracle day settles once the CITY-LOCAL day is over
+        # (settling earlier — or on a naive host today-1 — could read a still-forming
+        # max, e.g. a US-west day is mid-afternoon locally after the host ticks over);
+        # lagged-truth stations keep the 2-day bulk-file buffer.
+        if is_wu:
+            if target >= dt.datetime.now(
+                    ZoneInfo(_WU_SETTLE_TZ[icao_up])).date().isoformat():
+                continue                   # city-local day not finished — would leak
+        elif target > bulk_cutoff:
+            continue                       # lagged-truth stations: conservative cutoff
+        if is_wu:
             # WU-truth city (Manila RPLL / Singapore WSSS): settle on the SAME
             # Wunderground oracle the verdict + contract pay out on. fetch_station_daily
             # has no WU overlay for these airports (only EGLC/HKO), so it would leave
