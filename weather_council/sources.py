@@ -161,9 +161,9 @@ def _fuse_live_floor(runmax_c, cur_f, max24_f, yesterday_max_c):
     running max. Returns (floor_c, note|None). Rules (the 07-04 lesson — 91°F posted ~45min
     late and the 24h register read 92°F while the half-hourly rows topped at 91):
       * the CURRENT reading always counts — it IS a station reading, just fresher;
-      * temperatureMax24Hour counts ONLY when it EXCEEDS yesterday's daily max — the 24h
-        window spans yesterday afternoon, so an un-attributed register value may be
-        yesterday's peak (conservative: unattributable => ignored);
+      * temperatureMax24Hour counts ONLY when it EXCEEDS yesterday's daily max AND sits within
+        a between-obs spike of today's OWN freshest evidence — the 24h window spans yesterday
+        afternoon, so a register far above today's readings is yesterday's carryover, not today;
       * the fusion can only RAISE the floor, never lower it, and never invents readings.
     Pure — KAT'd in tests/test_live_floor.py."""
     floor_c = runmax_c if runmax_c is not None else None
@@ -175,9 +175,19 @@ def _fuse_live_floor(runmax_c, cur_f, max24_f, yesterday_max_c):
     if isinstance(cur_f, (int, float)) and (floor_c is None or f2c(cur_f) > floor_c):
         floor_c = f2c(cur_f)
         note = f"live now {cur_f:.0f}°F"
+    # ATTRIBUTION GATE (2026-07-09 Singapore pre-dawn defect). "Exceeds yesterday's max" alone
+    # is NOT enough: the register carries yesterday's TRUE peak, which can clear a whole-°F-
+    # rounded yesterday row by pure granularity (89°F register vs an 88°F daily row) at an hour
+    # when today has barely warmed (current 81°F). Floored onto today, remaining-rise then
+    # projected an impossible ~37°C for a 30°C day. So also require the register to sit within a
+    # real between-obs spike (~3°F; observed 07-04/07-07 gaps were 1°F) of today's OWN freshest
+    # evidence (floor_c = obs run-max + current). A register far above that is an unattributable
+    # carryover; a register close to it is genuinely today's peak the lagging rows missed.
+    _REG_ATTR_MARGIN_C = 3.0 * 5.0 / 9.0        # 3 °F
     if isinstance(max24_f, (int, float)) and yesterday_max_c is not None \
             and f2c(max24_f) > yesterday_max_c + 1e-9 \
-            and (floor_c is None or f2c(max24_f) > floor_c):
+            and (floor_c is None or f2c(max24_f) > floor_c) \
+            and (floor_c is None or f2c(max24_f) - floor_c <= _REG_ATTR_MARGIN_C):
         floor_c = f2c(max24_f)
         note = f"live 24h-register {max24_f:.0f}°F"
     return floor_c, note

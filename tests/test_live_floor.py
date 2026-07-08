@@ -26,6 +26,24 @@ class TestFuseLiveFloor(unittest.TestCase):
         floor, note = _fuse_live_floor(32.2, 90.0, 92.0, 33.9)
         self.assertAlmostEqual(floor, 32.222, places=2)             # only the current reading
 
+    def test_stale_register_predawn_not_attributed_to_today(self):
+        # 2026-07-09 Singapore pre-dawn DEFECT: today only warmed to 27.2°C (current 81°F), but
+        # the 24h register still holds YESTERDAY's 89°F peak — which clears the whole-°F-rounded
+        # 88°F (31.1°C) yesterday row by pure granularity. It is 4.5°C above today's own freshest
+        # evidence => unattributable carryover => must NOT floor today (else remaining-rise
+        # projected an impossible ~37°C for a ~30°C day). Only the real 27.2°C obs floor survives.
+        floor, note = _fuse_live_floor(27.2, 81.0, 89.0, 31.1)
+        self.assertAlmostEqual(floor, 27.222, places=2)   # the 81°F current, NOT the 89°F (31.7°C) register
+        self.assertNotIn("register", note or "")          # the stale carryover was rejected
+
+    def test_register_at_peak_still_fuses_when_today_corroborates(self):
+        # Guard the fix does not OVER-reject: at the peak today's current (91°F) is within a
+        # between-obs spike of the 92°F register, so it IS attributable and still fuses — the
+        # 07-04 lesson must survive the attribution gate.
+        floor, note = _fuse_live_floor(32.2, 91.0, 92.0, 31.1)
+        self.assertAlmostEqual(floor, 33.333, places=2)
+        self.assertIn("24h-register 92", note)
+
     def test_never_lowers_and_none_safe(self):
         floor, note = _fuse_live_floor(33.0, 88.0, 89.0, 30.0)      # both below the floor
         self.assertEqual((floor, note), (33.0, None))

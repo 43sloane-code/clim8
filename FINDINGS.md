@@ -183,3 +183,33 @@ A **calibrated forecaster with real-but-modest skill** (+0.22 BSS over climatolo
 **Gate label: INSTRUMENTATION (labeling/timing, HARD RULE 2 — ships without the served-number gate).** It changes *when* a day's realized bucket is recorded, never the bucket VALUE: WU dailies do not revise, proven for the motivating case (EGLC 07-07 = **32°C** whether read at T−1 or T−2, and = the contract's paid 32°C). No forecast, pmf, weight, or served pick moves. Pinned by KAT `tests/test_settle_tz_early.py` (4 cases: WU-city-yesterday settles · WU-city-today skipped/no-leak · lagged-station T−1 buffered · lagged-station T−4 clears) + full gate **429 green**.
 
 **Challenge:** the readiness test trusts that a WU city's daily max is final the instant its city-local calendar day ends. If the WU oracle ever *revised* a prior-day max after midnight-local (it has not been observed to), settling at T−1 would lock a pre-revision value the T−2 buffer would have caught. The proxy-vs-contract alarm remains the backstop: any such revision that changed the paid bucket would surface as a genuine gap on the next audit.
+
+---
+
+## 14. Register attribution defect fixed — pre-peak carryover no longer floors today (CORRECTNESS)
+*Added 2026-07-09.* `_fuse_live_floor` (sources.py) fused the WU v3 24h-register into today's
+intraday running-max whenever it "exceeded yesterday's max." At pre-peak hours that gate is
+insufficient: the register carries yesterday's TRUE peak, which clears a whole-°F-rounded
+yesterday row by pure granularity (89°F register vs an 88°F daily row) while today has barely
+warmed. Live defect (Singapore 07-09, 06:54 SGT): today's obs max was 27°C (current 81°F) but
+the ceiling floored today at 31.7°C on the 89°F register, then projected remaining-rise on top
+→ an impossible **35–38°C** sharpened pmf for a ~30°C day.
+
+**Fix:** add an attribution-margin gate — the register fuses only when it also sits within a
+real between-obs spike (**3°F**; observed 07-04/07-07 gaps were 1°F) of today's OWN freshest
+evidence (obs run-max + current, already in `floor_c`). A register far above today's readings
+is an unattributable carryover and is dropped; a register close to them is genuinely today's
+peak the lagging rows missed. Live re-check: Singapore ceiling now reads run-max 27.2°C and a
+sane pmf (32°C 28% · 31°C 26% · 33°C 21%).
+
+**Gate label: CORRECTNESS (bug fix).** It changes served output ONLY in the buggy regime (a
+register unattributable to today); the certified afternoon lock is untouched — at the peak
+today's current is within the margin, so the 07-04/07-07 register recoveries still fire
+(pinned). KAT `tests/test_live_floor.py`: `test_stale_register_predawn_not_attributed_to_today`
+(defect rejected) + `test_register_at_peak_still_fuses_when_today_corroborates` (no over-reject);
+all prior live-floor KATs unchanged. Full gate **431 green**.
+
+**Challenge:** the 3°F margin assumes a true between-obs spike never exceeds ~3°F above today's
+freshest reading. If a genuine sharp spike did (rare at 30-min obs cadence), it would be
+rejected and the lock would use the slightly lower current reading — conservative, not wrong.
+The settle-cross-check divergence alarm remains the backstop for any register/settlement gap.
