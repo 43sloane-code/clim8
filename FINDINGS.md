@@ -307,3 +307,19 @@ evidence-graded output; conviction is uncertified/forward-accruing like every ne
 ## Removed: LAX (Los Angeles / KLAX on-demand)
 The held LAX work was removed from the working tree per user directive (2026-07-09) and stashed
 (`git stash`, recoverable). It was never committed; main was always LAX-free.
+
+---
+
+## 18. Jeddah added (King Abdulaziz / OEJN) — WU-anchored whole-°C (FEATURE)
+*Added 2026-07-09.* New WU-oracle settlement city, London pattern (whole-°C round-half-up,
+WU-settled, IEM-backtested + overlay, IEM hourly intraday + WU v3 register). Cleaner than
+Karachi: the Polymarket "Highest temperature in Jeddah" market (~21k USDC) settles on King
+Abdulaziz Intl (OEJN) ITSELF — no separate/proxy settlement station. Same six config points
+as Karachi (§17): sources WU maps + _IEM_OVERLAY_TZ; storage _WU_SETTLE_TZ; council pin/strict/
+_WU_SETTLE_C_ICAOS; run SETTLEMENT_REFERENCE; intraday _CITY_CONFIG; intraday_ceiling
+_HOURLY_STATION/_LIVE_REGISTER. KAT tests/test_jeddah.py. Full gate 446 green.
+
+**Character: the hardest/widest city yet.** Jeddah is high-variance desert — LOW point
+reliability, a 4-bucket day-ahead band (37–40°C @ 94%), recent 3 weeks spanning 34–41°C. The
+model leans 38 (verdict 38.3), the market leans 39; both sit ~2–3°C above the July climatological
+mode of 36 — a warm spell. WU↔IEM settlement agree. Conviction forward-accruing (new city).

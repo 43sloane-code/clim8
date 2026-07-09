@@ -188,6 +188,7 @@ _HOURLY_STATION = {
     "singapore": ("WSSS", "Asia/Singapore", False, "Changi"),
     "san francisco": ("KSFO", "America/Los_Angeles", False, "San Francisco Intl"),
     "karachi": ("OPKC", "Asia/Karachi", False, "Jinnah Intl"),
+    "jeddah": ("OEJN", "Asia/Riyadh", False, "King Abdulaziz Intl"),
 }
 _NO_HOURLY = {"hong kong": True}    # settles on a daily-max-only record (no hourly)
 # Settlement UNIT per city: whole °C everywhere except San Francisco, which settles
@@ -208,7 +209,7 @@ _WU_INTRADAY = {"singapore", "san francisco"}
 # caught 90°F and the market SETTLED 32 — our lock said 31 purely because London was excluded
 # from this consult. The current reading is a real station value; fusing it closes the whole-°C
 # undershoot at the °F boundary. (Register still gated vs yesterday inside _fuse_live_floor.)
-_LIVE_REGISTER = {"singapore", "london", "san francisco", "karachi"}
+_LIVE_REGISTER = {"singapore", "london", "san francisco", "karachi", "jeddah"}
 
 
 def _city_key(place: Place) -> str | None:

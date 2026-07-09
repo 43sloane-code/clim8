@@ -85,6 +85,13 @@ SETTLEMENT_REFERENCE: dict[str, dict[str, str]] = {
         # with the live IEM overlay closing the ~110-day Meteostat lag.
         "url": "https://www.wunderground.com/history/daily/pk/karachi/OPKC",
     },
+    "jeddah": {
+        "icao": "OEJN",
+        "name": "King Abdulaziz International Airport",
+        # The contract settles on King Abdulaziz Intl (OEJN) itself — no separate
+        # settlement station. WU-settled whole-°C, IEM-backtested, live IEM overlay.
+        "url": "https://www.wunderground.com/history/daily/sa/jeddah/OEJN",
+    },
 }
 
 # Cities anchored on a NON-airport settlement station, with a nearby airport shown

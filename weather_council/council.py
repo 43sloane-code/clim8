@@ -136,7 +136,7 @@ SEASON_MATCH_DAYS = 31
 # settles on. Keyed by case-insensitive city-name substring -> the anchor's ICAO.
 # London weather markets settle on London City Airport (EGLC), ~17 km east of the
 # nearest station (the central London Weather Centre), so we prefer EGLC.
-PINNED_ANCHOR_ICAO = {"london": "EGLC", "karachi": "OPKC"}
+PINNED_ANCHOR_ICAO = {"london": "EGLC", "karachi": "OPKC", "jeddah": "OEJN"}
 
 # ICAO-pinned cities whose anchor is STRICT — the same rule as the HKO anchor:
 # when the pinned airport's feed is stale/unavailable, the verdict must NOT
@@ -145,7 +145,7 @@ PINNED_ANCHOR_ICAO = {"london": "EGLC", "karachi": "OPKC"}
 # two physical sensors that read differently, making the verdict jump between
 # stations and read as model imprecision. So for these cities it is EGLC-or-honest
 # -ERA5-grid, never a substitute station. (See _resolve_truth.)
-STRICT_ANCHOR_ICAO = {"london", "karachi"}
+STRICT_ANCHOR_ICAO = {"london", "karachi", "jeddah"}
 
 # Cities pinned to the Hong Kong Royal Observatory anchor. The Observatory has no
 # ICAO (it is not an airport), so it is identified structurally by
@@ -183,7 +183,7 @@ _WU_TRUTH_STATIONS = {
 # rounded it to 31) while its backtest keeps IEM's 10y history. WSSS/RPLL already anchor on WU;
 # listing them keeps _settlement consistent. These three settle whole °C (round-half-up); KSFO
 # settles whole °F and keeps the grain-detected fetch_metar_daily path, so it is NOT here.
-_WU_SETTLE_C_ICAOS = {"EGLC", "WSSS", "RPLL", "OPKC"}
+_WU_SETTLE_C_ICAOS = {"EGLC", "WSSS", "RPLL", "OPKC", "OEJN"}
 
 
 def _wu_truth_station(place) -> dict | None:
