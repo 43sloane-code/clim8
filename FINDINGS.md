@@ -372,3 +372,21 @@ daily_max_still_fuses` preserves London 07-07). KAT `test_register_phantom_cappe
 pins Jeddah; all prior live-floor KATs unchanged. Full gate 448 green. Third register-related fix
 this session (attribution timing → attribution margin → phantom cap); the register is now bounded
 on all three sides.
+
+---
+
+## 21. SF marine-layer regime day-ahead lever — DEAD (real signal, sub-bucket-width), D18
+*Added 2026-07-09, user-requested gate test.* Hypothesis: after a recent-cool regime SF's day-
+ahead should lean one bucket cooler than the naive rebound (the 07-09 miss: model+market 68-69,
+settled 66-67). Leak-free walk-forward on the 10y KSFO series (n=3609): the regime<->residual
+correlation is **real and stable** — r=+0.20 on BOTH halves (.201/.200), in the hypothesized
+direction. But it FAILS the gate: MAE improvement +0.065°F is negligible (~1.5% of a 4°F MAE,
+within noise), and the economic object (2°F bucket-hit) is NOT sign-stable (H1 +0.2, H2 -0.8 pts).
+The signal is smaller than SF's day-to-day variance, so it can't reliably move the settled bucket
+— the σ-ceiling, exactly. (Data-derivable baseline; the NWP council already ingests marine-layer
+physics, so the signal is likely MORE redundant there — FAIL is the robust call.) Dead-ledger D18.
+
+**The honest lesson:** "the charts should show how it'll move" is right that the signal EXISTS
+(r=0.20) — but day-ahead bucket accuracy is information-limited, not effort-limited: noticing a
+sub-bucket-width signal doesn't move the bucket. This is why model AND market both missed 66-67
+day-ahead and both only resolved it intraday. The intraday lock is the only conviction lever.
