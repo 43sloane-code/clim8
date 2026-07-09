@@ -59,6 +59,7 @@ from weather_council.council import (Council, WEIGHT_POWER,  # noqa: E402
                                      _weighted_std)
 from weather_council.edge import report_lines as edge_report_lines  # noqa: E402
 from weather_council.edge import score_snapshots  # noqa: E402
+from weather_council.failures import soft_failure_counts, recent_soft_failures  # noqa: E402
 from weather_council.scoring import crps_sample, interval_coverage, pit  # noqa: E402
 from weather_council.spread_skill import spread_skill_eval  # noqa: E402
 from weather_council.ensemble_verification import (rank_histogram_eval,  # noqa: E402
@@ -1138,6 +1139,45 @@ def main() -> int:
                 lines.append(f"  No promotion case: Weatherbit does not beat the council beyond "
                              f"the {MIN_IMPROVEMENT} °C floor (delta {delta:+.3f} °C). "
                              "Remains tracked-only.")
+    lines.append("")
+
+    # SOFT-FAILURE SURFACING (Phase 6b) — the deliberately-swallowed except-blocks
+    # in the settlement path (storage.settle_market_snapshots WU/station fetch,
+    # intraday_ceiling register consult) now RECORD instead of vanishing. A
+    # settlement-source swallow is invisible data corruption — the day just does
+    # not settle and absence reads as success — so any settlement-tagged failure in
+    # the last 24h is an ALARM here. Read-only: this only reports the ledger the
+    # swallow already wrote; it never changes control flow or a served number.
+    lines.append("SOFT FAILURES (swallowed exceptions, last 24h — settlement-tagged = ALARM)")
+    try:
+        counts = soft_failure_counts(24)
+    except Exception as exc:
+        counts = {}
+        lines.append(f"  soft-failure ledger unavailable this run ({exc}).")
+    # A tag is settlement-critical when a swallow there can silently drop a
+    # settlement/lock: the WU/station settle fetches and the register consult.
+    _SETTLE_TAGS = ("settle_", "register")
+    if not counts:
+        lines.append("  none recorded in the last 24h.")
+    else:
+        alarms = {t: n for t, n in counts.items()
+                  if any(t.startswith(p) or p in t for p in _SETTLE_TAGS)}
+        for tag, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+            flag = "  ⚠ ALARM (settlement path)" if tag in alarms else ""
+            lines.append(f"  {tag:26} {n:4}{flag}")
+        if alarms:
+            # Show the most recent settlement-tagged detail so the operator can act
+            # without opening the DB — which feed failed, and how.
+            recent = [r for r in recent_soft_failures(24)
+                      if r["tag"] in alarms]
+            if recent:
+                r0 = recent[0]
+                lines.append(f"    → latest: {r0['at']}  {r0['tag']}  "
+                             f"{r0['etype']}: {(r0['detail'] or '')[:80]}")
+            lines.append("    RECOMMENDATION: a settlement source is silently failing — "
+                         "days may be going unsettled. A human should investigate the feed "
+                         "before trusting today's coverage.")
+            status_reco.append("soft-failure ALARM: " + ", ".join(sorted(alarms)))
     lines.append("")
 
     lines.append(f"requests made this run: {total_requests} "

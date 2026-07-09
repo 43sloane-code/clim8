@@ -28,6 +28,7 @@ import sqlite3
 from pathlib import Path
 
 from .council import Verdict
+from .failures import record_soft_failure
 from .market import (MarketData, _bucket_edges, _native_reading_int,
                      resolved_event_slug)
 from .sources import Place, Sources, Station
@@ -467,7 +468,8 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
             try:
                 actual = fetcher.wunderground_daily_series(
                     icao_up, day, day, _WU_SETTLE_TZ[icao_up]).get(target)
-            except Exception:
+            except Exception as exc:
+                record_soft_failure("settle_wu_fetch", exc)   # swallow stays; no longer silent
                 actual = None
         elif truth_kind == "station" and station_id:
             series = station_cache.get(station_id)
@@ -486,7 +488,8 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
                                 icao=station_icao or None,
                                 latitude=fc_lat or 0.0, longitude=fc_lon or 0.0,
                                 elevation=None, distance_km=0.0))
-                except Exception:
+                except Exception as exc:
+                    record_soft_failure("settle_station_fetch", exc)   # swallow stays; not silent
                     series = {}
                 station_cache[station_id] = series
             actual = series.get(target)

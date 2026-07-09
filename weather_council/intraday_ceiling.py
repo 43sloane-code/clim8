@@ -324,7 +324,9 @@ def intraday_ceiling(place: Place, target: dt.date, *,
                 if fused is not None and (running_max is None or fused > running_max):
                     running_max = fused
                 feed = "wu+live"
-        except Exception:
+        except Exception as exc:
+            from .failures import record_soft_failure
+            record_soft_failure("ceiling_register_consult", exc)   # swallow stays; not silent
             pass
 
     history = {d: o for d, o in by_date.items() if d < tgt_iso}
