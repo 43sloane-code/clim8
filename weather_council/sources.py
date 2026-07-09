@@ -153,7 +153,8 @@ def _history_cache_read(key: str):
     f = HISTORY_CACHE_DIR / f"{key}.json"
     try:
         raw = f.read_text(encoding="utf-8")
-        age = dt.datetime.now() - dt.datetime.fromtimestamp(f.stat().st_mtime)
+        age = (dt.datetime.now(dt.timezone.utc)
+               - dt.datetime.fromtimestamp(f.stat().st_mtime, tz=dt.timezone.utc))  # UTC-aware (charter)
     except OSError:
         return None, None
     try:

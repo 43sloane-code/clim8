@@ -18,7 +18,8 @@ from __future__ import annotations
 __all__ = [
     'log_verdict', 'verify', 'log_market_snapshot', 'settle_market_snapshots',
     'fetch_settled_snapshots', 'log_tracked_forecast', 'settle_tracked_forecasts',
-    'tracked_forecast_scores', 'backfill_pm_resolutions', 'live_bucket_scorecard'
+    'tracked_forecast_scores', 'backfill_pm_resolutions', 'live_bucket_scorecard',
+    'utc_now_iso'
 ]
 
 import datetime as dt
@@ -32,6 +33,16 @@ from .market import (MarketData, _bucket_edges, _native_reading_int,
 from .sources import Place, Sources, Station
 
 DB_PATH = Path(__file__).resolve().parent.parent / "verdicts.db"
+
+
+def utc_now_iso() -> str:
+    """The persisted-timestamp convention (charter: UTC is non-optional). Returns a UTC
+    wall-clock instant in NAIVE ISO format (no offset), seconds precision. Naive format is
+    deliberate: it keeps new rows byte-compatible with legacy `issued_at` values so the
+    lexicographic ordering that `paper_pnl._load_from_db` relies on (ORDER BY … issued_at,
+    first-issued = least-leaking) never breaks across the pre/post-UTC boundary. Columns store
+    UTC wall-clock, naive format."""
+    return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
 
 
 def _connect() -> sqlite3.Connection:
@@ -189,7 +200,7 @@ def log_verdict(v: Verdict) -> None:
             "(issued_at, place, target_date, high, low, confidence, "
             " truth_kind, station_id, station_icao, station_name, fc_lat, fc_lon) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (dt.datetime.now().isoformat(timespec="seconds"),
+            (utc_now_iso(),
              v.place.label(), v.target, v.high, v.low, v.confidence,
              ts.get("kind"), station.get("id") or None,
              station.get("icao") or None, station.get("name") or None,
@@ -342,7 +353,7 @@ def log_market_snapshot(v: Verdict, comparison) -> None:
             " truth_kind, station_id, station_icao, station_name, fc_lat, fc_lon, "
             " market_volume, market_liquidity, sub_degree) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (dt.datetime.now().isoformat(timespec="seconds"),
+            (utc_now_iso(),
              v.place.label(), v.target, comparison.market_title, comparison.grain,
              json.dumps(buckets), ts.get("kind"), station.get("id") or None,
              station.get("icao") or None, station.get("name") or None,
@@ -500,7 +511,7 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
             conn.execute(
                 "UPDATE market_snapshots SET realized_high=?, realized_label=?, "
                 "settled_at=? WHERE issued_at=? AND place=? AND target_date=?",
-                (realized_high, label, dt.datetime.now().isoformat(timespec="seconds"),
+                (realized_high, label, utc_now_iso(),
                  issued_at, place_label, target),
             )
         report.append(
@@ -541,7 +552,7 @@ def backfill_pm_resolutions(market_data: "MarketData | None" = None,
         res = md.fetch_resolution(resolved_event_slug(place_label, day))
         if res is None or not res.resolved or not res.winning_label:
             continue                       # not finalized / not found — retry later
-        now = dt.datetime.now().isoformat(timespec="seconds")
+        now = utc_now_iso()
         with conn:
             conn.execute(
                 "UPDATE market_snapshots SET pm_resolved_label=?, pm_resolved_at=? "
@@ -710,7 +721,7 @@ def log_tracked_forecast(source: str, place: Place, target: str,
             " council_high, council_low, truth_kind, station_id, "
             " station_icao, station_name, fc_lat, fc_lon) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (source, dt.datetime.now().isoformat(timespec="seconds"),
+            (source, utc_now_iso(),
              place.label(), target, fc_high, fc_low,
              council_high, council_low, ts.get("kind"),
              station.get("id") or None,
@@ -761,7 +772,7 @@ def settle_tracked_forecasts(sources: Sources | None = None) -> list[str]:
             conn.execute(
                 "UPDATE tracked_forecasts SET actual_high=?, actual_low=?, settled_at=? "
                 "WHERE source=? AND place=? AND target_date=?",
-                (a_high, a_low, dt.datetime.now().isoformat(timespec="seconds"),
+                (a_high, a_low, utc_now_iso(),
                  source, place_label, target),
             )
         report.append(f"{source}/{place_label} {target}: "

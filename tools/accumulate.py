@@ -175,6 +175,14 @@ def main() -> int:
         return 0
 
     _log("=== accumulate start ===")
+    # Belt-and-braces (charter: UTC is non-optional). Persisted timestamps go through
+    # storage.utc_now_iso() so they are UTC regardless of the host clock; but a machine on a
+    # non-UTC local zone is still a latent hazard (city-local date math, cron firing). Surface
+    # it loudly at startup so drift is visible before it corrupts anything.
+    import time as _time
+    if _time.localtime().tm_gmtoff != 0:
+        _log(f"WARN: host is NOT on UTC (gmtoff={_time.localtime().tm_gmtoff}s) — "
+             f"persisted timestamps stay UTC via utc_now_iso(), but verify city-local date math")
 
     # 1. Day-ahead snapshots, idempotent per city per day.
     for city in CITIES:
