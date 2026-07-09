@@ -19,7 +19,7 @@ __all__ = [
     'log_verdict', 'verify', 'log_market_snapshot', 'settle_market_snapshots',
     'fetch_settled_snapshots', 'log_tracked_forecast', 'settle_tracked_forecasts',
     'tracked_forecast_scores', 'backfill_pm_resolutions', 'live_bucket_scorecard',
-    'utc_now_iso'
+    'log_book_snapshots', 'book_snapshot_coverage', 'utc_now_iso'
 ]
 
 import datetime as dt
@@ -355,13 +355,18 @@ def _reverse_place(sources: Sources, label: str):
 # C7 — market-snapshot ledger and realized-outcome settlement.                #
 # --------------------------------------------------------------------------- #
 
-def log_market_snapshot(v: Verdict, comparison) -> None:
+def log_market_snapshot(v: Verdict, comparison, issued_at: str | None = None) -> str:
     """Persist one council-vs-market comparison for later realized-outcome
     grading. Stores the full bucket ladder with both probability columns; the
     realized bucket is filled in later by `settle_market_snapshots` against the
     verdict's anchor station. `comparison` is a compare.VerdictMarketComparison
     (or anything exposing `.grain`, `.market_title`, and `.buckets` of objects
-    with `.label/.lo/.hi/.model_prob/.market_prob`)."""
+    with `.label/.lo/.hi/.model_prob/.market_prob`).
+
+    `issued_at` defaults to the current UTC instant; a caller may PASS one so the
+    order-book archive (book_snapshots, Phase 4) shares the EXACT same instant and
+    the two join on (place, target_date, issued_at). Returns the issued_at used."""
+    issued_at = issued_at or utc_now_iso()
     ts = v.truth_source or {}
     station = ts.get("station") or {}
     # Persist the read-only market microstructure alongside the two probability
@@ -388,7 +393,7 @@ def log_market_snapshot(v: Verdict, comparison) -> None:
             " truth_kind, station_id, station_icao, station_name, fc_lat, fc_lon, "
             " market_volume, market_liquidity, sub_degree) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (utc_now_iso(),
+            (issued_at,
              v.place.label(), v.target, comparison.market_title, comparison.grain,
              json.dumps(buckets), ts.get("kind"), station.get("id") or None,
              station.get("icao") or None, station.get("name") or None,
@@ -398,6 +403,71 @@ def log_market_snapshot(v: Verdict, comparison) -> None:
              int(bool(getattr(comparison, "settles_sub_degree", False)))),
         )
     conn.close()
+    return issued_at
+
+
+def log_book_snapshots(place_label: str, target: str, issued_at: str,
+                       rows: list[dict]) -> int:
+    """Persist a batch of order-book captures into book_snapshots (Phase 4). Each
+    `rows` entry is one token's capture at `issued_at` — the SAME instant passed to
+    log_market_snapshot, so the book and the price snapshot join on
+    (place, target_date, issued_at). Pure DB write: NO network, NO fetch (the caller
+    — book_logger — does the read-only fetch and passes results here), and it never
+    touches a served probability, vote, or trade.
+
+    A `rows` entry must carry: token_id, and either fetch_ok=True with a `stats` dict
+    (from clob_book.book_stats) + `book_json`, or fetch_ok=False with an `error`
+    string. Missing keys default to NULL. Returns the number of rows written."""
+    conn = _connect()
+    with conn:
+        for r in rows:
+            stats = r.get("stats") or {}
+            conn.execute(
+                "INSERT OR REPLACE INTO book_snapshots "
+                "(issued_at, place, target_date, token_id, bucket_label, fetch_ok, "
+                " best_bid, best_ask, mid, spread, bid_depth_usd, ask_depth_usd, "
+                " n_bid_levels, n_ask_levels, book_ts, book_json, error) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (issued_at, place_label, target, str(r.get("token_id") or ""),
+                 r.get("bucket_label"), 1 if r.get("fetch_ok") else 0,
+                 stats.get("best_bid"), stats.get("best_ask"), stats.get("mid"),
+                 stats.get("spread"), stats.get("bid_depth_usd"),
+                 stats.get("ask_depth_usd"), stats.get("n_bid_levels"),
+                 stats.get("n_ask_levels"), stats.get("timestamp"),
+                 r.get("book_json"), r.get("error")),
+            )
+    conn.close()
+    return len(rows)
+
+
+def book_snapshot_coverage(hours: int = 24) -> dict:
+    """Read-only summary of order-book capture over the last `hours`: how many rows,
+    how many fetched OK vs failed, and how many distinct (place, target, instant)
+    capture batches ran. The healthcheck surfaces this so a silent capture stall is
+    visible. Returns zeros when the table is empty/absent (never raises)."""
+    cutoff = (dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+              - dt.timedelta(hours=hours)).isoformat(timespec="seconds")
+    try:
+        conn = _connect()
+        row = conn.execute(
+            "SELECT COUNT(*), "
+            "       COALESCE(SUM(fetch_ok), 0), "
+            "       COUNT(DISTINCT place || '|' || target_date || '|' || issued_at), "
+            "       COUNT(DISTINCT place) "
+            "FROM book_snapshots WHERE issued_at >= ?", (cutoff,)).fetchone()
+        by_place = conn.execute(
+            "SELECT place, COUNT(*), COALESCE(SUM(fetch_ok), 0) "
+            "FROM book_snapshots WHERE issued_at >= ? GROUP BY place", (cutoff,)).fetchall()
+        conn.close()
+    except Exception:
+        return {"rows": 0, "ok": 0, "failed": 0, "batches": 0, "places": 0, "by_place": {}}
+    total, ok, batches, places = row
+    return {
+        "rows": int(total), "ok": int(ok), "failed": int(total) - int(ok),
+        "batches": int(batches), "places": int(places),
+        "by_place": {p: {"rows": int(n), "ok": int(o), "failed": int(n) - int(o)}
+                     for p, n, o in by_place},
+    }
 
 
 def _bucket_for_reading(buckets: list[dict], reading_int: int) -> str | None:

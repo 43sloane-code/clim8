@@ -34,6 +34,10 @@ from .security import SafeHTTPClient, SecurityError
 from .sources import _round_half_up  # one shared settlement-rounding convention
 
 EVENTS_URL = "https://gamma-api.polymarket.com/events"
+# Polymarket CLOB market-data endpoint for ONE token's live order book. Public,
+# keyless, READ-ONLY (market data, not the signed trading surface). Consumed only
+# to archive executable depth beside a price snapshot; see clob_book / book_logger.
+CLOB_BOOK_URL = "https://clob.polymarket.com/book"
 # Gamma tag for the daily city high-temperature markets that settle on a named
 # airport station — the markets this project can actually speak to.
 HIGHEST_TEMP_TAG = 104596
@@ -555,6 +559,24 @@ class MarketData:
         event = next((e for e in (raw or [])
                       if isinstance(e, dict) and str(e.get("slug")) == slug), None)
         return _parse_event(event) if event is not None else None
+
+    def fetch_order_book(self, token_id: str) -> dict | None:
+        """Read-only fetch of ONE token's live CLOB order book (bid/ask levels and
+        sizes) from the public market-data endpoint. Parse the payload with
+        clob_book.parse_book. Returns the raw dict, or None when the token is empty
+        or the response is unusable. Market-DATA only: no order is placed, and no
+        key or signature is ever sent. A sandbox SecurityError is propagated (like
+        the other fetchers) so a real allowlist/SSRF violation is never swallowed
+        here; ordinary fetch failures return None for the caller to record."""
+        if not token_id:
+            return None
+        try:
+            raw = self.http.get_json(CLOB_BOOK_URL, {"token_id": str(token_id)})
+        except SecurityError:
+            raise
+        except Exception:
+            return None
+        return raw if isinstance(raw, dict) else None
 
     def fetch_resolution(self, slug: str) -> Resolution | None:
         """Read one settled event's authoritative outcome by slug. Returns a

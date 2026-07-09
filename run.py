@@ -2014,7 +2014,15 @@ def main(argv=None) -> int:
             if comparison is not None:
                 # Persist the comparison so C7 can grade it once the day settles
                 # against the verdict's anchor station (recommend-only ledger).
-                log_market_snapshot(verdict, comparison)
+                issued_at = log_market_snapshot(verdict, comparison)
+                # Read-only: archive the executable order book at the SAME instant
+                # (focus cities only). Depth-walk P&L (paper_pnl) is measured against
+                # the mid this comparison used. Never breaks the verdict on failure.
+                try:
+                    from tools.book_logger import capture_for_place
+                    capture_for_place(sources, place, target, issued_at)
+                except Exception:
+                    pass
             # Read-only LOW market comparison (own event; not yet persisted/settled —
             # low-snapshot logging + daily-min settlement is the registered follow-up).
             low_comparison = _build_comparison_low(sources, verdict, place, target)

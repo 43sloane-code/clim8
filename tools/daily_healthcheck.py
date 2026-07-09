@@ -67,7 +67,8 @@ from weather_council.ensemble_verification import (rank_histogram_eval,  # noqa:
 from weather_council.storage import (fetch_settled_snapshots,  # noqa: E402
                                      log_market_snapshot, settle_market_snapshots,
                                      log_tracked_forecast, settle_tracked_forecasts,
-                                     tracked_forecast_scores)
+                                     tracked_forecast_scores, book_snapshot_coverage)
+from tools.book_logger import capture_for_place           # noqa: E402
 # The REAL live model-vs-market comparison path. Reused verbatim (not
 # reimplemented) so the bucket probabilities the health check logs are byte-for-byte
 # what a live verdict would log — the only way C7's settled grading stays honest.
@@ -363,7 +364,14 @@ def _city_market_snapshot(council, place, fp, target, votes, observed, truth):
     )
     comparison, note = _build_comparison(council.sources, shim, place, target)
     if comparison is not None:
-        log_market_snapshot(shim, comparison)          # recommend-only ledger
+        issued_at = log_market_snapshot(shim, comparison)   # recommend-only ledger
+        # Read-only: archive the executable order book at the SAME instant (focus
+        # cities only, e.g. Singapore in this basket) so depth-walk P&L can later be
+        # measured against the mid. Never lets a book fetch abort the health check.
+        try:
+            capture_for_place(council.sources, place, target.isoformat(), issued_at)
+        except Exception:
+            pass
     return comparison, note
 
 
@@ -1178,6 +1186,34 @@ def main() -> int:
                          "days may be going unsettled. A human should investigate the feed "
                          "before trusting today's coverage.")
             status_reco.append("soft-failure ALARM: " + ", ".join(sorted(alarms)))
+    lines.append("")
+
+    # ORDER-BOOK CAPTURE (Phase 4) — is the executable-depth archive actually
+    # growing? Read-only view of book_snapshots over the last 24h. A capture that
+    # ran but returned mostly fetch_ok=0 rows means the CLOB books were unavailable
+    # (the depth-walk P&L would be blind), so a high failure share is flagged.
+    lines.append("ORDER-BOOK CAPTURE (executable depth archive, last 24h — read-only)")
+    try:
+        cov = book_snapshot_coverage(24)
+    except Exception as exc:
+        cov = None
+        lines.append(f"  book-coverage unavailable this run ({exc}).")
+    if cov is not None:
+        if cov["rows"] == 0:
+            lines.append("  no order-book rows captured in the last 24h "
+                         "(focus cities: Jakarta, Jeddah, Singapore, London, San Francisco).")
+        else:
+            fail_share = cov["failed"] / cov["rows"] if cov["rows"] else 0.0
+            flag = "  ⚠ mostly-empty books" if fail_share >= 0.5 else ""
+            lines.append(f"  {cov['rows']} token row(s) across {cov['batches']} capture(s) / "
+                         f"{cov['places']} city(ies): {cov['ok']} OK, {cov['failed']} "
+                         f"failed ({fail_share*100:.0f}% empty){flag}")
+            for place, pc in sorted(cov["by_place"].items()):
+                lines.append(f"    {place:24} {pc['ok']:3} OK / {pc['failed']:3} failed")
+            if fail_share >= 0.5:
+                lines.append("    NOTE (human review): most captured books were empty/"
+                             "unavailable — executable P&L would be blind on these; check the "
+                             "CLOB feed before trusting depth-walk numbers.")
     lines.append("")
 
     lines.append(f"requests made this run: {total_requests} "
