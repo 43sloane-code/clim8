@@ -323,3 +323,28 @@ _HOURLY_STATION/_LIVE_REGISTER. KAT tests/test_jeddah.py. Full gate 446 green.
 reliability, a 4-bucket day-ahead band (37–40°C @ 94%), recent 3 weeks spanning 34–41°C. The
 model leans 38 (verdict 38.3), the market leans 39; both sit ~2–3°C above the July climatological
 mode of 36 — a warm spell. WU↔IEM settlement agree. Conviction forward-accruing (new city).
+
+---
+
+## 19. 10-year IEM archives for Karachi (OPKC) + Jeddah (OEJN); intraday-conviction profiles
+*Added 2026-07-09.* The new WU cities were running on a ~229-day live fetch; the established
+cities (WSSS/EGLC/KSFO) carry committed 10-year IEM archives. Built the same for the new two via
+`tools/backfill_obs_history.py --years 10 --source iem` (added OPKC/OEJN to its `_TZ`): committed
+gzipped `data/opkc_hourly_iem.jsonl.gz` (3647 days) and `data/oejn_hourly_iem.jsonl.gz` (3643
+days), 2016→2026 — same tracked-.gz convention as the existing archives (raw .jsonl stays local).
+
+**Intraday-conviction profiles (floor-lock = P(running-max bucket at hour H already equals the
+final settled bucket), from the historical feed):**
+
+| local hour | Jeddah °C (10y n=3643) | Karachi °C (10y n=3647) | SF 2°F (10y n=3649) |
+|---|---|---|---|
+| 13:00 | 80% | 47% | 40% |
+| 14:00 | 92% | 78% | 66% |
+| 15:00 | 97% | 95% | 86% |
+| 16:00 | 99% | 99% | 96% |
+
+Jeddah locks earliest (sharp desert peak ~13-14, rise-left 0°C by 12:00); Karachi/SF lock in the
+15:00-16:00 window. 10-year and 229-day curves agree (stable). **Grade: backtest, IN-SAMPLE — a
+real observed rate, NOT the certified frozen-A/B gate.** Observation-grade by construction (no
+model — just "did the day rise into a higher bucket after H"). This is the honest forward-accruing
+conviction: quote as "15:00 → 95% (historical)", never as gate-certified.

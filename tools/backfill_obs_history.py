@@ -25,7 +25,7 @@ from weather_council.sources import Sources
 
 ROOT = Path(__file__).resolve().parent.parent
 _TZ = {"WSSS": "Asia/Singapore", "RPLL": "Asia/Manila", "EGLC": "Europe/London",
-       "KSFO": "America/Los_Angeles"}
+       "KSFO": "America/Los_Angeles", "OPKC": "Asia/Karachi", "OEJN": "Asia/Riyadh"}
 
 
 def load_dataset(path: Path) -> dict:
