@@ -390,3 +390,26 @@ physics, so the signal is likely MORE redundant there — FAIL is the robust cal
 (r=0.20) — but day-ahead bucket accuracy is information-limited, not effort-limited: noticing a
 sub-bucket-width signal doesn't move the bucket. This is why model AND market both missed 66-67
 day-ahead and both only resolved it intraday. The intraday lock is the only conviction lever.
+
+---
+
+## 22. DATA INTERPRETATION line — readily-available-record read, INFORMATIONAL (FEATURE)
+*Added 2026-07-09, user directive "not asking for edge, simply interpreting readily-available
+data".* A labeled line under the day-ahead bucket call that INTERPRETS the record the verdict
+already carries — no new fetch, no served-number change:
+- **vs climatology** — forecast vs `v.records.normal_high` (above / below / near, magnitude).
+- **recent trend** — RISING / FALLING / FLAT over the last ~7 settlement-record highs.
+- **regime read** — RECENT-COOL / RECENT-WARM / NEUTRAL (recent mean vs norm) with its
+  directional implication (cool → downside to a rebound forecast; warm → supports the upper
+  bucket).
+
+DESCRIPTIVE ONLY — the header says "does NOT move the verdict", it cites **D18** (the regime
+signal is real, r≈0.20, but sub-bucket-width so never blended), and it emits no bucket/probability
+token. This is the honest resolution of the edge-vs-interpretation distinction: the gate stops
+us SERVING the regime signal, nothing stops us INTERPRETING it — exactly the standing "surface
+divergent signals, widen the band toward them, never blend" discipline. Grain-aware (°F for SF).
+
+Live: SF read "FALLING, RECENT-COOL 2.6°F below norm → cooler bucket is the lean" (settled 66-67,
+the cool side); London read "RISING, +12.7°C ABOVE norm, RECENT-WARM → supports the upper bucket".
+Gate label: FEATURE / informational (HARD RULE 2 — labeling, ships without the edge gate). KAT
+tests/test_data_interpretation.py (content + grain + never-a-pick + skip-guards). Full gate 452.

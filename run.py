@@ -875,6 +875,49 @@ def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
     return L
 
 
+def _data_interpretation_lines(v: Verdict, settlement_ref=None, comparison=None) -> list[str]:
+    """INFORMATIONAL read of the readily-available record: recent-trend direction, position vs
+    the seasonal climatology, and the recent-cool/warm regime lean. DESCRIPTIVE ONLY — it never
+    moves the verdict, the pmf, or the pick. The regime signal is real but sub-bucket-width
+    (measured r≈0.20, dead-ledger D18), so it is surfaced as a lens, not blended — exactly the
+    'surface divergent signals, never dismiss to zero, widen the band toward them' discipline.
+    Reads data the verdict already carries (settlement_ref recent record + v.records normal),
+    so it costs no extra fetch. Skipped when the record or climatology normal is unavailable."""
+    if settlement_ref is None or v.records is None or v.high is None:
+        return []
+    recent = settlement_ref.get("recent") or []
+    normal = v.records.normal_high
+    highs = [r["high"] for r in recent if r.get("high") is not None]   # °C, oldest -> newest
+    if len(highs) < 4 or normal is None:
+        return []
+    grain = getattr(comparison, "grain", "C") if comparison is not None else "C"
+    fnum = (lambda c: f"{c * 9 / 5:.1f}°F") if grain == "F" else (lambda c: f"{c:.1f}°C")   # a DELTA
+    ftmp = (lambda c: f"{c * 9 / 5 + 32:.0f}°F") if grain == "F" else (lambda c: f"{c:.0f}°C")  # a TEMP
+    L = ["", "  DATA INTERPRETATION (readily-available record — informational; does NOT move the verdict)"]
+    anom = v.high - normal
+    if anom > 0.7 or anom < -0.7:
+        pos = "ABOVE" if anom > 0 else "BELOW"
+        clim = f"forecast {ftmp(v.high)} sits {fnum(abs(anom))} {pos} the seasonal norm ({ftmp(normal)})"
+    else:
+        clim = f"forecast {ftmp(v.high)} sits near the seasonal norm ({ftmp(normal)})"
+    L.append(f"    vs climatology : {clim}")
+    k = len(highs)
+    slope = sum(highs[k // 2:]) / (k - k // 2) - sum(highs[:k // 2]) / (k // 2)
+    trend = "RISING" if slope > 0.7 else ("FALLING" if slope < -0.7 else "FLAT")
+    show = highs[-7:]
+    L.append(f"    recent trend   : {trend} — last {len(show)} highs " + " → ".join(ftmp(h) for h in show))
+    ranom = sum(highs) / k - normal
+    if ranom < -0.7:
+        L.append(f"    regime read    : RECENT-COOL ({fnum(abs(ranom))} below norm) — a rebound forecast "
+                 f"carries downside; the cooler bucket is the informational lean (descriptive; never blended — D18)")
+    elif ranom > 0.7:
+        L.append(f"    regime read    : RECENT-WARM ({fnum(abs(ranom))} above norm) — the warmth supports the "
+                 f"upper bucket (descriptive; never blended — D18)")
+    else:
+        L.append("    regime read    : NEUTRAL — recent record near the norm, no directional lean")
+    return L
+
+
 def _bucket_call_lines(v: Verdict, ceiling=None, comparison=None) -> list[str]:
     c = _bucket_call(v, ceiling)
     L = ["", f"  BUCKET CALL — the {c['rule']} bucket the market settles on"]
@@ -994,6 +1037,7 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
         L.append(f"    anchored on: {ts.get('label','')}")
     L.append(f"    of: {v.target_basis}")
     L.extend(_bucket_call_lines(v, ceiling, comparison))
+    L.extend(_data_interpretation_lines(v, settlement_ref, comparison))
     cd = v.confidence_detail
     hr = cd.get("hit_rate_within_2c")
     hr_s = f"{hr*100:.0f}% held-out hits -> {cd.get('backtest_tier','?')}" if hr is not None \
