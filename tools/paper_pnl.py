@@ -26,8 +26,11 @@ from __future__ import annotations
 import argparse
 import json
 
+from weather_council.clob_book import fill_buy, parse_book
+
 LIQ_FLOOR = 0.05      # below this market price -> no live quote -> UNTRADEABLE
 ROBUST_FLOOR = 0.15   # a stricter "is there real liquidity" view
+EXEC_STAKE = 1.0      # dollars RISKED per executable bet (spend $1 walking the asks)
 
 
 def _modal(buckets: dict, which: int) -> str | None:
@@ -90,6 +93,85 @@ def simulate(days: list[dict], floor: float = LIQ_FLOOR) -> dict:
     }
 
 
+def simulate_executable(days: list[dict], stake: float = EXEC_STAKE) -> dict:
+    """The EXECUTABLE counterpart to simulate(): instead of pricing the bet at the
+    de-vigged mid, WALK the archived order book for the model's modal bucket and pay
+    what $`stake` actually buys. You cannot trade at the mid — this is the honest
+    price.
+
+    Each day needs an `exec_books` map {bucket_label: clob_book.TokenBook | None} (the
+    book captured at snapshot time). For the model's modal bucket:
+      * no book archived            -> NO-BOOK   (cannot simulate execution)
+      * book present but $stake can't be filled from the asks (empty/one-sided/too
+        thin)                       -> UNTRADEABLE-EXEC
+      * otherwise spend $stake -> S shares at q_exec = stake/S; bet only when the
+        model still sees value at THAT executable price (p_model > q_exec).
+    Bet outcome (settles $1/share): win P&L = S - stake, loss P&L = -stake. Pure and
+    deterministic. Returns the executable summary (same shape idiom as simulate())."""
+    exec_pnl = 0.0
+    bets = 0
+    no_book = untradeable = 0
+    rows = []
+    for d in days:
+        bk, settled = d["buckets"], d["settled"]
+        books = d.get("exec_books") or {}
+        if not bk or settled is None:
+            continue
+        mm = _modal(bk, 0)                              # model modal bucket
+        p_model = bk.get(mm, (0.0, 0.0))[0]
+        book = books.get(mm)
+        verdict = "no-bet"
+        if book is None:
+            no_book += 1
+            verdict = "NO-BOOK (no order book archived for the modal bucket)"
+        else:
+            fill = fill_buy(book, stake)
+            if not fill.filled or fill.shares <= 0.0:
+                untradeable += 1
+                depth = round(fill.spent, 2)
+                verdict = (f"UNTRADEABLE-EXEC (asks hold only ${depth:.2f} of the "
+                           f"${stake:.2f} stake)")
+            else:
+                q_exec = fill.avg_price                 # == stake / shares
+                if p_model > q_exec:
+                    bets += 1
+                    win = (mm == settled)
+                    pnl = (fill.shares - stake) if win else -stake
+                    exec_pnl += pnl
+                    verdict = (f"bet {mm}@q_exec={q_exec:.3f} ({fill.shares:.2f} sh) -> "
+                               f"{'WIN' if win else 'loss'} {pnl:+.2f}")
+                else:
+                    verdict = f"no edge (model {p_model:.2f} <= q_exec {q_exec:.2f})"
+        rows.append((d.get("place", "?"), d.get("date", "?"), settled, mm, verdict))
+    return {
+        "bets": bets, "no_book": no_book, "untradeable_exec": untradeable,
+        "exec_pnl": round(exec_pnl, 3), "rows": rows,
+        "has_books": any((d.get("exec_books") for d in days)),
+    }
+
+
+def _load_exec_books(conn, place, date, issued_at) -> dict:
+    """{bucket_label: TokenBook} for the order books archived at the SAME instant as
+    the chosen price snapshot (fetch_ok=1 rows only). Empty when nothing was captured
+    — simulate_executable then classifies those buckets NO-BOOK. Read-only."""
+    try:
+        rows = conn.execute(
+            "SELECT bucket_label, book_json FROM book_snapshots "
+            "WHERE place=? AND target_date=? AND issued_at=? AND fetch_ok=1",
+            (place, date, issued_at)).fetchall()
+    except Exception:
+        return {}
+    out = {}
+    for label, book_json in rows:
+        if not label or not book_json:
+            continue
+        try:
+            out[label] = parse_book(json.loads(book_json))
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
 def _load_from_db() -> list[dict]:
     from weather_council import storage
     conn = storage._connect()
@@ -97,9 +179,8 @@ def _load_from_db() -> list[dict]:
         "SELECT place,target_date,pm_resolved_label,buckets_json,issued_at "
         "FROM market_snapshots WHERE pm_resolved_label IS NOT NULL "
         "ORDER BY place,target_date,issued_at").fetchall()
-    conn.close()
     seen, out = set(), []
-    for place, date, settled, bj, _ in raw:
+    for place, date, settled, bj, issued_at in raw:
         if (place, date) in seen:        # first-issued = most day-ahead, least leaking
             continue
         seen.add((place, date))
@@ -111,7 +192,12 @@ def _load_from_db() -> list[dict]:
                                     float(b.get("market_prob") or 0.0))
                    for b in bks if b.get("label")}
         if buckets:
-            out.append({"place": place, "date": date, "settled": settled, "buckets": buckets})
+            # Attach the executable order books captured at THIS snapshot's instant.
+            # Legacy simulate() ignores exec_books; simulate_executable() reads it.
+            out.append({"place": place, "date": date, "settled": settled,
+                        "buckets": buckets,
+                        "exec_books": _load_exec_books(conn, place, date, issued_at)})
+    conn.close()
     return out
 
 
@@ -138,6 +224,24 @@ def _report(days, floor, robust) -> int:
     print("  NOTE: prices are de-vigged (real fills are worse); a win at a sub-15c")
     print("  price is the 'stale placeholder' warning made real. Tiny n — this says")
     print("  whether an edge EXISTS, not that a strategy works.")
+    # EXECUTABLE view (Phase 5): walk the archived order book instead of the mid.
+    ex = simulate_executable(days)
+    print("-" * 66)
+    if not ex["has_books"]:
+        print("  EXECUTABLE P&L: no order books archived yet — run book_logger / accumulate")
+        print("  to capture depth, then this line reports fills at real prices, not the mid.")
+    else:
+        # Compare mid vs executable on the SAME days that have a book, so the gap is
+        # purely the cost of crossing the spread / walking depth.
+        book_days = [d for d in days if d.get("exec_books")]
+        mid_on_book = simulate(book_days, floor)
+        slip = mid_on_book["model_pnl"] - ex["exec_pnl"]
+        print(f"  EXECUTABLE P&L (walks the book, ${EXEC_STAKE:.0f}/bet — real fills, not the mid)")
+        print(f"    executable value-bet P&L : {ex['exec_pnl']:+.2f} u over {ex['bets']} bet(s)")
+        print(f"    vs mid-view (same days)  : {mid_on_book['model_pnl']:+.2f} u  "
+              f"-> execution gap {slip:+.2f} u from crossing the spread")
+        print(f"    classification           : {ex['bets']} tradeable, "
+              f"{ex['untradeable_exec']} untradeable-exec, {ex['no_book']} no-book")
     return 0
 
 
@@ -161,7 +265,37 @@ def _selftest() -> int:
     rob = simulate(days, floor=0.15)
     assert rob["bets"] == 1 and abs(rob["model_pnl"] + 1.0) < 1e-9, rob
     assert abs(r["model_hit_rate"] - 2 / 3) < 1e-9 and abs(r["market_hit_rate"] - 1 / 3) < 1e-9, r
-    print("paper_pnl self-test PASSED (value-bet P&L exact; floor gates untradeable + thin-price wins)")
+
+    # Executable P&L: walk real books. A deep ask book, a too-thin book (UNTRADEABLE-
+    # EXEC), and a missing book (NO-BOOK) — one of each.
+    deep = parse_book({"asset_id": "A", "bids": [{"price": "0.30", "size": "100"}],
+                       "asks": [{"price": "0.50", "size": "100"}]})   # $1 buys 2 sh @ 0.50
+    thin = parse_book({"asset_id": "B", "bids": [{"price": "0.30", "size": "100"}],
+                       "asks": [{"price": "0.50", "size": "1"}]})     # only $0.50 of depth
+    exd = [
+        # win: model 0.7 > q_exec 0.50, buys 2 shares, settles the modal bucket -> +1.0
+        {"place": "T", "date": "e1", "settled": "31C",
+         "buckets": {"31C": (0.7, 0.40), "32C": (0.3, 0.55)},
+         "exec_books": {"31C": deep}},
+        # untradeable-exec: book too thin to fill the $1 stake
+        {"place": "T", "date": "e2", "settled": "32C",
+         "buckets": {"32C": (0.7, 0.40), "33C": (0.3, 0.55)},
+         "exec_books": {"32C": thin}},
+        # no-book: modal bucket has no archived book
+        {"place": "T", "date": "e3", "settled": "34C",
+         "buckets": {"34C": (0.7, 0.40)}, "exec_books": {}},
+    ]
+    ex = simulate_executable(exd, stake=1.0)
+    assert ex["bets"] == 1 and ex["untradeable_exec"] == 1 and ex["no_book"] == 1, ex
+    assert abs(ex["exec_pnl"] - 1.0) < 1e-9, ex["exec_pnl"]        # 2 shares - $1 stake
+    assert ex["has_books"] is True
+    # a loss at the executable price: same deep book, but settles elsewhere -> -1.0
+    exd_loss = [{"place": "T", "date": "e4", "settled": "99C",
+                 "buckets": {"31C": (0.7, 0.40)}, "exec_books": {"31C": deep}}]
+    assert abs(simulate_executable(exd_loss)["exec_pnl"] + 1.0) < 1e-9
+
+    print("paper_pnl self-test PASSED (mid value-bet P&L exact; floor gates untradeable + "
+          "thin-price wins; executable walk gives win/loss/UNTRADEABLE-EXEC/NO-BOOK)")
     return 0
 
 
