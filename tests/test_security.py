@@ -135,6 +135,44 @@ class TestValidateUrl(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
+#  Polymarket CLOB market-data host (Phase 1) — read-only book archival         #
+# --------------------------------------------------------------------------- #
+class TestClobHost(unittest.TestCase):
+    """The CLOB book-capture pipeline reads clob.polymarket.com. Pin that the host
+    is allowlisted, that lookalike hosts do NOT slip through the allowlist, and that
+    the SSRF guard still applies to it (a poisoned resolution to a private IP is
+    blocked exactly like any other host)."""
+
+    def test_clob_host_is_allowlisted_and_validates(self):
+        self.assertIn("clob.polymarket.com", ALLOWED_HOSTS)
+        with mock.patch.object(security.socket, "getaddrinfo",
+                               return_value=_addrinfo("93.184.216.34")):
+            self.assertEqual(
+                _validate_url("https://clob.polymarket.com/book?token_id=1"),
+                "clob.polymarket.com")
+
+    def test_clob_lookalikes_rejected_before_dns(self):
+        with mock.patch.object(security.socket, "getaddrinfo",
+                               side_effect=AssertionError("DNS must not run")):
+            for bad in ["https://clob.polymarket.com.evil.com/book",
+                        "https://clob-polymarket.com/book",
+                        "https://clob.polymarket.com.attacker.net/book",
+                        "https://evil.clob.polymarket.com/book",
+                        "http://clob.polymarket.com/book"]:   # plaintext downgrade
+                with self.assertRaises(SecurityError):
+                    _validate_url(bad)
+
+    def test_clob_ssrf_guard_blocks_private_resolution(self):
+        # Even an allowlisted host must resolve to a public IP — a split-horizon or
+        # poisoned DNS pointing clob at a private/metadata address is blocked.
+        for ip in ["127.0.0.1", "169.254.169.254", "10.0.0.5"]:
+            with mock.patch.object(security.socket, "getaddrinfo",
+                                   return_value=_addrinfo(ip)):
+                with self.assertRaises(SecurityError):
+                    _assert_public_host("clob.polymarket.com")
+
+
+# --------------------------------------------------------------------------- #
 #  _assert_public_host — the SSRF guard                                         #
 # --------------------------------------------------------------------------- #
 class TestSSRFGuard(unittest.TestCase):

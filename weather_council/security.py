@@ -59,6 +59,15 @@ ALLOWED_HOSTS = frozenset({
     # READ-ONLY use only — ingested to compare the model verdict against the
     # market's implied probability. No order placement or funds ever touch this.
     "gamma-api.polymarket.com",
+    # Polymarket CLOB market-data API (clob.polymarket.com): the PUBLIC, keyless
+    # order-book endpoints — /book, /midpoint, POST /books — that expose live bid/ask
+    # levels and sizes per token. READ-ONLY, ingested only to ARCHIVE the book at the
+    # same instant as the price snapshot, so executable depth-walk P&L can be measured
+    # against the theoretical mid-price. It is a market-DATA host: no authenticated
+    # trading endpoint is ever called, no order is placed, no key or signature is sent,
+    # and no funds ever touch this. (Trading would use a different signed API surface
+    # that is deliberately NOT allowlisted.)
+    "clob.polymarket.com",
     # Hong Kong Observatory official open data (data.weather.gov.hk): keyless,
     # HTTPS, CSV/JSON daily climate records straight from the Observatory. The
     # Meteostat archive for the HKO station ends in 1992, far too old to measure
