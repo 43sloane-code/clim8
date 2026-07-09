@@ -413,3 +413,16 @@ Live: SF read "FALLING, RECENT-COOL 2.6°F below norm → cooler bucket is the l
 the cool side); London read "RISING, +12.7°C ABOVE norm, RECENT-WARM → supports the upper bucket".
 Gate label: FEATURE / informational (HARD RULE 2 — labeling, ships without the edge gate). KAT
 tests/test_data_interpretation.py (content + grain + never-a-pick + skip-guards). Full gate 452.
+
+---
+
+## 23. DATA INTERPRETATION now reads the LOW too (extends §22)
+*Added 2026-07-10, user directive "commit the data interpretation for low temps".* §22's line
+read only the high; the verdict serves both a high and a low, so it now emits a compact one-line
+read for EACH — vs-climatology position, recent-trend direction (first→last / N days), and the
+recent-cool/warm regime lean. Refactored into `_interp_one(forecast, normal, series, grain)` +
+`_data_interpretation_lines` (HIGH + LOW). Still informational-only (D18, never blended); reads
+the low series (`settlement_ref recent[].low` + `v.records.normal_low`), no extra fetch; grain-
+aware; skips gracefully when normals/record are absent. Live London 07-10: HIGH "29°C +7.7°C
+ABOVE norm · RISING · RECENT-WARM"; LOW "21°C +7.5°C ABOVE norm · RISING nights · RECENT-WARM".
+KAT tests/test_data_interpretation.py updated (both-attribute, °F/°C grain, never-a-pick). Gate 452.

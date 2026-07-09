@@ -875,46 +875,56 @@ def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
     return L
 
 
-def _data_interpretation_lines(v: Verdict, settlement_ref=None, comparison=None) -> list[str]:
-    """INFORMATIONAL read of the readily-available record: recent-trend direction, position vs
-    the seasonal climatology, and the recent-cool/warm regime lean. DESCRIPTIVE ONLY — it never
-    moves the verdict, the pmf, or the pick. The regime signal is real but sub-bucket-width
-    (measured r≈0.20, dead-ledger D18), so it is surfaced as a lens, not blended — exactly the
-    'surface divergent signals, never dismiss to zero, widen the band toward them' discipline.
-    Reads data the verdict already carries (settlement_ref recent record + v.records normal),
-    so it costs no extra fetch. Skipped when the record or climatology normal is unavailable."""
-    if settlement_ref is None or v.records is None or v.high is None:
-        return []
-    recent = settlement_ref.get("recent") or []
-    normal = v.records.normal_high
-    highs = [r["high"] for r in recent if r.get("high") is not None]   # °C, oldest -> newest
-    if len(highs) < 4 or normal is None:
-        return []
-    grain = getattr(comparison, "grain", "C") if comparison is not None else "C"
+def _interp_one(forecast, normal, series, grain):
+    """One compact informational read for a single attribute (high OR low): position vs the
+    seasonal norm, recent-trend direction, and the recent-cool/warm regime lean. `series` is the
+    recent daily values for THAT attribute (°C, oldest->newest). Returns a string or None."""
+    if forecast is None or normal is None or len(series) < 4:
+        return None
     fnum = (lambda c: f"{c * 9 / 5:.1f}°F") if grain == "F" else (lambda c: f"{c:.1f}°C")   # a DELTA
     ftmp = (lambda c: f"{c * 9 / 5 + 32:.0f}°F") if grain == "F" else (lambda c: f"{c:.0f}°C")  # a TEMP
-    L = ["", "  DATA INTERPRETATION (readily-available record — informational; does NOT move the verdict)"]
-    anom = v.high - normal
+    anom = forecast - normal
     if anom > 0.7 or anom < -0.7:
-        pos = "ABOVE" if anom > 0 else "BELOW"
-        clim = f"forecast {ftmp(v.high)} sits {fnum(abs(anom))} {pos} the seasonal norm ({ftmp(normal)})"
+        clim = f"{ftmp(forecast)} is {fnum(abs(anom))} {'ABOVE' if anom > 0 else 'BELOW'} norm ({ftmp(normal)})"
     else:
-        clim = f"forecast {ftmp(v.high)} sits near the seasonal norm ({ftmp(normal)})"
-    L.append(f"    vs climatology : {clim}")
-    k = len(highs)
-    slope = sum(highs[k // 2:]) / (k - k // 2) - sum(highs[:k // 2]) / (k // 2)
+        clim = f"{ftmp(forecast)} near norm ({ftmp(normal)})"
+    k = len(series)
+    slope = sum(series[k // 2:]) / (k - k // 2) - sum(series[:k // 2]) / (k // 2)
     trend = "RISING" if slope > 0.7 else ("FALLING" if slope < -0.7 else "FLAT")
-    show = highs[-7:]
-    L.append(f"    recent trend   : {trend} — last {len(show)} highs " + " → ".join(ftmp(h) for h in show))
-    ranom = sum(highs) / k - normal
+    ranom = sum(series) / k - normal
     if ranom < -0.7:
-        L.append(f"    regime read    : RECENT-COOL ({fnum(abs(ranom))} below norm) — a rebound forecast "
-                 f"carries downside; the cooler bucket is the informational lean (descriptive; never blended — D18)")
+        regime = "RECENT-COOL → downside to a rebound; cooler bucket the lean"
     elif ranom > 0.7:
-        L.append(f"    regime read    : RECENT-WARM ({fnum(abs(ranom))} above norm) — the warmth supports the "
-                 f"upper bucket (descriptive; never blended — D18)")
+        regime = "RECENT-WARM → supports the upper bucket"
     else:
-        L.append("    regime read    : NEUTRAL — recent record near the norm, no directional lean")
+        regime = "NEUTRAL, no directional lean"
+    return f"{clim} · {trend} ({ftmp(series[0])}→{ftmp(series[-1])} / {k}d) · {regime}"
+
+
+def _data_interpretation_lines(v: Verdict, settlement_ref=None, comparison=None) -> list[str]:
+    """INFORMATIONAL read of the readily-available record — position vs climatology, recent-trend
+    direction, and the recent-cool/warm regime lean, for BOTH the high and the low (the verdict
+    serves both). DESCRIPTIVE ONLY — it never moves the verdict, the pmf, or the pick. The regime
+    signal is real but sub-bucket-width (measured r≈0.20, dead-ledger D18), so it is a lens, not
+    blended — exactly the 'surface divergent signals, never dismiss to zero, widen the band toward
+    them' discipline. Reads data the verdict already carries (settlement_ref recent record +
+    v.records normals), so it costs no extra fetch. Skipped when the record/normals are absent."""
+    if settlement_ref is None or v.records is None:
+        return []
+    recent = settlement_ref.get("recent") or []
+    grain = getattr(comparison, "grain", "C") if comparison is not None else "C"
+    highs = [r["high"] for r in recent if r.get("high") is not None]   # °C, oldest -> newest
+    lows = [r["low"] for r in recent if r.get("low") is not None]
+    hi = _interp_one(v.high, getattr(v.records, "normal_high", None), highs, grain)
+    lo = _interp_one(v.low, getattr(v.records, "normal_low", None), lows, grain)
+    if hi is None and lo is None:
+        return []
+    L = ["", "  DATA INTERPRETATION (readily-available record — informational; does NOT move the "
+         "verdict; descriptive, never blended — D18)"]
+    if hi is not None:
+        L.append(f"    HIGH : {hi}")
+    if lo is not None:
+        L.append(f"    LOW  : {lo}")
     return L
 
 
