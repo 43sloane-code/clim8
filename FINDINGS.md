@@ -348,3 +348,27 @@ Jeddah locks earliest (sharp desert peak ~13-14, rise-left 0°C by 12:00); Karac
 real observed rate, NOT the certified frozen-A/B gate.** Observation-grade by construction (no
 model — just "did the day rise into a higher bucket after H"). This is the honest forward-accruing
 conviction: quote as "15:00 → 95% (historical)", never as gate-certified.
+
+---
+
+## 20. Register phantom guard — WU max24 can't exceed WU's own daily-max (CORRECTNESS, user-caught)
+*Added 2026-07-09.* Jeddah 07-09: the v3 `temperatureMax24Hour` register read **102°F** while
+WU's OWN authoritative daily-max endpoint, the daily-series, AND every hourly ob topped at
+**100°F** (peak passed 10-11:00, declining since noon). The intraday lock fused the register and
+served **39**; the contract settled **38**. The register-attribution gate (§14, a42ffa2) only
+checked the register against today's IEM obs (100°F) — 102 was within its 3°F margin, so it passed
+— but never against the WU record itself. User caught the served 39.
+
+**Fix:** `_fuse_live_floor` takes `wu_record_max_f` and caps `max24_f = min(max24_f, wu_record_max_f)`
+before fusion; the ceiling passes `sources.wunderground_daily_max(icao, target)["max_f"]`. The
+register may still lead the lagging hourly ROWS (its legitimate 07-04/07-07 job), but it can NEVER
+exceed WU's own daily-max, which already aggregates real between-obs peaks. A register above the
+settlement record is a phantom and is dropped. Live re-check: Jeddah now serves **38°C @ 91%**
+(was a phantom 39). Karachi unaffected (register 93°F == daily-max 93°F, corroborated).
+
+**Gate label: CORRECTNESS (bug fix).** Changes served output only in the phantom regime; genuine
+between-obs catches corroborated by the daily-max still fuse (KAT `test_register_at_or_below_wu_
+daily_max_still_fuses` preserves London 07-07). KAT `test_register_phantom_capped_at_wu_daily_max`
+pins Jeddah; all prior live-floor KATs unchanged. Full gate 448 green. Third register-related fix
+this session (attribution timing → attribution margin → phantom cap); the register is now bounded
+on all three sides.

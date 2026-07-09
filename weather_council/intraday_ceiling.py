@@ -311,8 +311,16 @@ def intraday_ceiling(place: Place, target: dt.date, *,
                 live_cur, live_max24 = live["cur_f"], live["max24_f"]
                 yday = (target - dt.timedelta(days=1))
                 yrow = sources.wunderground_daily_series(icao, yday, yday, tz).get(yday.isoformat())
+                # WU's OWN authoritative daily-max caps the register (phantom guard, Jeddah
+                # 2026-07-09): a max24 above the settlement record's own daily high is not real.
+                try:
+                    dmax = sources.wunderground_daily_max(icao, target)
+                    wu_rec_max_f = dmax.get("max_f") if dmax else None
+                except Exception:
+                    wu_rec_max_f = None
                 fused, live_note = _fuse_live_floor(running_max, live_cur, live_max24,
-                                                    yrow[0] if yrow else None)
+                                                    yrow[0] if yrow else None,
+                                                    wu_record_max_f=wu_rec_max_f)
                 if fused is not None and (running_max is None or fused > running_max):
                     running_max = fused
                 feed = "wu+live"

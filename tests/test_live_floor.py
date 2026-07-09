@@ -44,6 +44,24 @@ class TestFuseLiveFloor(unittest.TestCase):
         self.assertAlmostEqual(floor, 33.333, places=2)
         self.assertIn("24h-register 92", note)
 
+    def test_register_phantom_capped_at_wu_daily_max(self):
+        # 2026-07-09 Jeddah DEFECT (user-caught): v3 register read 102°F while WU's own daily-max
+        # endpoint (and every hourly ob) topped at 100°F — a phantom that served 39 the contract
+        # paid at 38. With wu_record_max_f=100, the register is capped to 100°F and cannot raise
+        # the floor above today's real 100°F (37.78°C) run-max. Settles 38, not 39.
+        import math
+        floor, note = _fuse_live_floor(37.78, 99.0, 102.0, 37.78, wu_record_max_f=100.0)
+        self.assertEqual(math.floor(floor + 0.5), 38)     # NOT 39 (the 102°F phantom is dropped)
+        self.assertNotIn("register", note or "")          # register did not raise the floor
+
+    def test_register_at_or_below_wu_daily_max_still_fuses(self):
+        # Guard the cap does not OVER-reject: a register CORROBORATED by WU's daily-max (both 90°F)
+        # is a real between-obs peak the hourly rows missed — it must still fuse (London 07-07).
+        import math
+        floor, note = _fuse_live_floor(31.0, 89.0, 90.0, 32.0, wu_record_max_f=90.0)
+        self.assertEqual(math.floor(floor + 0.5), 32)     # 90°F register == WU daily-max -> fuses
+        self.assertIsNotNone(note)
+
     def test_never_lowers_and_none_safe(self):
         floor, note = _fuse_live_floor(33.0, 88.0, 89.0, 30.0)      # both below the floor
         self.assertEqual((floor, note), (33.0, None))

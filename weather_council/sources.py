@@ -162,14 +162,15 @@ def _history_cache_read(key: str):
         return None, None
 
 
-def _fuse_live_floor(runmax_c, cur_f, max24_f, yesterday_max_c):
+def _fuse_live_floor(runmax_c, cur_f, max24_f, yesterday_max_c, wu_record_max_f=None):
     """FLOOR-RAISE-ONLY fusion of the settlement station's freshest evidence into the
     running max. Returns (floor_c, note|None). Rules (the 07-04 lesson — 91°F posted ~45min
     late and the 24h register read 92°F while the half-hourly rows topped at 91):
       * the CURRENT reading always counts — it IS a station reading, just fresher;
       * temperatureMax24Hour counts ONLY when it EXCEEDS yesterday's daily max AND sits within
-        a between-obs spike of today's OWN freshest evidence — the 24h window spans yesterday
-        afternoon, so a register far above today's readings is yesterday's carryover, not today;
+        a between-obs spike of today's OWN freshest evidence AND does not exceed WU's own
+        authoritative daily-max — the register can lead the lagging hourly ROWS, but it can
+        never legitimately exceed the daily-max endpoint that already aggregates those peaks;
       * the fusion can only RAISE the floor, never lower it, and never invents readings.
     Pure — KAT'd in tests/test_live_floor.py."""
     floor_c = runmax_c if runmax_c is not None else None
@@ -177,6 +178,15 @@ def _fuse_live_floor(runmax_c, cur_f, max24_f, yesterday_max_c):
 
     def f2c(f):
         return (f - 32.0) * 5.0 / 9.0
+
+    # PHANTOM GUARD (2026-07-09 Jeddah defect, user-caught). The v3 max24 register read 102°F
+    # while WU's OWN daily-max endpoint, the daily-series AND every hourly ob topped at 100°F
+    # (peak passed at 10-11:00, declining since) — a phantom that served a 39 the contract paid
+    # at 38. The register may catch a between-obs peak the hourly ROWS miss, but it can NEVER
+    # exceed WU's authoritative daily-max, which already captures real between-obs peaks. Cap it
+    # there so a register above the settlement record can never raise the lock.
+    if isinstance(max24_f, (int, float)) and isinstance(wu_record_max_f, (int, float)):
+        max24_f = min(max24_f, wu_record_max_f)
 
     if isinstance(cur_f, (int, float)) and (floor_c is None or f2c(cur_f) > floor_c):
         floor_c = f2c(cur_f)
