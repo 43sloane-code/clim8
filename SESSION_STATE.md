@@ -1,9 +1,39 @@
 # Weather-Verdict — Accuracy Program State
 
-_Compacted session state. Last updated 2026-06-21. Standing mandate: constantly
+_Compacted session state. Last updated 2026-07-09. Standing mandate: constantly
 improve day-ahead → intraday bucket-prediction accuracy for the two tracked
 cities to match Polymarket settlement. Ship only gate-respecting changes;
 abstain/close when no robust edge._
+
+---
+
+## Session 2026-07-09 — WU-city expansion + register hardening (see FINDINGS §13–20)
+
+Shipped (all on `origin/main`, gate 448 green, each KAT-pinned):
+- **tz-aware early-settle** (`1dc5847`) — WU-oracle cities settle `realized_label` at city-local
+  day-end (T-1), closing the proxy-vs-contract alarm's 1-day blind spot.
+- **Register bounded on THREE sides** (the recurring weak link, all in `_fuse_live_floor`):
+  (1) TIMING — pre-dawn carryover can't floor today (`a42ffa2`, Singapore 37°C bug);
+  (2) MARGIN — must sit within a ~3°F between-obs spike of today's obs (`a42ffa2`);
+  (3) PHANTOM CAP — can never exceed WU's own `wunderground_daily_max` (`6533fca`, Jeddah
+  102°F-vs-settled-100°F, user-caught). CLAUDE.md register line updated (`70fca2c`).
+- **Daily-LOW market support + KSFO intraday lever** (`9c56dfc`) — `compare_low` on the low
+  event; grain-aware quantizer so SF's whole-°F lever works.
+- **New WU settlement cities** (London pattern: WU-settle whole-°C, IEM-backtest+overlay,
+  IEM hourly + WU register): **Karachi/OPKC** (`453b8b0`), **Jeddah/OEJN** (`4850b20`). The
+  `_IEM_OVERLAY_TZ` add fixed a ~110-day Meteostat lag (was backtesting March data in July).
+- **10-year IEM archives** for OPKC + OEJN committed gzipped (`cbaee3e`), same convention as
+  wsss/eglc/ksfo — puts their backtest/climatology/conviction on decade-deep footing.
+- **Empirical intraday-conviction curves** derived per city (floor-lock = P(runmax bucket @ H
+  == final bucket), 10y): lock windows 15:00-16:00 local (SF/Karachi/Jeddah), 16:00-18:00 London.
+  In-sample backtest grade, NOT frozen-A/B certified — quote as "15:00 → 95% (historical)".
+- **LAX (Los Angeles / KLAX) removed** from the working tree per user directive — stashed,
+  never committed; main was always LAX-free.
+
+Today's four locks (all resolved honestly, incl. two the day-ahead got wrong): Karachi **34°C**
+(matched), Jeddah **38°C** (register phantom retracted), London **34°C** (WU record reconciled
+up), SF **66-67°F** (intraday beat a too-warm 68-69 day-ahead). WU roster now: Singapore, Manila,
+London, San Francisco (°F), Karachi, Jeddah.
 
 ---
 
