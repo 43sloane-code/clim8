@@ -49,7 +49,12 @@ METAR_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
 # 30.6 -> 31°C). So this is the settlement-grade anchor; IEM stays a cross-check.
 # apiKey is the wunderground.com site web key, carried in PARAMS (never the path).
 WU_HISTORY_URL = "https://api.weather.com/v1/location/{loc}/observations/historical.json"
-WU_API_KEY = "e1f10a1e78da46f5b10a1e78da96f525"
+# The free wunderground.com site web key. It is the settlement spine's single point
+# of failure (CLAUDE.md HARD RULE 7): if it dies, that is continuity work, not an
+# accuracy lever. Env-first so the key can be rotated without a code change (and so
+# CI / a fresh checkout can inject its own) — the literal is the current working
+# default when WU_API_KEY is unset in the environment.
+WU_API_KEY = os.environ.get("WU_API_KEY", "e1f10a1e78da46f5b10a1e78da96f525")
 # Settlement-station geocodes for the v3 current-conditions feed (same host + key).
 WU_GEO = {"WSSS": (1.3502, 103.994), "RPLL": (14.5086, 121.0198), "EGLC": (51.5053, 0.0553),
           "KSFO": (37.6189, -122.375), "OPKC": (24.9008, 67.1681),
