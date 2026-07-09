@@ -119,7 +119,8 @@ class TestLondonRegisterConsult(unittest.TestCase):
         from weather_council.intraday_ceiling import _LIVE_REGISTER, _WU_INTRADAY
         self.assertIn("london", _LIVE_REGISTER)          # the fix: London consults the register
         self.assertIn("singapore", _LIVE_REGISTER)       # Singapore unchanged
-        self.assertEqual(_WU_INTRADAY, {"singapore"})    # hourly source unchanged (London stays IEM)
+        self.assertIn("singapore", _WU_INTRADAY)         # Singapore reads the WU hourly feed
+        self.assertNotIn("london", _WU_INTRADAY)         # London's hourly BACKBONE stays IEM (whole-°C)
 
     def test_fusion_recovers_the_settled_32(self):
         import math

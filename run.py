@@ -26,6 +26,7 @@ from weather_council.compare import (
     VerdictMarketComparison,
     comparison_to_dict,
     compare_high,
+    compare_low,
     grain_support_note,
     match_market,
 )
@@ -33,7 +34,7 @@ from weather_council.council import (Council, Verdict, applied_bias_correction,
                                      regime_consensus)
 from weather_council.edge import report_lines as edge_report_lines, score_snapshots
 from weather_council.convergence import report_lines as convergence_report_lines
-from weather_council.market import MarketData, _native_reading_int
+from weather_council.market import MarketData, _native_reading_int, event_slug
 from weather_council.security import RateLimitError, SecurityError
 from weather_council.sources import Sources, place_today
 from weather_council.tc_gate import tc_halt
@@ -356,8 +357,11 @@ def _pillars(v: Verdict) -> list[str]:
     return L
 
 
-def _market_lines(c: VerdictMarketComparison) -> list[str]:
-    L = ["  MARKET COMPARISON (model vs Polymarket implied — read-only, NOT an edge)"]
+def _market_lines(c: VerdictMarketComparison, kind: str = "high") -> list[str]:
+    header = ("  MARKET COMPARISON — LOW (model vs Polymarket implied — read-only, NOT an edge)"
+              if kind == "low" else
+              "  MARKET COMPARISON (model vs Polymarket implied — read-only, NOT an edge)")
+    L = [header]
     L.append(f"    market   : {c.market_title}")
     # Sub-degree market (e.g. HK on the Observatory): we no longer withhold. The
     # verdict is transferred onto the settlement station's scale by a *measured*
@@ -956,7 +960,8 @@ def _bucket_call_lines(v: Verdict, ceiling=None, comparison=None) -> list[str]:
 def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
            settlement_ref: dict | None = None,
            cross_reference: dict | None = None,
-           c7_validated: bool = False, ceiling=None) -> str:
+           c7_validated: bool = False, ceiling=None,
+           low_comparison: VerdictMarketComparison | None = None) -> str:
     L = []
     L.append(f"COUNCIL VERDICT  —  {v.place.label()}  ({v.target})")
     L.append("=" * 64)
@@ -1068,6 +1073,10 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
 
     if comparison is not None:
         L.extend(_market_lines(comparison))
+
+    if low_comparison is not None:
+        L.append("")
+        L.extend(_market_lines(low_comparison, kind="low"))
 
     if settlement_ref is not None:
         L.extend(_settlement_reference_lines(settlement_ref))
@@ -1630,7 +1639,7 @@ def _intraday_verdict_bucket(f, v: Verdict) -> int | None:
     SAME quantizer the intraday floor uses — so the two are directly comparable."""
     if v.high is None:
         return None
-    return _native_reading_int(v.high, "C", f.sub_degree)
+    return _native_reading_int(v.high, getattr(f, "grain", "C"), f.sub_degree)
 
 
 def _intraday_lines(f, v: Verdict) -> list[str]:
@@ -1649,19 +1658,22 @@ def _intraday_lines(f, v: Verdict) -> list[str]:
             L.append(f"    reason: {f.note}")
         return L
     # kind == "floor"
-    L.append(f"    running max so far: {f.running_max_c:.1f}°C "
+    u = getattr(f, "grain", "C")
+    rmax_disp = (f"{f.running_max_c * 9 / 5 + 32:.0f}°F" if u == "F"
+                 else f"{f.running_max_c:.1f}°C")
+    L.append(f"    running max so far: {rmax_disp} "
              f"({f.n_obs} obs, {f.source}"
              + (f", {f.record_time}" if f.record_time else "") + ")")
     L.append(f"    settlement rule: {f.label}")
-    L.append(f"    => the {f.floor_bucket}°C bucket is already GUARANTEED reached; "
-             f"every bucket below {f.floor_bucket}°C is mechanically impossible.")
+    L.append(f"    => the {f.floor_bucket}°{u} bucket is already GUARANTEED reached; "
+             f"every bucket below {f.floor_bucket}°{u} is mechanically impossible.")
     vb = _intraday_verdict_bucket(f, v)
     if vb is not None and f.is_dead(vb):
-        L.append(f"    !! the verdict's {vb}°C bucket is ALREADY DEAD — observed "
+        L.append(f"    !! the verdict's {vb}°{u} bucket is ALREADY DEAD — observed "
                  f"reality has overtaken the central pick (verdict not changed; "
                  f"investigate).")
     elif vb is not None:
-        L.append(f"    verdict bucket {vb}°C is still live (consistent).")
+        L.append(f"    verdict bucket {vb}°{u} is still live (consistent).")
     return L
 
 
@@ -1696,23 +1708,26 @@ def _ceiling_lines(c) -> list[str]:
         L.append(f"    UNAVAILABLE — {c.note}.")
         return L
     # kind == "sharpened"
-    L.append(f"    running max by {int(c.hour):02d}:00 local: {c.running_max_c:.1f}°C "
+    u = getattr(c, "grain", "C")
+    rmax_disp = (f"{c.running_max_c * 9 / 5 + 32:.0f}°F" if u == "F"
+                 else f"{c.running_max_c:.1f}°C")
+    L.append(f"    running max by {int(c.hour):02d}:00 local: {rmax_disp} "
              f"({c.source})")
     L.append(f"    remaining-rise learned from {c.n_rise} strictly-earlier days "
              f"(leak-free, resampled through the settlement quantizer)")
-    top = "  ".join(f"{b}°C {p*100:.0f}%" for b, p in c.pmf[:4])
+    top = "  ".join(f"{b}°{u} {p*100:.0f}%" for b, p in c.pmf[:4])
     L.append(f"    sharpened final-max pmf: {top}")
     # Conviction is honest about the hour: early in the day the remaining rise is
     # large and the pmf stays diffuse; it concentrates only as the peak nears.
     pct = c.modal_prob * 100
     if c.modal_prob >= 0.70:
-        L.append(f"    => HIGH-CONVICTION call: {c.modal_bucket}°C at {pct:.0f}% "
+        L.append(f"    => HIGH-CONVICTION call: {c.modal_bucket}°{u} at {pct:.0f}% "
                  f"(vs ~56% day-ahead — σ has collapsed near/after the peak)")
     elif c.modal_prob >= 0.40:
-        L.append(f"    => leaning {c.modal_bucket}°C at {pct:.0f}% — firming up as "
+        L.append(f"    => leaning {c.modal_bucket}°{u} at {pct:.0f}% — firming up as "
                  f"the peak nears (not yet high-conviction)")
     else:
-        L.append(f"    => still diffuse ({c.modal_bucket}°C at {pct:.0f}%) — too "
+        L.append(f"    => still diffuse ({c.modal_bucket}°{u} at {pct:.0f}%) — too "
                  f"early; conviction rises through the afternoon as the peak nears")
     return L
 
@@ -1763,6 +1778,28 @@ def _build_comparison(
             return None, grain_support_note(market, v.high)
     return compare_high(market, v.high, residuals, source_check, bias_corr,
                         station_offset=station_offset), None
+
+
+def _build_comparison_low(
+    sources: Sources, v: Verdict, place, target
+) -> VerdictMarketComparison | None:
+    """Fetch the matching read-only LOWEST-temperature market by slug and place the
+    model's low bucket distribution beside it (read-only, mirrors _build_comparison).
+
+    The daily-low events live under a different Gamma tag than the tag-paged high
+    fetch enumerates, so the low market is pulled by its known per-day slug. Returns
+    None when the council kept no low residuals, no low market matches, or the market
+    settles sub-degree (the settlement-offset transfer is high-only)."""
+    residuals = v.validation.residuals_low
+    if not residuals:
+        return None
+    slug = event_slug(place.name, target, "low")
+    market = MarketData(http=sources.http).fetch_market_by_slug(slug)
+    if market is None or market.settles_sub_degree():
+        return None
+    source_check = (v.settlement or {}).get("source_check")
+    bias_corr = applied_bias_correction(v, "low")
+    return compare_low(market, v.low, residuals, source_check, bias_corr)
 
 
 def _dump_wf_stream(out_dir: str, city: str, validation) -> None:
@@ -1901,12 +1938,16 @@ def main(argv=None) -> int:
 
         comparison = None
         market_note = None
+        low_comparison = None
         if args.market:
             comparison, market_note = _build_comparison(sources, verdict, place, target)
             if comparison is not None:
                 # Persist the comparison so C7 can grade it once the day settles
                 # against the verdict's anchor station (recommend-only ledger).
                 log_market_snapshot(verdict, comparison)
+            # Read-only LOW market comparison (own event; not yet persisted/settled —
+            # low-snapshot logging + daily-min settlement is the registered follow-up).
+            low_comparison = _build_comparison_low(sources, verdict, place, target)
 
         # User-pinned settlement reference (e.g. London -> Wunderground EGLC):
         # always compare & contrast the verdict against that airport's record.
@@ -1946,7 +1987,8 @@ def main(argv=None) -> int:
             print(json.dumps(d, indent=2))
         else:
             print(render(verdict, comparison, settlement_ref, cross_reference,
-                         c7_validated=c7_validated, ceiling=ceiling))
+                         c7_validated=c7_validated, ceiling=ceiling,
+                         low_comparison=low_comparison))
             if args.market and comparison is None:
                 if market_note:
                     print("\n  MARKET COMPARISON (withheld)\n    " + market_note)

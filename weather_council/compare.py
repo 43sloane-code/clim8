@@ -24,7 +24,7 @@ from __future__ import annotations
 
 __all__ = [
     'Calibration', 'residual_calibration', 'BucketComparison', 'VerdictMarketComparison',
-    'compare_high', 'match_market', 'grain_support_note', 'comparison_to_dict'
+    'compare_high', 'compare_low', 'match_market', 'grain_support_note', 'comparison_to_dict'
 ]
 
 import datetime as dt
@@ -180,18 +180,52 @@ def compare_high(
     bias_correction_c: float | None = None,
     station_offset: StationOffset | None = None,
 ) -> VerdictMarketComparison | None:
-    """Place the council's high verdict beside one city/day market.
+    """Place the council's daily-HIGH verdict beside one city/day market (read-only)."""
+    return _compare(market, verdict_high_c, residuals_c, source_check,
+                    bias_correction_c, station_offset, is_low=False)
+
+
+def compare_low(
+    market: WeatherMarket,
+    verdict_low_c: float,
+    residuals_c: list[float],
+    source_check: dict | None = None,
+    bias_correction_c: float | None = None,
+    station_offset: StationOffset | None = None,
+) -> VerdictMarketComparison | None:
+    """Place the council's daily-LOW verdict beside one city/day LOW market (read-only).
+
+    Mirror of compare_high on the low residual cloud (Validation.residuals_low) and the
+    "lowest-temperature-…" event. Basket low markets settle whole-°C, so no sub-degree
+    station-offset transfer is needed; a sub-degree low market is declined (the offset
+    machinery is high-only)."""
+    return _compare(market, verdict_low_c, residuals_c, source_check,
+                    bias_correction_c, station_offset, is_low=True)
+
+
+def _compare(
+    market: WeatherMarket,
+    verdict_c: float,
+    residuals_c: list[float],
+    source_check: dict | None = None,
+    bias_correction_c: float | None = None,
+    station_offset: StationOffset | None = None,
+    *,
+    is_low: bool = False,
+) -> VerdictMarketComparison | None:
+    """Shared core for compare_high / compare_low.
 
     residuals_c: signed held-out errors (observed − predicted) in °C, from the
-    council's own backtest (Validation.residuals_high).
+    council's own backtest (Validation.residuals_high or residuals_low).
     bias_correction_c: the signed, backtested bias correction already baked into
-    verdict_high_c (see council.applied_bias_correction). Surfaced so a divergence
+    verdict_c (see council.applied_bias_correction). Surfaced so a divergence
     from the market can be reported as earned signal rather than hedged.
     station_offset: a measured settlement-vs-backtest station offset (see
     station_offset.measure_settlement_offset). REQUIRED to compare a market that
-    settles finer than its whole-degree labels (e.g. HK on the Observatory): it
-    transfers the verdict onto the settlement station's scale so the bucket
-    mapping is earned, not fabricated. Without it such a market is declined."""
+    settles finer than its whole-degree labels (e.g. HK on the Observatory); the
+    offset machinery is HIGH-only, so a sub-degree market without it is declined.
+    is_low: selects the low source-check offset key; the bucket math itself is
+    attribute-agnostic (round-half-up value → bucket)."""
     if not market.buckets or len(residuals_c) < MIN_RESIDUALS:
         return None
     sub_degree = market.settles_sub_degree()
@@ -206,7 +240,7 @@ def compare_high(
     # Transfer the verdict onto the settlement station's scale when an offset was
     # measured (the systematic settlement−backtest mean). 0 for ordinary markets.
     offset_c = station_offset.high_mean if station_offset is not None else 0.0
-    settle_c = verdict_high_c + offset_c
+    settle_c = verdict_c + offset_c
 
     n = len(residuals_c)
     counts: dict[str, int] = {b.label: 0 for b in market.buckets}
@@ -246,13 +280,14 @@ def compare_high(
     calibration = residual_calibration(residuals_c)
 
     note = None
-    if source_check and source_check.get("high_mean") is not None:
-        bias = source_check["high_mean"]
+    _sc_key = "low_mean" if is_low else "high_mean"
+    if source_check and source_check.get(_sc_key) is not None:
+        bias = source_check[_sc_key]
         tail = source_check.get("tail_days_ge3") or 0
         note = (
             f"model probs are on the backtest-truth scale; the settlement sensor "
             f"reads on average {bias:+.2f}°C vs that truth"
-            + (f" (with {tail} day(s) ≥3°C apart — hot-day clipping)" if tail else "")
+            + (f" (with {tail} day(s) ≥3°C apart — extreme-day clipping)" if tail else "")
             + ". Shift not applied here."
         )
 
@@ -283,7 +318,7 @@ def compare_high(
         market_title=market.title,
         grain=market.grain,
         n_residuals=n,
-        verdict_high_c=verdict_high_c,
+        verdict_high_c=verdict_c,
         verdict_reading=market.native_reading(settle_c),
         verdict_bucket=(market.bucket_for_high(settle_c).label
                         if market.bucket_for_high(settle_c) else None),

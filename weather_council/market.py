@@ -21,7 +21,7 @@ from __future__ import annotations
 
 __all__ = [
     'MarketBucket', 'WeatherMarket', 'MarketData', 'Resolution',
-    'resolved_event_slug',
+    'resolved_event_slug', 'event_slug',
 ]
 
 import datetime as dt
@@ -43,7 +43,8 @@ HIGHEST_TEMP_TAG = 104596
 DEFAULT_MARKET_REQUEST_BUDGET = 4
 _PAGE_SIZE = 100
 
-_TITLE_RE = re.compile(r"highest temperature in (?P<city>.+?) on (?P<date>.+?)\?*$", re.I)
+_TITLE_RE = re.compile(
+    r"(?P<kind>highest|lowest) temperature in (?P<city>.+?) on (?P<date>.+?)\?*$", re.I)
 # Markets phrase the settlement point a few ways: "recorded at the X Station"
 # (airport METAR), "recorded by the Hong Kong Observatory", or "recorded by NOAA
 # at the X Airport". The non-greedy gap absorbs an intervening agency name.
@@ -443,16 +444,24 @@ _MONTHS = ("january", "february", "march", "april", "may", "june", "july",
 _RESOLVED_YES = 0.99   # a settled winner prices at 1.0; allow float slop
 
 
-def resolved_event_slug(city_label: str, target: dt.date) -> str:
-    """The Gamma event slug for one city/day, e.g.
-    "highest-temperature-in-hong-kong-on-june-12-2026". `city_label` may be a
-    full place label ("Hong Kong, HK"); only the part before the first comma is
-    used. NOTE the year suffix — the bare slug returns the SAME-day event from a
-    PRIOR year (which can even settle in different units)."""
+def event_slug(city_label: str, target: dt.date, kind: str = "high") -> str:
+    """The Gamma event slug for one city/day/attribute, e.g.
+    "highest-temperature-in-hong-kong-on-june-12-2026" or
+    "lowest-temperature-in-london-on-july-9-2026". `city_label` may be a full
+    place label ("Hong Kong, HK"); only the part before the first comma is used.
+    `kind` is "high" (default) or "low". NOTE the year suffix — the bare slug
+    returns the SAME-day event from a PRIOR year (which can settle in different
+    units)."""
     city = city_label.split(",", 1)[0].strip().lower()
     token = re.sub(r"[^a-z0-9]+", "-", city).strip("-")
-    return (f"highest-temperature-in-{token}-on-"
+    superlative = "lowest" if kind == "low" else "highest"
+    return (f"{superlative}-temperature-in-{token}-on-"
             f"{_MONTHS[target.month - 1]}-{target.day}-{target.year}")
+
+
+def resolved_event_slug(city_label: str, target: dt.date) -> str:
+    """Back-compat alias: the daily-HIGH event slug (settlement audit uses this)."""
+    return event_slug(city_label, target, "high")
 
 
 @dataclass(frozen=True)
@@ -530,6 +539,22 @@ class MarketData:
             if len(raw) < _PAGE_SIZE:
                 break
         return out[:max_events]
+
+    def fetch_market_by_slug(self, slug: str) -> WeatherMarket | None:
+        """Fetch ONE open event by its exact slug and parse it read-only. Used for
+        markets the tag-paged `fetch_temperature_markets` does not enumerate — the
+        daily-LOW events (`lowest-temperature-in-…`) live under a different tag, so
+        they are pulled by their known per-day slug instead. One request; returns
+        None when no event matches the slug or the response is unusable."""
+        try:
+            raw = self.http.get_json_array(EVENTS_URL, {"slug": slug})
+        except SecurityError:
+            raise
+        except Exception:
+            return None
+        event = next((e for e in (raw or [])
+                      if isinstance(e, dict) and str(e.get("slug")) == slug), None)
+        return _parse_event(event) if event is not None else None
 
     def fetch_resolution(self, slug: str) -> Resolution | None:
         """Read one settled event's authoritative outcome by slug. Returns a

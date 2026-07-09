@@ -65,6 +65,7 @@ class IntradayCeiling:
     city: str
     target: str
     sub_degree: bool
+    grain: str = "C"          # settlement unit: "C" (SG/London/Manila) or "F" (San Francisco)
     hour: int | None = None
     running_max_c: float | None = None
     n_rise: int = 0
@@ -116,7 +117,7 @@ def _day_state(obs, hour, delta=0.3):
     return "declining" if len(below) == 2 and all(below) else "holding"
 
 
-def state_late_risk(history, hour, state, sub_degree, min_n=20, month=None):
+def state_late_risk(history, hour, state, sub_degree, min_n=20, month=None, grain="C"):
     """PURE, leak-free: over strictly-earlier days in `state` at `hour`, the empirical rate of
     the SETTLED bucket ending above the running-max bucket — the state-conditional raise risk
     behind the NOT-FINAL line. With `month` given, conditions on the (state x meteorological
@@ -132,7 +133,7 @@ def state_late_risk(history, hour, state, sub_degree, min_n=20, month=None):
         rm, fm = _running_max(obs, hour), _final_max(obs)
         if rm is None or fm is None:
             continue
-        up = _native_reading_int(fm, "C", sub_degree) > _native_reading_int(rm, "C", sub_degree)
+        up = _native_reading_int(fm, grain, sub_degree) > _native_reading_int(rm, grain, sub_degree)
         st_only.append(up)
         if (sea is not None and len(day) >= 7 and day[5:7].isdigit()
                 and (int(day[5:7]) % 12) // 3 == sea):
@@ -159,17 +160,19 @@ def remaining_rise_samples(history: dict[str, list[tuple[int, float]]],
 
 
 def sharpen_pmf(running_max_c: float, rise_samples: list[float],
-                sub_degree: bool) -> list[tuple[int, float]]:
+                sub_degree: bool, grain: str = "C") -> list[tuple[int, float]]:
     """The settlement-bucket pmf for the final daily max: resample the empirical
     remaining-rise cloud onto today's running max and quantize each draw through
-    the market's own rule (round-half-up for London, floor for HK). Deterministic
-    (a full resample over every sample, not a seeded MC), non-parametric (keeps any
-    skew in the rise), and monotone-safe (every draw >= running max, so no bucket
-    below the running max's bucket can be produced). Returns (bucket, prob) sorted
-    by descending probability."""
+    the market's own rule (round-half-up whole-°C for London/SG, round-half-up
+    whole-°F for San Francisco, floor for HK). `running_max_c` is always °C;
+    `_native_reading_int` converts to the settlement `grain` before quantizing.
+    Deterministic (a full resample over every sample, not a seeded MC), non-
+    parametric (keeps any skew in the rise), and monotone-safe (every draw >=
+    running max, so no bucket below the running max's bucket can be produced).
+    Returns (bucket, prob) sorted by descending probability."""
     counts: dict[int, int] = {}
     for r in rise_samples:
-        b = _native_reading_int(running_max_c + r, "C", sub_degree)
+        b = _native_reading_int(running_max_c + r, grain, sub_degree)
         counts[b] = counts.get(b, 0) + 1
     n = len(rise_samples)
     return sorted(((b, c / n) for b, c in counts.items()), key=lambda t: -t[1])
@@ -183,15 +186,20 @@ _HOURLY_STATION = {
     "london": ("EGLC", "Europe/London", False, "London City Airport"),
     "manila": ("RPLL", "Asia/Manila", False, "Ninoy Aquino Intl"),
     "singapore": ("WSSS", "Asia/Singapore", False, "Changi"),
+    "san francisco": ("KSFO", "America/Los_Angeles", False, "San Francisco Intl"),
 }
 _NO_HOURLY = {"hong kong": True}    # settles on a daily-max-only record (no hourly)
+# Settlement UNIT per city: whole °C everywhere except San Francisco, which settles
+# (and its 2°F Polymarket buckets pay out) in whole °F. The running max is always
+# carried in °C; the quantizer converts to this grain before bucketing.
+_SETTLE_GRAIN = {"san francisco": "F"}    # default "C"
 # Cities whose intraday lever reads the WUNDERGROUND settlement feed (whole °F)
 # instead of IEM METAR (whole °C) — running max, remaining-rise and settled bucket
 # then live on the SAME feed the market pays out on. IEM's coarser °C grain hides
 # the °F boundary fragility (Singapore 14:00: IEM 91% vs WU-faithful 78%), so a
 # WU-native lever reports honest, settlement-correct conviction. Validated stable
 # via reports/_wu_native_intraday_sg.py.
-_WU_INTRADAY = {"singapore"}
+_WU_INTRADAY = {"singapore", "san francisco"}
 # Cities that consult the live WU v3 current/24h-register (floor-raise-only) — SEPARATE from
 # which hourly feed backs the running max. London's hourly running-max BACKBONE reads IEM
 # whole-°C, but that feed is coarse and misses between-obs peaks, whereas London SETTLES on WU
@@ -199,7 +207,7 @@ _WU_INTRADAY = {"singapore"}
 # caught 90°F and the market SETTLED 32 — our lock said 31 purely because London was excluded
 # from this consult. The current reading is a real station value; fusing it closes the whole-°C
 # undershoot at the °F boundary. (Register still gated vs yesterday inside _fuse_live_floor.)
-_LIVE_REGISTER = {"singapore", "london"}
+_LIVE_REGISTER = {"singapore", "london", "san francisco"}
 
 
 def _city_key(place: Place) -> str | None:
@@ -248,9 +256,10 @@ def intraday_ceiling(place: Place, target: dt.date, *,
                   "remaining-rise from, so no intraday sharpening is served"))
 
     icao, tz, sub_degree, station_name = _HOURLY_STATION[key]
+    grain = _SETTLE_GRAIN.get(key, "C")     # "F" for San Francisco, "C" otherwise
     if sources is None:
         return IntradayCeiling(kind="unavailable", city=city, target=tgt_iso,
-                               sub_degree=sub_degree,
+                               sub_degree=sub_degree, grain=grain,
                                note="no Sources handle; cannot fetch hourly history")
 
     use_wu = key in _WU_INTRADAY
@@ -313,22 +322,24 @@ def intraday_ceiling(place: Place, target: dt.date, *,
     if running_max is None or len(rises) < MIN_RISE_SAMPLES:
         return IntradayCeiling(
             kind="unavailable", city=city, target=tgt_iso, sub_degree=sub_degree,
-            source=icao, hour=hour, running_max_c=running_max, n_rise=len(rises),
+            grain=grain, source=icao, hour=hour, running_max_c=running_max,
+            n_rise=len(rises),
             note=(f"insufficient rise history at {int(hour):02d}:00 "
                   f"({len(rises)} < {MIN_RISE_SAMPLES} days)"))
 
-    pmf = sharpen_pmf(running_max, rises, sub_degree)
+    pmf = sharpen_pmf(running_max, rises, sub_degree, grain)
     modal_b, modal_p = pmf[0]
-    s_risk = (state_late_risk(history, hour, day_state, sub_degree, month=target.month)
+    s_risk = (state_late_risk(history, hour, day_state, sub_degree,
+                              month=target.month, grain=grain)
               if day_state is not None else None)
     return IntradayCeiling(
         kind="sharpened", city=city, target=tgt_iso, sub_degree=sub_degree,
-        hour=hour, running_max_c=running_max, n_rise=len(rises),
+        grain=grain, hour=hour, running_max_c=running_max, n_rise=len(rises),
         pmf=tuple(pmf), modal_bucket=modal_b, modal_prob=modal_p,
         day_state=day_state, state_late_risk=s_risk,
         live_cur_f=live_cur, live_max24_f=live_max24, feed=feed,
         source=(f"{station_name} {icao} "
-                + ("(live Wunderground hourly, whole-°F → settlement °C)" if use_wu
+                + (f"(live Wunderground hourly, whole-°F → settlement °{grain})" if use_wu
                    else "(live IEM ASOS METAR, hourly)")
                 + (f" + {live_note}" if live_note else "")))
 

@@ -213,3 +213,65 @@ all prior live-floor KATs unchanged. Full gate **431 green**.
 freshest reading. If a genuine sharp spike did (rare at 30-min obs cadence), it would be
 rejected and the lock would use the slightly lower current reading — conservative, not wrong.
 The settle-cross-check divergence alarm remains the backstop for any register/settlement gap.
+
+---
+
+## 15. Daily-LOW market support added — the low event is no longer invisible (FEATURE, read-only)
+*Added 2026-07-09.* `run.py` only ever fetched the `highest-temperature-…` event (slug hard-
+coded, `HIGHEST_TEMP_TAG` paging, `compare_high` only), so a whole tradeable market — e.g.
+"Lowest temperature in London on July 9?" (volume ~16.7k USDC) — was never modelled. User-caught.
+
+**What shipped (read-only, mirrors the high comparison; changes no existing served number):**
+- `market.event_slug(city, target, kind)` — builds the `lowest-`/`highest-` slug; `resolved_event_slug`
+  kept as the high alias. `_TITLE_RE` now matches `highest|lowest` (captures `kind`).
+- `MarketData.fetch_market_by_slug(slug)` — pulls one event by its exact slug (low events sit under
+  a different Gamma tag than the high paging enumerates).
+- `compare_low` — the daily-LOW model-vs-market bucket comparison on `Validation.residuals_low`.
+  Extracted a shared `_compare` core so compare_high/compare_low are thin wrappers (DRY; the
+  existing high KATs guard the core). Basket low markets settle whole-°C, so a sub-degree low
+  market is declined (the station-offset transfer is high-only).
+- `run.py` renders a "MARKET COMPARISON — LOW" block when `--market` is set. Live 07-09 London
+  low: model 22°C 71% vs market 22°C 42% / 23°C 35% — a genuine divergence (the market leans a
+  bucket warmer; consistent with the intensifying-heatwave warm-nights ramp).
+
+**Gate label: FEATURE (read-only annotation, same posture as compare_high — "NOT an edge, C7").**
+It adds a served comparison but moves no forecast, pmf, weight, or pick, and no existing number
+changes (high header/output byte-identical). KAT `tests/test_low_market.py` (slug, title regex,
+fetch-by-slug, compare_low pmf built on the low cloud + re-centres with the verdict, MIN_RESIDUALS
+decline). Full gate **436 green**.
+
+**Registered follow-up (NOT done):** persisting low snapshots to the DB + settling them against the
+daily MINIMUM + a low proxy-vs-contract audit. That is a storage schema/keying change (a snapshot
+is currently one market per place/day = the high); scoped out here to keep this read-only and
+un-gated. Until then the low comparison is display-only and is not entered into the C7 ledger.
+
+---
+
+## 16. Intraday lever wired for KSFO / San Francisco (whole-°F) — FEATURE, grain-aware
+*Added 2026-07-09.* Both intraday modules skipped SF ("not a configured settlement city"), so
+SF had no dead-bucket floor and no ceiling lock — the only conviction mechanism. The blocker was
+grain: SF settles whole-°F (2°F Polymarket buckets), while the lever quantized hard-coded °C.
+
+**What shipped:**
+- SF added to `intraday_ceiling._HOURLY_STATION` (KSFO), `_WU_INTRADAY` (reads the WU hourly
+  settlement feed, like Singapore), `_LIVE_REGISTER` (v3 current/register consult), and a new
+  `_SETTLE_GRAIN = {"san francisco": "F"}`; and to `intraday._CITY_CONFIG` with `grain="F"`.
+- The settlement quantizer is now grain-aware: `sharpen_pmf(..., grain)` and
+  `state_late_risk(..., grain)` pass the grain to `_native_reading_int`, which converts the
+  (always-°C) running max to the settlement unit before bucketing. Default stays "C" — the °C
+  cities are byte-identical (441-test gate).
+- run.py renders the SF blocks in °F (running max, floor bucket, pmf), and
+  `_intraday_verdict_bucket` uses the city grain — fixing a false "verdict bucket ALREADY DEAD"
+  alarm that compared the °C verdict bucket (18) against the °F floor (64).
+
+**Live (SF 07-08, post-peak, declining):** floor **64°F**, verdict bucket **65°F live**, ceiling
+**65°F @ 98%** — matching the market's 99% on the 64–65°F bucket and beating the day-ahead model's
+warm lean. KAT `tests/test_sf_intraday.py` (config wiring both modules + grain-aware quantizer:
+°F grain buckets at 65, °C grain at 18, from the same 18.3°C running max).
+
+**Gate label: FEATURE.** The dead-bucket floor is observation-grade (certain). The ceiling pmf is
+leak-free (resampled from SF's own strictly-earlier history) but its CONVICTION is **uncertified
+for SF** — no frozen A/B yet, so it is forward-accruing exactly as the °C cities' locks were
+before certification; today's 98% is observation-grounded (the peak has passed) rather than a
+speculative pre-peak claim. Note the lever reports whole-°F station readings (65°F); the market's
+2°F bucket mapping (65°F → 64–65°F) is handled by the market comparison, not the lever.

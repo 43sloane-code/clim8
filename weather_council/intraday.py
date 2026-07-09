@@ -49,6 +49,7 @@ class _CityCfg:
     fetch: str           # "hko" | "metar"
     label: str
     icao: str | None = None   # settlement airport ICAO for the "metar" fetch
+    grain: str = "C"          # settlement unit: "C" everywhere except San Francisco ("F")
 
 
 # The bucket cities, keyed exactly like run.py's SETTLEMENT_REFERENCE so the
@@ -65,6 +66,8 @@ _CITY_CONFIG: tuple[_CityCfg, ...] = (
              label="Ninoy Aquino Intl RPLL (round-half-up)"),
     _CityCfg("singapore", sub_degree=False, fetch="metar", icao="WSSS",
              label="Changi WSSS (round-half-up)"),
+    _CityCfg("san francisco", sub_degree=False, fetch="metar", icao="KSFO",
+             grain="F", label="San Francisco Intl KSFO (whole °F, round-half-up)"),
 )
 
 
@@ -85,6 +88,7 @@ class IntradayFloor:
     city: str
     target: str
     sub_degree: bool
+    grain: str = "C"          # settlement unit for floor_bucket / running_max display
     label: str | None = None
     running_max_c: float | None = None
     record_time: str | None = None
@@ -203,8 +207,8 @@ def intraday_floor(place: Place, target: dt.date, *,
             label=cfg.label, source=source,
             note="no observations recorded yet on the target local day")
 
-    floor_bucket = _native_reading_int(rmax, "C", cfg.sub_degree)
+    floor_bucket = _native_reading_int(rmax, cfg.grain, cfg.sub_degree)
     return IntradayFloor(
         kind="floor", city=city, target=tgt_iso, sub_degree=cfg.sub_degree,
-        label=cfg.label, running_max_c=rmax, record_time=rtime, source=source,
-        floor_bucket=floor_bucket, n_obs=n)
+        grain=cfg.grain, label=cfg.label, running_max_c=rmax, record_time=rtime,
+        source=source, floor_bucket=floor_bucket, n_obs=n)
