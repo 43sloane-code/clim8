@@ -58,8 +58,15 @@ the ledger certifies.
   * London: peak 15:00 (July IQR 13–16, late-spike 25% after 16:00); July: 17:00≈92%,
     18:00≈97%, 19:00=100%. Spring/autumn runs earlier — season matters.
   * San Francisco: peak ~14:00 PDT; easiest city (trap 14%); declining@15:00≈96%, @16:00≈99%.
-- Register (WU v3 max24) is floor-raise-only AND attribution-gated: a 24h register above
-  today's obs may be YESTERDAY's peak — never floor today on it without attribution.
+- Register (WU v3 max24) is floor-raise-only and bounded on THREE sides (weather_council/
+  sources.py `_fuse_live_floor`, KAT test_live_floor.py): (1) TIMING — a pre-dawn register may be
+  YESTERDAY's peak, so it needs attribution (a42ffa2); (2) MARGIN — it must sit within a between-
+  obs spike (~3°F) of today's own obs, else it's an un-attributable carryover (a42ffa2); (3)
+  PHANTOM CAP — it can NEVER exceed WU's own daily-max endpoint (`wunderground_daily_max`), which
+  already aggregates real between-obs peaks (6533fca: Jeddah 07-09 register 102°F vs settled 100°F
+  served a phantom 39). A corroborated register (== daily-max) still fuses — that is its legit
+  07-04/07-07 job of leading the lagging hourly rows. If a served intraday bucket looks 1-2°F hot,
+  suspect the register: cross-check `wunderground_daily_max` and the hourly obs before trusting it.
 - Certainty hierarchy (vocabulary must match): observation (banked floor, 100%) > physics
   (post-sunset/persistent-decline = final) > climatology (backtest %, label "backtest,
   uncertified" unless in the certification table) > model (day-ahead pmf).
