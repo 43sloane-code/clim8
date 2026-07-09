@@ -380,6 +380,7 @@ def _bucket_for_reading(buckets: list[dict], reading_int: int) -> str | None:
 # WU history can't match) — the two agree on ordinary days, diverge only on such spike days.
 _WU_SETTLE_TZ = {"RPLL": "Asia/Manila", "WSSS": "Asia/Singapore",
                  "KSFO": "America/Los_Angeles",   # SF: live WU oracle, whole-°F
+                 "OPKC": "Asia/Karachi",          # Karachi: settlement WU (backtest stays IEM)
                  "EGLC": "Europe/London"}         # London: settlement WU (backtest stays IEM)
 
 

@@ -76,6 +76,15 @@ SETTLEMENT_REFERENCE: dict[str, dict[str, str]] = {
         # settlement grain is detected from the raw obs, so this anchors correctly.
         "url": "https://www.wunderground.com/history/daily/us/ca/san-francisco/KSFO",
     },
+    "karachi": {
+        "icao": "OPKC",
+        "name": "Jinnah Intl (Masroor WU record identical)",
+        # The Polymarket contract names the Masroor Airbase (OPMR) record; OPMR has
+        # no IEM feed, but its WU daily is identical to Jinnah/OPKC's (both ~34-36°C
+        # this week), so we anchor on OPKC — WU-settled whole-°C, IEM-backtested,
+        # with the live IEM overlay closing the ~110-day Meteostat lag.
+        "url": "https://www.wunderground.com/history/daily/pk/karachi/OPKC",
+    },
 }
 
 # Cities anchored on a NON-airport settlement station, with a nearby airport shown

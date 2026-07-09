@@ -275,3 +275,35 @@ for SF** — no frozen A/B yet, so it is forward-accruing exactly as the °C cit
 before certification; today's 98% is observation-grounded (the peak has passed) rather than a
 speculative pre-peak claim. Note the lever reports whole-°F station readings (65°F); the market's
 2°F bucket mapping (65°F → 64–65°F) is handled by the market comparison, not the lever.
+
+---
+
+## 17. Karachi added (Jinnah / OPKC) — WU-anchored whole-°C, London pattern (FEATURE)
+*Added 2026-07-09.* New settlement city on the live WU oracle, same criteria/precision as
+London and Singapore: whole-°C round-half-up, WU-settled, IEM-backtested. The Polymarket
+market ("Highest temperature in Karachi", ~19k USDC) settles whole-°C. It exactly mirrors
+LONDON's config (IEM hourly intraday backbone + WU v3 register consult).
+
+**The critical fix was currency.** Karachi's Meteostat bulk file lags ~110 days — in July it
+served MARCH data, so the day-ahead verdict backtested on the wrong season (bias +1.02°C learned
+on spring). Adding OPKC to `_IEM_OVERLAY_TZ` overlays the live IEM METAR, dropping the lag to ~0
+and moving the recent record to the correct July highs (34/36/35°C). Verdict shifted 34.7→34.2
+(→ bucket 34), and council now AGREES with the market at 34 (was 35 vs 34).
+
+**Settlement-station note.** The contract names "Masroor Airbase" (OPMR), which has no IEM feed;
+but OPMR's WU daily is IDENTICAL to Jinnah/OPKC's this week (both 34–36°C), so we anchor on OPKC
+(WU-settled + IEM-backtestable) and flag Masroor in the settlement reference. If they ever diverge
+that is a settlement-alignment gap the audit already catches.
+
+**Config points wired** (all additive, one per established pattern): sources `WU_GEO`/`WU_LOCATION`/
+`_IEM_OVERLAY_TZ`; storage `_WU_SETTLE_TZ`; council `PINNED_ANCHOR_ICAO`/`STRICT_ANCHOR_ICAO`/
+`_WU_SETTLE_C_ICAOS`; run `SETTLEMENT_REFERENCE`; intraday `_CITY_CONFIG`; intraday_ceiling
+`_HOURLY_STATION`/`_LIVE_REGISTER`. KAT `tests/test_karachi.py`. Full gate 443 green.
+
+**Gate label: FEATURE.** Day-ahead pmf + intraday lever + market comparison all serve honest,
+evidence-graded output; conviction is uncertified/forward-accruing like every new city. Live
+07-09: modal 34°C @ 49%, band 34–35, council=market=34; a warm spell ~2°C above the July mode (32).
+
+## Removed: LAX (Los Angeles / KLAX on-demand)
+The held LAX work was removed from the working tree per user directive (2026-07-09) and stashed
+(`git stash`, recoverable). It was never committed; main was always LAX-free.

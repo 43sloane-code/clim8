@@ -68,6 +68,8 @@ _CITY_CONFIG: tuple[_CityCfg, ...] = (
              label="Changi WSSS (round-half-up)"),
     _CityCfg("san francisco", sub_degree=False, fetch="metar", icao="KSFO",
              grain="F", label="San Francisco Intl KSFO (whole °F, round-half-up)"),
+    _CityCfg("karachi", sub_degree=False, fetch="metar", icao="OPKC",
+             label="Karachi / Jinnah OPKC (round-half-up)"),
 )
 
 
