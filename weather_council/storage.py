@@ -187,6 +187,40 @@ def _connect() -> sqlite3.Connection:
     for col, typ in tf_added.items():
         if col not in tf_existing:
             conn.execute(f"ALTER TABLE tracked_forecasts ADD COLUMN {col} {typ}")
+    # Order-book archive (Phase 3): one row per (place, target_date, issued_at,
+    # token_id) capturing the LIVE CLOB order book at the SAME instant as the price
+    # snapshot in market_snapshots (join on place+target_date+issued_at). This is
+    # what lets executable depth-walk P&L (paper_pnl) be measured against the
+    # theoretical mid the served comparison used — you cannot trade at the mid.
+    #
+    # READ-ONLY, ADDITIVE, and independent of the served forecast: it records what
+    # the book looked like, never a model probability, vote, or trade. A token whose
+    # fetch/parse failed is still written as a row with fetch_ok=0 (stats NULL,
+    # error set) so a silent gap is impossible — absence of a row means "capture
+    # never ran", a fetch_ok=0 row means "ran and this token's book was unavailable".
+    # book_json holds the full parsed ladder (bids/asks) so P&L can re-walk it
+    # offline without re-fetching. Depth in USD notional (Σ price×size) per side.
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS book_snapshots (
+               issued_at      TEXT NOT NULL,
+               place          TEXT NOT NULL,
+               target_date    TEXT NOT NULL,
+               token_id       TEXT NOT NULL,
+               bucket_label   TEXT,
+               fetch_ok       INTEGER NOT NULL,
+               best_bid       REAL,
+               best_ask       REAL,
+               mid            REAL,
+               spread         REAL,
+               bid_depth_usd  REAL,
+               ask_depth_usd  REAL,
+               n_bid_levels   INTEGER,
+               n_ask_levels   INTEGER,
+               book_ts        TEXT,
+               book_json      TEXT,
+               error          TEXT,
+               PRIMARY KEY (place, target_date, issued_at, token_id))"""
+    )
     conn.commit()
     return conn
 
