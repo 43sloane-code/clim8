@@ -64,6 +64,13 @@ LOCK = LOGS / ".accumulate.lock"
 # BACKTEST anchor stays the deep IEM-EGLC archive (London ∉ council._WU_TRUTH_STATIONS).
 # Manila/Singapore anchor AND settle on WU; SF/KSFO too but is on-demand, not in CITIES.
 CITIES = ["Manila", "Singapore", "London"]
+# Focus-basket cities captured ONLY for executable-P&L accrual, NOT part of the
+# analytical/watchdog spine above. run.py --market logs a day-ahead price snapshot AND
+# (via book_logger) archives the paired order book at the same instant — the join
+# paper_pnl's executable view needs. London + Singapore already accrue through CITIES;
+# these three complete the focus basket (Karachi, Jeddah, San Francisco). Kept separate
+# so the spine's watchdog/settlement semantics are untouched.
+FOCUS_BOOK_CITIES = ["Karachi", "Jeddah", "San Francisco"]
 LEAD = 1                                   # day-ahead: the fair edge test
 TIMEOUT_S = 600                            # generous per-subprocess cap
 
@@ -199,6 +206,26 @@ def main() -> int:
                 "no matching market / comparison withheld",
             )
             _log(f"{city}: no snapshot — {note}")
+
+    # 1a. Focus-basket book capture (executable-P&L accrual). Same wired path as the
+    # CITIES loop — run.py --market logs the day-ahead price snapshot AND archives the
+    # paired order book at the same instant — for the focus cities not already covered
+    # above. Idempotent per city per day; each city failure-isolated so one dead market
+    # never aborts the spine.
+    for city in FOCUS_BOOK_CITIES:
+        if _snapshotted_today(city):
+            _log(f"{city}: already have today's snapshot — skipping focus book-capture")
+            continue
+        rc, out = _run([city, "--lead", str(LEAD), "--market"])
+        logged = _snapshotted_today(city)
+        _log(f"{city}: focus book-capture lead{LEAD} rc={rc} snapshot_logged={logged}")
+        if not logged:
+            note = next(
+                (l.strip() for l in out.splitlines()
+                 if "withheld" in l.lower() or "no market" in l.lower()),
+                "no matching market / comparison withheld",
+            )
+            _log(f"{city}: no focus snapshot — {note}")
 
     # 1b-1d. Point-in-time accrual ledgers (all recommend-only, each failure-isolated):
     # TWC 9th-member candidate pairs, the Singapore PoP regime tag, and the lock
