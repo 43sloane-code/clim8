@@ -66,6 +66,22 @@ class TestSoftFailures(unittest.TestCase):
         self.assertIn("settle_station_fetch",
                       failures.soft_failure_counts(72, db_path=self.tmp))  # wider window sees it
 
+    def test_default_db_write_is_suppressed_under_test(self):
+        # The instrumentation calls record_soft_failure on the DEFAULT (production) DB.
+        # Under the test harness that must be a NO-OP, or every test that trips a
+        # swallowed except pollutes the real ledger and the healthcheck cries wolf.
+        # (unittest is in sys.modules here, so _under_test() is True.)
+        from unittest import mock
+        default = Path(tempfile.mkdtemp()) / "prod.db"
+        with mock.patch.object(failures, "DB_PATH", default):
+            failures.record_soft_failure("settle_wu_fetch", ValueError("x"))  # db_path=None
+        # Nothing written: the file/table is absent or empty.
+        self.assertEqual(failures.recent_soft_failures(24, db_path=default), [])
+        # An EXPLICIT db_path still records (test_failures itself relies on this).
+        failures.record_soft_failure("settle_wu_fetch", ValueError("x"), db_path=self.tmp)
+        self.assertEqual(failures.soft_failure_counts(24, db_path=self.tmp),
+                         {"settle_wu_fetch": 1})
+
     def test_is_a_leaf_module(self):
         # failures.py must import nothing from weather_council, or instrumenting
         # storage/sources would create an import cycle. Assert on its source text.

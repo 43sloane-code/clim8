@@ -20,9 +20,21 @@ __all__ = ["record_soft_failure", "recent_soft_failures", "soft_failure_counts",
 
 import datetime as dt
 import sqlite3
+import sys
 from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent.parent / "verdicts.db"
+
+
+def _under_test() -> bool:
+    """True when running inside the test harness. The settlement-path instrumentation
+    (storage/intraday_ceiling/book_logger) calls record_soft_failure on the DEFAULT
+    (production) DB; tests exercise those exact code paths with fakes, so without this
+    guard a test run writes test noise into the real soft_failures ledger and the
+    healthcheck cries wolf. A test runner always has unittest/pytest imported; a real
+    run (run.py / accumulate / healthcheck) never does. An EXPLICIT db_path bypasses
+    this (so test_failures can still validate the recorder against a temp DB)."""
+    return "unittest" in sys.modules or "pytest" in sys.modules
 
 
 def _utc_now_iso() -> str:
@@ -48,6 +60,8 @@ def record_soft_failure(tag: str, exc: BaseException, db_path: Path | None = Non
     """Append one swallowed failure to the ledger. BEST-EFFORT: this must NEVER raise back into
     the caller — a broken failures table cannot be allowed to break the resilience it observes.
     Call it INSIDE the existing `except` block; do not change the control flow around it."""
+    if db_path is None and _under_test():
+        return                              # never pollute the production ledger from a test
     try:
         conn = _connect(db_path)
         with conn:

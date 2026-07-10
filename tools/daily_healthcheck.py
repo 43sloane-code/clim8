@@ -369,7 +369,7 @@ def _city_market_snapshot(council, place, fp, target, votes, observed, truth):
         # cities only, e.g. Singapore in this basket) so depth-walk P&L can later be
         # measured against the mid. Never lets a book fetch abort the health check.
         try:
-            capture_for_place(council.sources, place, target.isoformat(), issued_at)
+            capture_for_place(council.sources, place, target, issued_at)  # target: dt.date
         except Exception:
             pass
     return comparison, note

@@ -100,18 +100,23 @@ def capture_for_market(md: MarketData, place_label: str, place_name: str,
     return capture_market_books(md, place_label, target, issued_at, market.buckets)
 
 
-def capture_for_place(sources: Sources, place, target: str,
+def capture_for_place(sources: Sources, place, target,
                       issued_at: str | None = None) -> dict | None:
     """Resolve today's high-temperature market for `place` and capture its book.
-    Standalone entry point (the CLI and any caller without a market in hand). Returns
-    the capture summary, or None when out of scope / no matching market. Reuses the
-    caller's Sources http (shared request budget)."""
+    Standalone entry point (the CLI and any caller without a market in hand). `target`
+    may be a `datetime.date` OR an ISO date string — match_market needs a date while the
+    archive stores the ISO string, so normalize once here (passing the string straight
+    to match_market silently broke the match and captured nothing). Returns the capture
+    summary, or None when out of scope / no matching market. Reuses the caller's Sources
+    http (shared request budget)."""
     if not in_focus(place.name):
         return None
+    target_date = target if isinstance(target, dt.date) else dt.date.fromisoformat(str(target))
+    target_iso = target_date.isoformat()
     issued_at = issued_at or storage.utc_now_iso()
     md = MarketData(http=sources.http)
-    market = match_market(md.fetch_temperature_markets(), place.name, target)
-    return capture_for_market(md, place.label(), place.name, target, market, issued_at)
+    market = match_market(md.fetch_temperature_markets(), place.name, target_date)
+    return capture_for_market(md, place.label(), place.name, target_iso, market, issued_at)
 
 
 def main() -> int:

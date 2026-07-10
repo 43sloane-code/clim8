@@ -129,6 +129,45 @@ class TestCapture(unittest.TestCase):
         self.assertIsNone(book_logger.capture_for_market(
             md, "London", "London", "2026-07-11", None, "2026-07-10T12:00:00"))
 
+    def test_capture_for_place_normalizes_target_to_date_for_match(self):
+        # Regression: a string target was passed straight to match_market (which does
+        # target_date.month) -> AttributeError -> swallowed -> zero books captured.
+        # capture_for_place must hand match_market a dt.date whether given a str or date.
+        import datetime as dt
+
+        class _FakeMD:
+            def __init__(self, http=None):
+                pass
+
+            def fetch_temperature_markets(self, *a, **k):
+                return []
+
+            def fetch_order_book(self, tok):
+                return _GOOD_BOOK
+
+        seen = {}
+
+        def _fake_match(markets, city, target_date):
+            seen["type"] = type(target_date).__name__
+            seen["val"] = target_date
+            return SimpleNamespace(buckets=[_bucket("31C", "T_YES")])
+
+        place = SimpleNamespace(name="London", label=lambda: "London")
+        src = SimpleNamespace(http=None)
+        for target in ("2026-07-11", dt.date(2026, 7, 11)):
+            seen.clear()
+            with mock.patch.object(book_logger, "MarketData", _FakeMD), \
+                 mock.patch.object(book_logger, "match_market", _fake_match):
+                out = book_logger.capture_for_place(src, place, target, "2026-07-10T12:00:00")
+            self.assertEqual(seen["type"], "date", f"match_market got {seen['type']} for {target!r}")
+            self.assertEqual(seen["val"], dt.date(2026, 7, 11))
+            self.assertEqual(out["ok"], 1)                # a book was actually captured
+        # And the archive stored the ISO-string target (not a date repr).
+        conn = sqlite3.connect(self._tmp.name)
+        dates = {r[0] for r in conn.execute("SELECT DISTINCT target_date FROM book_snapshots")}
+        conn.close()
+        self.assertEqual(dates, {"2026-07-11"})
+
     def test_book_snapshot_coverage_summarises_ok_and_failed(self):
         md = _FakeMarketData({"OK": _GOOD_BOOK, "BAD": None})
         book_logger.capture_market_books(
