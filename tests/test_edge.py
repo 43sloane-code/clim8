@@ -109,6 +109,37 @@ class TestC7EdgeScoring(unittest.TestCase):
         self.assertEqual(a, b)                                  # deterministic
         self.assertLessEqual(a[0], a[1])
 
+    def test_ci_width_readout_reports_precision_without_changing_gate(self):
+        # Phase 6d: the CI-width line states precision and sign-resolution; it must
+        # NOT alter MIN_SETTLED or the validation verdict (labeling only).
+        from weather_council.edge import (report_lines, report_to_dict,
+                                          EdgeReport, MIN_SETTLED)
+        self.assertEqual(MIN_SETTLED, 20)                      # gate unchanged
+        excl = EdgeReport(n=25, council_brier=0.70, market_brier=0.72,
+                          council_logloss=0.60, market_logloss=0.66, logloss_diff=0.06,
+                          logloss_diff_ci=(0.01, 0.11), brier_diff=-0.02,
+                          council_reliability=(), market_reliability=(),
+                          is_edge_validated=True, note="ok")
+        text = "\n".join(report_lines(excl))
+        self.assertIn("CI width 0.1000", text)
+        self.assertIn("±0.0500", text)
+        self.assertIn("excludes zero", text)
+        self.assertEqual(report_to_dict(excl)["logloss_diff_ci95_width"], 0.1)
+        straddle = EdgeReport(n=22, council_brier=0.71, market_brier=0.71,
+                              council_logloss=0.62, market_logloss=0.63, logloss_diff=0.01,
+                              logloss_diff_ci=(-0.03, 0.05), brier_diff=0.0,
+                              council_reliability=(), market_reliability=(),
+                              is_edge_validated=False, note="ci includes zero")
+        self.assertIn("spans zero", "\n".join(report_lines(straddle)))
+        # No CI yet (empty report) -> no width line, width None (no crash).
+        none_ci = EdgeReport(n=0, council_brier=None, market_brier=None,
+                             council_logloss=None, market_logloss=None, logloss_diff=None,
+                             logloss_diff_ci=None, brier_diff=None,
+                             council_reliability=(), market_reliability=(),
+                             is_edge_validated=False, note="thin")
+        self.assertNotIn("CI width", "\n".join(report_lines(none_ci)))
+        self.assertIsNone(report_to_dict(none_ci)["logloss_diff_ci95_width"])
+
 class TestC7Settlement(unittest.TestCase):
     """The snapshot ledger settles realized buckets against the verdict's anchor
     station (the record the market pays out on), not a face-value reading."""

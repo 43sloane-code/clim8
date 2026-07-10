@@ -253,8 +253,20 @@ def report_lines(r: EdgeReport) -> list[str]:
     L.append(f"    LogLoss council {r.council_logloss:.4f}  vs  market {r.market_logloss:.4f}"
              f"   (council−market {-(r.logloss_diff):+.4f}; lower is better)")
     if r.logloss_diff_ci is not None:
+        lo, hi = r.logloss_diff_ci
         L.append(f"    log-loss gain (market−council) {r.logloss_diff:+.4f}, "
-                 f"95% bootstrap CI [{r.logloss_diff_ci[0]:+.4f}, {r.logloss_diff_ci[1]:+.4f}]")
+                 f"95% bootstrap CI [{lo:+.4f}, {hi:+.4f}]")
+        # CI-WIDTH readout (Phase 6d): the width says how PRECISELY the gain is known
+        # — a point estimate without its uncertainty invites over-reading a thin
+        # sample. A CI straddling zero means the SIGN is still undetermined, however
+        # the point lands. Labeling only: it does NOT change MIN_SETTLED or the
+        # validation verdict, just states the precision the reader is standing on.
+        width = hi - lo
+        straddles = lo <= 0.0 <= hi
+        precision = ("spans zero — the SIGN of the edge is undetermined at this n"
+                     if straddles else
+                     "excludes zero — the sign is resolved, magnitude still ±half-width")
+        L.append(f"    CI width {width:.4f} (±{width / 2:.4f} on the gain): {precision}")
     L.append(f"    -> {r.note}")
     return L
 
@@ -269,6 +281,11 @@ def report_to_dict(r: EdgeReport) -> dict:
         "council_logloss": r.council_logloss, "market_logloss": r.market_logloss,
         "logloss_diff_market_minus_council": r.logloss_diff,
         "logloss_diff_ci95": list(r.logloss_diff_ci) if r.logloss_diff_ci else None,
+        # CI-width readout (Phase 6d): precision of the gain; None until a CI exists.
+        # Reported alongside the bounds so the status can never show a point without
+        # its uncertainty. Does NOT change MIN_SETTLED or is_edge_validated.
+        "logloss_diff_ci95_width": (round(r.logloss_diff_ci[1] - r.logloss_diff_ci[0], 4)
+                                    if r.logloss_diff_ci else None),
         "brier_diff_market_minus_council": r.brier_diff,
         "council_reliability": _bins(r.council_reliability),
         "market_reliability": _bins(r.market_reliability),
