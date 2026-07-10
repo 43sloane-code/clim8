@@ -46,12 +46,13 @@ _GOOD_BOOK = {
 
 class TestFocusScope(unittest.TestCase):
     def test_focus_cities_matched_case_insensitively(self):
-        for name in ["London", "london, United Kingdom", "Jakarta", "Jeddah",
+        for name in ["London", "london, United Kingdom", "Karachi", "Jeddah",
                      "Singapore", "San Francisco"]:
             self.assertTrue(book_logger.in_focus(name), name)
 
     def test_out_of_scope_cities_excluded(self):
-        for name in ["Manila", "Hong Kong", "Karachi", ""]:
+        # Jakarta is excluded: Polymarket lists no Jakarta high-temperature market.
+        for name in ["Manila", "Hong Kong", "Jakarta", ""]:
             self.assertFalse(book_logger.in_focus(name), name)
 
 

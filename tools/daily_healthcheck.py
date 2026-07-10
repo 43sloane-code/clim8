@@ -1201,7 +1201,7 @@ def main() -> int:
     if cov is not None:
         if cov["rows"] == 0:
             lines.append("  no order-book rows captured in the last 24h "
-                         "(focus cities: Jakarta, Jeddah, Singapore, London, San Francisco).")
+                         "(focus cities: Karachi, Jeddah, Singapore, London, San Francisco).")
         else:
             fail_share = cov["failed"] / cov["rows"] if cov["rows"] else 0.0
             flag = "  ⚠ mostly-empty books" if fail_share >= 0.5 else ""

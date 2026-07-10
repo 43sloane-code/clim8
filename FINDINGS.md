@@ -426,3 +426,43 @@ the low series (`settlement_ref recent[].low` + `v.records.normal_low`), no extr
 aware; skips gracefully when normals/record are absent. Live London 07-10: HIGH "29°C +7.7°C
 ABOVE norm · RISING · RECENT-WARM"; LOW "21°C +7.5°C ABOVE norm · RISING nights · RECENT-WARM".
 KAT tests/test_data_interpretation.py updated (both-attribute, °F/°C grain, never-a-pick). Gate 452.
+
+## 24. CLOB Book-Capture pipeline — executable P&L vs the mid (FEATURE, read-only)
+*Added 2026-07-10, user directive "Proceed with the full plan" (CLOB Book Capture execution plan).*
+The served model-vs-market comparison prices every bet at the theoretical MID. You cannot trade at
+the mid — you cross the spread and walk the book. This ships a read-only pipeline that archives the
+live order book beside each price snapshot so EXECUTABLE depth-walk P&L can be measured. Merge order
+6a→6b→6c→1→2→3→4→5→6d, each its own commit + KAT, gate green throughout (452→499).
+
+- **6a** UTC persisted-timestamp helper (`storage.utc_now_iso`, naive-UTC, legacy-ordering-safe).
+- **6b** Soft-failure surfacing (`weather_council/failures.py`, leaf module): settlement-path
+  `except` swallows now RECORD (never change control flow) → `soft_failures` table; healthcheck
+  ALARMS on any settlement-tagged failure in 24h. HKO swallows OMITTED per scope.
+- **6c** `WU_API_KEY` env-first (rotatable without a code change; default bit-identical).
+- **1** `clob.polymarket.com` allowlisted (market-DATA host only; no signed trading surface, no
+  order/key/signature; lookalike + SSRF guards KAT'd).
+- **2** `weather_council/clob_book.py` (pure, stdlib-only): parse a raw `/book` payload → typed
+  book (coerce string prices, drop malformed/out-of-(0,1] levels, sort best-first); `fill_buy`
+  walks the asks spending $D → S shares at q_exec=D/S, `filled=False` when the book is exhausted
+  (UNTRADEABLE at size). Depth-walk identity at $1: q_exec=1/S, win=S−1, loss=−1.
+- **3** `book_snapshots` table (additive; PK place,target_date,issued_at,token_id); a failed token
+  is a `fetch_ok=0` row so a silent capture gap is impossible.
+- **4** `tools/book_logger.py`: fetch+parse+archive the YES-token book per bucket at the SAME
+  instant as the price snapshot (`log_market_snapshot` now returns issued_at); per-token failure
+  isolation; SCOPED to focus cities; healthcheck ORDER-BOOK CAPTURE block. `MarketData.fetch_order_book`.
+- **5** `tools/paper_pnl.py` `simulate_executable`: walks the archived book instead of the mid;
+  classifies NO-BOOK / UNTRADEABLE-EXEC; the legacy mid-view stays byte-for-byte identical (KAT).
+- **6d** C7 edge report CI-WIDTH readout (precision / sign-resolution); MIN_SETTLED unchanged.
+
+**Phase 0 (decision gate) — PROCEED, connectivity verified.** Live read-only fetch of
+`clob.polymarket.com/book` on the London event returned parseable two-sided books: 25°C ask 0.001
+/$7.8k depth (61 lvls) · 26°C 0.005/0.007 · 27°C 0.032/0.04 · 28°C bid 0.32/ask 0.33 /$12k (33 lvls).
+The endpoint is reachable, the parser handles real payloads, depth is real → the pipeline has data.
+
+**Focus set = Karachi, Jeddah, Singapore, London (EGLC), San Francisco** (HKO excluded).
+**Jakarta dropped (correction).** The original directive named Jakarta, but a live Gamma sweep of
+all 102 open high-temperature events found NO Jakarta market — so there is no settlement record to
+capture depth against, and no rules text to verify a settlement station from. Adding it on a guessed
+station would be exactly the phantom-serving failure class the operator flagged (§20). Karachi
+(already a settlement city, OPKC, live market) takes its place in the capture scope.
+`book_logger.FOCUS_CITIES` + `tests/test_book_logger.py` corrected. Gate 499 green.

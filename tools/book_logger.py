@@ -37,11 +37,13 @@ from weather_council.failures import record_soft_failure  # noqa: E402
 from weather_council.market import MarketData              # noqa: E402
 from weather_council.sources import Sources               # noqa: E402
 
-# The actively-captured settlement cities (user directive: Jakarta, Jeddah, Singapore,
+# The actively-captured settlement cities (user directive: Karachi, Jeddah, Singapore,
 # London EGLC, San Francisco). Matched case-insensitively against the resolved place
 # name. HKO is deliberately excluded. Keep this the single source of the capture scope.
+# (Jakarta was dropped: Polymarket lists no Jakarta high-temperature market, so there
+# is no settlement record to capture depth against.)
 FOCUS_CITIES = frozenset({
-    "jakarta", "jeddah", "singapore", "london", "san francisco",
+    "karachi", "jeddah", "singapore", "london", "san francisco",
 })
 
 
