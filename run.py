@@ -36,7 +36,7 @@ from weather_council.edge import report_lines as edge_report_lines, score_snapsh
 from weather_council.convergence import report_lines as convergence_report_lines
 from weather_council.market import MarketData, _native_reading_int, event_slug
 from weather_council.security import RateLimitError, SecurityError
-from weather_council.sources import Sources, place_today
+from weather_council.sources import Sources, place_today, _round_half_up
 from weather_council.tc_gate import tc_halt
 from weather_council.intraday import intraday_floor
 from weather_council.intraday_ceiling import intraday_ceiling
@@ -815,6 +815,13 @@ def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
     if comparison is not None and getattr(comparison, "market_modal", None):
         mk = _bucket_int_from_label(comparison.market_modal)
         if mk is not None:
+            # SF settles whole-°F, so its market modal label is a °F bucket ("66-67°F")
+            # while every OTHER cross-check signal (council/TWC/regime) is a °C bucket. Left
+            # as-is, the panel printed "council 19°C · market 66°C" and flagged a bogus
+            # "COUNCIL is the OUTLIER, 19/66 boundary" — mixing units. Convert the °F reading
+            # to its °C bucket so the comparison is like-for-like (66-67°F → 19°C == council).
+            if str(getattr(comparison, "grain", "C")).upper().startswith("F"):
+                mk = _round_half_up((mk - 32) * 5 / 9)
             signals.append(("market", mk))
     # TWC — the settlement oracle's OWN forecast, logged point-in-time in tracked_forecasts.
     # Surfaced at FACE VALUE (recommend-only, un-gated): on 07-02 it was the only point signal
