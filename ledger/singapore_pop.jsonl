@@ -1,1 +1,8 @@
 {"target_date": "2026-07-04", "issued_ts": "2026-07-03T00:44:58+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 55.0, "qpf": 0.17, "regime": "convective"}
+{"target_date": "2026-07-05", "issued_ts": "2026-07-04T09:00:27+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 57.0, "qpf": 0.19, "regime": "convective"}
+{"target_date": "2026-07-06", "issued_ts": "2026-07-05T09:00:45+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 24.0, "qpf": 0.0, "regime": "dry"}
+{"target_date": "2026-07-07", "issued_ts": "2026-07-06T09:00:45+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 63.0, "qpf": 0.21, "regime": "convective"}
+{"target_date": "2026-07-08", "issued_ts": "2026-07-07T09:00:33+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 55.0, "qpf": 0.26, "regime": "convective"}
+{"target_date": "2026-07-09", "issued_ts": "2026-07-08T09:01:19+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 66.0, "qpf": 0.39, "regime": "convective"}
+{"target_date": "2026-07-10", "issued_ts": "2026-07-09T09:00:32+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 34.0, "qpf": 0.04, "regime": "dry"}
+{"target_date": "2026-07-11", "issued_ts": "2026-07-10T08:46:04+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 55.0, "qpf": 0.09, "regime": "convective"}
