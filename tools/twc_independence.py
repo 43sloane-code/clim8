@@ -57,12 +57,7 @@ def _pearson(xs: list[float], ys: list[float]) -> float | None:
 
 def _connect_at(db_path):
     from weather_council import storage
-    _orig = storage.DB_PATH
-    storage.DB_PATH = db_path
-    try:
-        return storage._connect()
-    finally:
-        storage.DB_PATH = _orig
+    return storage._connect_at(db_path)      # single shared impl (was duplicated 4x)
 
 
 def audit(source: str = "twc", db_path=None) -> dict:
@@ -116,7 +111,9 @@ def audit(source: str = "twc", db_path=None) -> dict:
                     continue
                 r = _pearson([p[0] for p in pairs], [p[1] for p in pairs])
                 entry["members"].append({"member": mid, "n": len(pairs), "r": _round(r)})
-            entry["members"].sort(key=lambda m: -(abs(m["r"]) if m["r"] is not None else -1))
+            # strongest |r| first; members with r=None (unmeasurable) sort LAST (was a -1 sentinel
+            # that inverted to |r|=1 and pushed them to the top)
+            entry["members"].sort(key=lambda m: (m["r"] is None, -abs(m["r"]) if m["r"] is not None else 0.0))
             # collinearity flags: TWC ≈ the council blend, or ≈ any individual member.
             if entry["corr_council"] is not None and abs(entry["corr_council"]) >= COLLINEAR_R:
                 entry["flagged_collinear"].append("council-blend")

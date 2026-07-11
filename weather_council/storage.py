@@ -22,6 +22,7 @@ __all__ = [
     'log_book_snapshots', 'book_snapshot_coverage', 'utc_now_iso'
 ]
 
+import contextlib
 import datetime as dt
 import json
 import sqlite3
@@ -44,6 +45,19 @@ def utc_now_iso() -> str:
     first-issued = least-leaking) never breaks across the pre/post-UTC boundary. Columns store
     UTC wall-clock, naive format."""
     return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
+
+
+def _connect_at(db_path) -> sqlite3.Connection:
+    """Open a connection against an ARBITRARY db_path by temporarily swapping the module DB_PATH,
+    restored in `finally` (so an exception can't leave it swapped). The single shared implementation
+    of the pattern that postmortem/lessons/twc_offset/twc_independence each used to copy."""
+    global DB_PATH
+    _orig = DB_PATH
+    DB_PATH = db_path
+    try:
+        return _connect()
+    finally:
+        DB_PATH = _orig
 
 
 def _connect() -> sqlite3.Connection:
@@ -515,17 +529,16 @@ def book_snapshot_coverage(hours: int = 24) -> dict:
     cutoff = (dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
               - dt.timedelta(hours=hours)).isoformat(timespec="seconds")
     try:
-        conn = _connect()
-        row = conn.execute(
-            "SELECT COUNT(*), "
-            "       COALESCE(SUM(fetch_ok), 0), "
-            "       COUNT(DISTINCT place || '|' || target_date || '|' || issued_at), "
-            "       COUNT(DISTINCT place) "
-            "FROM book_snapshots WHERE issued_at >= ?", (cutoff,)).fetchone()
-        by_place = conn.execute(
-            "SELECT place, COUNT(*), COALESCE(SUM(fetch_ok), 0) "
-            "FROM book_snapshots WHERE issued_at >= ? GROUP BY place", (cutoff,)).fetchall()
-        conn.close()
+        with contextlib.closing(_connect()) as conn:   # close even if a query raises (no leak)
+            row = conn.execute(
+                "SELECT COUNT(*), "
+                "       COALESCE(SUM(fetch_ok), 0), "
+                "       COUNT(DISTINCT place || '|' || target_date || '|' || issued_at), "
+                "       COUNT(DISTINCT place) "
+                "FROM book_snapshots WHERE issued_at >= ?", (cutoff,)).fetchone()
+            by_place = conn.execute(
+                "SELECT place, COUNT(*), COALESCE(SUM(fetch_ok), 0) "
+                "FROM book_snapshots WHERE issued_at >= ? GROUP BY place", (cutoff,)).fetchall()
     except Exception:
         return {"rows": 0, "ok": 0, "failed": 0, "batches": 0, "places": 0, "by_place": {}}
     total, ok, batches, places = row

@@ -199,7 +199,7 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
     wu_target_high = None                     # the WU settlement high for the target day
     grain = md.get("grain") or "C"            # the market's native settlement grain (°F for KSFO)
     today = place_today(place)
-    wu_dates = [d for d in recent[-4:]]
+    wu_dates = list(recent[-4:])
     if target <= today and target.isoformat() not in wu_dates:
         wu_dates.append(target.isoformat())
     for d in wu_dates:

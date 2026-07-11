@@ -101,8 +101,7 @@ def gather(now_sgt: _dt.datetime | None = None) -> dict:
     except OSError:
         live["accumulate"] = live["watchdog"] = None
     try:
-        rows = load_rows()
-        live["lock_ledger"] = max((r["issued_ts"][:16] for r in rows), default=None)
+        live["lock_ledger"] = max((r["issued_ts"][:16] for r in rows), default=None)  # reuse rows (loaded above)
     except Exception:
         live["lock_ledger"] = None
     try:

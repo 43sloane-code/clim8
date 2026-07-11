@@ -195,12 +195,7 @@ def estimate_offsets(source: str = "twc", db_path=None) -> list[OffsetEstimate]:
 
 def _connect_at(db_path):
     from . import storage
-    _orig = storage.DB_PATH
-    storage.DB_PATH = db_path
-    try:
-        return storage._connect()
-    finally:
-        storage.DB_PATH = _orig
+    return storage._connect_at(db_path)      # single shared impl (was duplicated 4x)
 
 
 def report_lines(estimates: list[OffsetEstimate]) -> list[str]:

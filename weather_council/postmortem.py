@@ -77,11 +77,12 @@ def build_postmortem(final: float, actual: float, prov: dict,
         settlement_div = round(actual - pm_resolved_bucket, 4)
         settlement_crossed = pm_resolved_bucket != actual_bucket   # anchor ≠ contract payout
 
+    # settlement_divergence is NOT a telescoping error component — it lives only in its own
+    # top-level field/column (was also duplicated into comps/components_json).
     comps = {
         "input_error": round(input_error, 4),
         "blend_deviation": round(blend_deviation, 4),
         "bias_contribution": round(bias_contribution, 4),
-        "settlement_divergence": settlement_div,
     }
     cause = _attribute(comps, total_error, crossed, settlement_crossed)
     return {
@@ -173,12 +174,7 @@ def _pm_resolved_bucket(conn, place, target) -> int | None:
 
 def _connect_at(db_path):
     from . import storage
-    _orig = storage.DB_PATH
-    storage.DB_PATH = db_path
-    try:
-        return storage._connect()
-    finally:
-        storage.DB_PATH = _orig
+    return storage._connect_at(db_path)      # single shared impl (was duplicated 4x)
 
 
 def attribution_histogram(db_path=None, hours=None) -> dict:

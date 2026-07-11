@@ -10,9 +10,9 @@ What this is — and is NOT:
     through the project's own sandboxed client and writes a text report.
 
 Each run:
-  1. Walk-forward backtests the council across the basket (London + Hong Kong,
-     each pinned to its exact settlement station; rolling-origin, no future
-     leakage), exactly the evaluation the live verdict uses.
+  1. Walk-forward backtests the council across the basket (BASKET = Manila +
+     Singapore, each pinned to its exact settlement station; rolling-origin, no
+     future leakage), exactly the evaluation the live verdict uses.
   2. Compares the four weighting/bias variants (bias mean|median × 1/MAE^1|^2)
      so the committed choice (mean bias, 1/MAE^2) is re-justified — or challenged
      — on today's data. A challenger is surfaced only if it beats current on the
@@ -77,11 +77,9 @@ from run import _build_comparison                       # noqa: E402
 CRPS_MIN = 10               # residuals needed before a predictive CRPS is trusted
 
 # The basket — narrowed to the two markets we actually settle against, each pinned
-# to its exact settlement station: London -> EGLC (London City Airport, the
-# strict-ICAO anchor) and Hong Kong -> the Royal Observatory HQ (the strict-HKO
-# anchor, NOT the airport VHHH ~6 km away). Accuracy here means matching THESE two
-# stations' published daily highs, so the basket is the settlement set, not a
-# diversity sweep.
+# to its exact settlement station: Manila -> RPLL and Singapore -> WSSS (the WU
+# oracle per city). Accuracy here means matching THESE two stations' published
+# daily highs, so the basket is the settlement set, not a diversity sweep.
 #
 # Trade-off, stated honestly: with only two cities the cross-city paired bootstrap
 # (BOOT_*) has just two per-city deltas to resample, so its 90% CI is effectively

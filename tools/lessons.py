@@ -178,7 +178,9 @@ def emit_candidates(detection: dict, queue_path=None, month=None, db_path=None) 
             "status": status,
             "created_month": month,
             "effect_size": pat["effect_size"],
-            "K_candidates_ever": len(queue) + len(emitted) + len(deferred) + 1,
+            # queue already accumulates each appended candidate this call, so it alone is the
+            # running total (the prior +len(emitted)+len(deferred) double-counted those rows)
+            "K_candidates_ever": len(queue) + 1,
         }
         queue.append(cand)
         existing_ids.add(cid)
@@ -198,12 +200,7 @@ def emit_candidates(detection: dict, queue_path=None, month=None, db_path=None) 
 
 def _connect_at(db_path):
     from weather_council import storage
-    _orig = storage.DB_PATH
-    storage.DB_PATH = db_path
-    try:
-        return storage._connect()
-    finally:
-        storage.DB_PATH = _orig
+    return storage._connect_at(db_path)      # single shared impl (was duplicated 4x)
 
 
 def main() -> int:

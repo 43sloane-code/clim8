@@ -183,7 +183,7 @@ def _fuse_live_floor(runmax_c, cur_f, max24_f, yesterday_max_c, wu_record_max_f=
         never legitimately exceed the daily-max endpoint that already aggregates those peaks;
       * the fusion can only RAISE the floor, never lower it, and never invents readings.
     Pure — KAT'd in tests/test_live_floor.py."""
-    floor_c = runmax_c if runmax_c is not None else None
+    floor_c = runmax_c
     note = None
 
     def f2c(f):

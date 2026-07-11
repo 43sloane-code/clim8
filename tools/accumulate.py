@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local C7 accumulation loop — settle Hong Kong + London snapshots forward.
+"""Local C7 accumulation loop — settle Manila + Singapore + London snapshots forward.
 
 WHY THIS EXISTS
 ---------------
@@ -11,15 +11,15 @@ the durable local accumulator that grows it on this machine, where the code and
 the network egress actually live (the cloud routine's pushes proved unreliable).
 
 WHAT EACH RUN DOES — all through the existing, tested, read-only CLI paths:
-  1. For London and Hong Kong, log ONE *day-ahead* (``--lead 1``) council-vs-
-     market snapshot — but only if today's snapshot for that city is not already
-     on the ledger. The idempotency guard means the LaunchAgent can fire several
-     times a day for robustness (in case the machine was asleep) WITHOUT writing
-     correlated intraday duplicates that would inflate C7's ``n`` and falsely
-     narrow its bootstrap CI.
+  1. For each city in CITIES (Manila, Singapore, London), log ONE *day-ahead*
+     (``--lead 1``) council-vs-market snapshot — but only if today's snapshot for
+     that city is not already on the ledger. The idempotency guard means the
+     LaunchAgent can fire several times a day for robustness (in case the machine
+     was asleep) WITHOUT writing correlated intraday duplicates that would inflate
+     C7's ``n`` and falsely narrow its bootstrap CI.
   2. Settle every verdict/snapshot whose target day is now observable
-     (``--verify``, ``--edge``), each against its OWN anchor station — EGLC for
-     London, the Hong Kong Observatory for HK — exactly as the verdict was scored.
+     (``--verify``, ``--edge``), each against its OWN anchor station (RPLL / WSSS /
+     EGLC — the WU oracle per city) exactly as the verdict was scored.
   3. Append a timestamped line to ``logs/accumulate.log`` and refresh
      ``reports/c7_status.txt`` with the latest C7 verdict, so forward progress
      toward the ``>=20 settled days`` bar is visible at a glance.
@@ -40,6 +40,7 @@ numbers, never auto-applies a bias, and never places a trade or moves funds.
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import fcntl
 import os
@@ -120,7 +121,9 @@ def _ledger_step(label: str, script: str) -> None:
         env = dict(os.environ, PYTHONPATH=str(ROOT))
         p = subprocess.run([PY, script], cwd=ROOT, env=env,
                            capture_output=True, text=True, timeout=TIMEOUT_S)
-        _log(f"{label} rc={p.returncode} | {_tail_status(p.stdout)}")
+        # merge stderr: a tool that writes its error only to stderr would otherwise show a
+        # healthy-looking last stdout line and hide the failure (_tail_status's whole purpose).
+        _log(f"{label} rc={p.returncode} | {_tail_status((p.stdout or '') + (p.stderr or ''))}")
     except Exception as e:                                   # noqa: BLE001 — non-fatal by design
         _log(f"{label} failed (non-fatal): {type(e).__name__}: {e}")
 
@@ -138,10 +141,10 @@ def _snapshot_db() -> None:
         dst.mkdir(exist_ok=True)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tf:
             tmp = tf.name
-        src_c, dst_c = sqlite3.connect(DB), sqlite3.connect(tmp)
-        with dst_c:
-            src_c.backup(dst_c)
-        src_c.close(); dst_c.close()
+        with contextlib.closing(sqlite3.connect(DB)) as src_c, \
+                contextlib.closing(sqlite3.connect(tmp)) as dst_c:   # close both even if backup raises
+            with dst_c:
+                src_c.backup(dst_c)
         with open(tmp, "rb") as f, open(dst / "verdicts.db.gz", "wb") as out:
             with gzip.GzipFile(fileobj=out, mode="wb", mtime=0) as g:
                 g.write(f.read())
@@ -241,19 +244,33 @@ def main() -> int:
     # baseline entry reads "missing" and it fires a false RED (found live on first wiring).
     try:
         env = dict(os.environ, PYTHONPATH=str(ROOT))
-        subprocess.run([PY, "tools/intraday_ceiling_backtest.py", "--city", "singapore",
-                        "--hours", "13,14,15,16", "--emit-crossover",
-                        "reports/crossover_now.json"],
-                       cwd=ROOT, env=env, capture_output=True, text=True, timeout=TIMEOUT_S)
-        with open(ROOT / "reports" / "truth_config.json", "w") as f:
-            t = subprocess.run([PY, "tools/resolve_truth_sources.py"], cwd=ROOT, env=env,
-                               capture_output=True, text=True, timeout=TIMEOUT_S)
-            f.write(t.stdout.strip() or "[]")
+        cx = subprocess.run([PY, "tools/intraday_ceiling_backtest.py", "--city", "singapore",
+                             "--hours", "13,14,15,16", "--emit-crossover",
+                             "reports/crossover_now.json"],
+                            cwd=ROOT, env=env, capture_output=True, text=True, timeout=TIMEOUT_S)
+        if cx.returncode != 0:                        # emit failure -> stale crossover; make it visible
+            _log(f"crossover emit rc={cx.returncode} (non-fatal) | "
+                 f"{_tail_status((cx.stdout or '') + (cx.stderr or ''))}")
+        # truth-config: NEVER clobber a good config with an empty "[]" on a resolve failure — that
+        # makes watchdog Duty 3 ABSTAIN (false-GREEN) on the exact drift it exists to catch. Write
+        # only real output; on failure preserve the prior file (or seed "[]" only if none exists).
+        t = subprocess.run([PY, "tools/resolve_truth_sources.py"], cwd=ROOT, env=env,
+                           capture_output=True, text=True, timeout=TIMEOUT_S)
+        tconf = t.stdout.strip() if t.returncode == 0 else ""
+        tpath = ROOT / "reports" / "truth_config.json"
+        if tconf:
+            tpath.write_text(tconf)
+        elif not tpath.exists():
+            tpath.write_text("[]")
+            _log("truth-config resolve failed and no prior config — seeded [] (watchdog ABSTAINs)")
+        else:
+            _log(f"truth-config resolve rc={t.returncode} — preserving prior config (not clobbering) | "
+                 f"{_tail_status((t.stdout or '') + (t.stderr or ''))}")
         p = subprocess.run([PY, "tools/watchdog_core.py", "--cities", "RPLL,WSSS,EGLC",
                             "--ab-now", "reports/crossover_now.json",
                             "--truth-config", "reports/truth_config.json"],
                            cwd=ROOT, env=env, capture_output=True, text=True, timeout=TIMEOUT_S)
-        _log(f"watchdog rc={p.returncode} | {_tail_status(p.stdout)}")
+        _log(f"watchdog rc={p.returncode} | {_tail_status((p.stdout or '') + (p.stderr or ''))}")
     except Exception as e:                                   # noqa: BLE001 — non-fatal by design
         _log(f"watchdog failed (non-fatal): {type(e).__name__}: {e}")
 
