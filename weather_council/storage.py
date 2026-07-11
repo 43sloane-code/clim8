@@ -47,6 +47,23 @@ def utc_now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
 
 
+def passes_integrity(integrity_flags) -> bool:
+    """Served-number remediation campaign (§1.3) — the mandatory measurement filter. A row is INCLUDED
+    unless it carries a `*_SUSPECT` contamination flag. NULL/empty flags → included: this is the inert
+    Phase-0 default (no row is flagged until a remediation WP runs, so shipping this changes no
+    measurement). `*_CORRECTED` / `*_CONFIRMED` flags do NOT exclude (the correction is trusted).
+    Unparseable flags → EXCLUDED (fail-closed: a row we can't prove clean is not measured). A
+    measurement job (scorecard / p̂_corr / xref calibration) that does not gate on this once flags
+    exist is METHOD-DEFECTIVE."""
+    if not integrity_flags:
+        return True
+    try:
+        flags = json.loads(integrity_flags) if isinstance(integrity_flags, str) else integrity_flags
+    except Exception:
+        return False
+    return not any(str(f).endswith("_SUSPECT") for f in (flags or []))
+
+
 def _connect_at(db_path) -> sqlite3.Connection:
     """Open a connection against an ARBITRARY db_path by temporarily swapping the module DB_PATH,
     restored in `finally` (so an exception can't leave it swapped). The single shared implementation
@@ -100,6 +117,11 @@ def _connect() -> sqlite3.Connection:
         # (stored anyway, alarmed); provenance_json IS NULL == UNATTRIBUTABLE-PREPROVENANCE.
         # Additive/nullable: never alters a served number or an existing score.
         "provenance_json": "TEXT", "provenance_ok": "INTEGER",
+        # Served-number remediation campaign (§1.3): append-only contamination markers, e.g.
+        # ["F2_DAYMAX_SUSPECT"] / ["F2_DAYMAX_CORRECTED"]. Corrected values land in NEW _v2 fields
+        # (added per-WP); the original is never overwritten. Measurement jobs MUST filter via
+        # passes_integrity(). NULL == unflagged == included (inert until a WP writes flags).
+        "integrity_flags": "TEXT",
     }
     for col, typ in added.items():
         if col not in existing:
@@ -155,7 +177,12 @@ def _connect() -> sqlite3.Connection:
     ms_added = {"market_volume": "REAL", "market_liquidity": "REAL",
                 "station_icao": "TEXT", "station_name": "TEXT",
                 "sub_degree": "INTEGER",
-                "pm_resolved_label": "TEXT", "pm_resolved_at": "TEXT"}
+                "pm_resolved_label": "TEXT", "pm_resolved_at": "TEXT",
+                # Served-number campaign (§1.3): contamination markers, primary target is F1
+                # (pm_resolved_label settled against the wrong event). Corrected label -> a new
+                # pm_resolved_label_v2 field (added in WP-1); the original stays. passes_integrity()
+                # gates every measurement. NULL == included (inert until a WP flags).
+                "integrity_flags": "TEXT"}
     for col, typ in ms_added.items():
         if col not in ms_existing:
             conn.execute(f"ALTER TABLE market_snapshots ADD COLUMN {col} {typ}")
