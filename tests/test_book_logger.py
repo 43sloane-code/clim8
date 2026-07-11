@@ -170,8 +170,11 @@ class TestCapture(unittest.TestCase):
 
     def test_book_snapshot_coverage_summarises_ok_and_failed(self):
         md = _FakeMarketData({"OK": _GOOD_BOOK, "BAD": None})
+        # issued_at must fall INSIDE the coverage window; stamp it relative to now (not a fixed
+        # past date) so the row can't age out of the 24h window after 12:00Z — the coverage query
+        # windows on real wall-clock, so a hardcoded timestamp is a point-in-time time-bomb.
         book_logger.capture_market_books(
-            md, "London", "2026-07-11", "2026-07-10T12:00:00",
+            md, "London", "2026-07-11", storage.utc_now_iso(),
             [_bucket("33C", "OK"), _bucket("34C", "BAD")])
         cov = storage.book_snapshot_coverage(24)
         self.assertEqual(cov["rows"], 2)
