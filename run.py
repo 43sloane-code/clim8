@@ -204,7 +204,8 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
         wu_dates.append(target.isoformat())
     for d in wu_dates:
         try:
-            w = sources.wunderground_daily_max(icao, dt.date.fromisoformat(d))
+            w = sources.wunderground_daily_max(icao, dt.date.fromisoformat(d),
+                                               getattr(place, "timezone", None))   # WP-2: local-day
         except Exception:
             w = None
         if not w:

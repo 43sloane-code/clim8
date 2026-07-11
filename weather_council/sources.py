@@ -1041,26 +1041,47 @@ class Sources:
         obs.sort()
         return obs
 
-    def wunderground_daily_max(self, icao: str, target: dt.date) -> dict | None:
+    def wunderground_daily_max(self, icao: str, target: dt.date,
+                               timezone: str | None = None) -> dict | None:
         """The day's max from the Weather Company / Wunderground record for an
         airport — the ACTUAL market settlement oracle (the contract names this feed).
 
         WU stores the station history in whole °F, so we read °F, take the day's max,
         and convert to °C — the value the contract rounds to whole °C. Returns
         {max_f, max_c, n_obs} or None on any failure (caller then falls back to the
-        IEM METAR cross-reference). One request, read-only; apiKey rides in params."""
+        IEM METAR cross-reference). Read-only; apiKey rides in params.
+
+        WP-2 (served-number campaign): the max is taken over the station's LOCAL civil day — the day
+        the contract settles on — NOT over whatever the endpoint's UTC-ish `startDate` window returns.
+        All active WU stations are off-UTC, so a naive max() over the endpoint window can pick up a
+        temperature from the ADJACENT local day (a straddle), and this value is the phantom-cap ceiling
+        feeding `_fuse_live_floor`. So: fetch ±1 UTC day to fully cover the local day whatever the
+        offset, then regroup each obs onto its local day via `valid_time_gmt` + ZoneInfo (mirroring
+        `_wu_daily_raw`) and max over only `target`'s local obs. `timezone=None` degrades to UTC."""
         loc = WU_LOCATION.get((icao or "").upper())
         if loc is None:
             return None
         try:
+            zone = ZoneInfo(timezone) if timezone else ZoneInfo("UTC")
+        except Exception:
+            zone = ZoneInfo("UTC")
+        try:
             data = self.http.get_json(
                 WU_HISTORY_URL.format(loc=loc),
                 {"apiKey": WU_API_KEY, "units": "e",
-                 "startDate": target.strftime("%Y%m%d")})
+                 "startDate": (target - dt.timedelta(days=1)).strftime("%Y%m%d"),
+                 "endDate": (target + dt.timedelta(days=1)).strftime("%Y%m%d")})
         except Exception:
             return None
-        temps = [o.get("temp") for o in (data.get("observations") or [])
-                 if isinstance(o.get("temp"), (int, float))]
+        tgt_iso = target.isoformat()
+        temps = []
+        for o in (data.get("observations") or []):
+            t, vt = o.get("temp"), o.get("valid_time_gmt")
+            if not isinstance(t, (int, float)) or not isinstance(vt, (int, float)):
+                continue
+            local = dt.datetime.fromtimestamp(vt, tz=dt.timezone.utc).astimezone(zone)
+            if local.date().isoformat() == tgt_iso:      # LOCAL civil day only (no straddle)
+                temps.append(float(t))
         if not temps:
             return None
         max_f = max(temps)

@@ -313,7 +313,7 @@ def intraday_ceiling(place: Place, target: dt.date, *,
                 # WU's OWN authoritative daily-max caps the register (phantom guard, Jeddah
                 # 2026-07-09): a max24 above the settlement record's own daily high is not real.
                 try:
-                    dmax = sources.wunderground_daily_max(icao, target)
+                    dmax = sources.wunderground_daily_max(icao, target, tz)   # WP-2: local-day max
                     wu_rec_max_f = dmax.get("max_f") if dmax else None
                 except Exception:
                     wu_rec_max_f = None
