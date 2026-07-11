@@ -177,6 +177,10 @@ class WeatherMarket:
     # and tests build unchanged.
     volume: float | None = None        # whole-event cumulative traded notional
     liquidity: float | None = None     # whole-event resting depth
+    # WP-5 (served-number campaign): raw labels of outcomes whose edges did NOT parse ((None,None)).
+    # They are QUARANTINED out of `buckets` (never in the ladder nor the de-vig denominator) and kept
+    # here as evidence — a non-empty tuple is a schema-drift signal on a market we may trade.
+    unparsed_outcomes: tuple = ()
 
     def quote_quality(self, max_spread: float = 0.10) -> tuple[int, int]:
         """(n_two_sided, n_total): how many buckets carry a genuine two-sided
@@ -405,6 +409,13 @@ def _parse_event(e: dict) -> WeatherMarket | None:
     parsed = [b for b in (_parse_bucket(m) for m in markets) if b is not None]
     if not parsed:
         return None
+    # WP-5: QUARANTINE buckets whose label edges did not parse ((None,None)) — they can never contain
+    # a reading, and their yes_price would dilute the de-vig denominator (Σ yes). Keep them only as
+    # evidence (unparsed_outcomes), never in the ladder.
+    ladder = [b for b in parsed if b.lo is not None or b.hi is not None]
+    unparsed = tuple(b.label for b in parsed if b.lo is None and b.hi is None)
+    if not ladder:
+        return None
     # Gamma returns buckets in arbitrary order; sort into the temperature ladder
     # (below-tail, ascending interior, above-tail) so consumers see a real CDF.
     def _order(b: MarketBucket) -> float:
@@ -412,8 +423,8 @@ def _parse_event(e: dict) -> WeatherMarket | None:
             return b.lo
         if b.hi is not None:
             return b.hi - 0.5     # an "or below" tail sits just under its edge
-        return float("-inf")
-    buckets = tuple(sorted(parsed, key=_order))
+        return float("-inf")      # defensive: quarantine above removes (None,None) before this
+    buckets = tuple(sorted(ladder, key=_order))
 
     return WeatherMarket(
         event_id=str(e.get("id") or ""),
@@ -429,6 +440,7 @@ def _parse_event(e: dict) -> WeatherMarket | None:
         buckets=buckets,
         volume=_num(e.get("volume")),
         liquidity=_num(e.get("liquidity")),
+        unparsed_outcomes=unparsed,
     )
 
 
