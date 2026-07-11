@@ -1,0 +1,46 @@
+{
+  "_meta": {
+    "doc": "cur_f corroboration guard per-city config (Plan v2 §2.4). Frozen Phase 0 2026-07-11.",
+    "peak_window_basis": "July daily-high peak-hour distribution, 2016-2026 IEM archive (median/IQR + late-tail); window covers the observed re-heat tail so a genuine late peak stays pre-peak.",
+    "secondary_basis": "v3 current-conditions live probe 2026-07-11: all 6 cities expose 5 usable secondaries (liveness contingency NOT triggered).",
+    "convergence_gap_max_f": 2.0,
+    "min_separation_min": 5.0,
+    "freshness_adaptive": "clamp(1.5 * trailing-median inter-obs interval, 10min, 45min); <12 intervals -> 45min ceiling + basis=fallback"
+  },
+  "SINGAPORE_WSSS": {
+    "tz": "Asia/Singapore", "peak_window_local": ["11:00", "16:00"],
+    "convergence_gap_max_f": 2.0, "min_separation_min": 5.0,
+    "secondary_fields": ["temperatureDewPoint", "windSpeed", "pressureMeanSeaLevel", "relativeHumidity", "windDirection"],
+    "peak_stats": {"median_hr": 13, "iqr": [12, 14], "late_pct": 3}
+  },
+  "MANILA_RPLL": {
+    "tz": "Asia/Manila", "peak_window_local": ["11:00", "16:00"],
+    "convergence_gap_max_f": 2.0, "min_separation_min": 5.0,
+    "secondary_fields": ["temperatureDewPoint", "windSpeed", "pressureMeanSeaLevel", "relativeHumidity", "windDirection"],
+    "peak_stats": {"median_hr": 13, "iqr": [12, 14], "late_pct": null, "note": "no local hourly archive; peak window tracks Singapore (equatorial); RPLL is serving-only, no intraday lock today"}
+  },
+  "LONDON_EGLC": {
+    "tz": "Europe/London", "peak_window_local": ["12:00", "18:00"],
+    "convergence_gap_max_f": 2.0, "min_separation_min": 5.0,
+    "secondary_fields": ["temperatureDewPoint", "windSpeed", "pressureMeanSeaLevel", "relativeHumidity", "windDirection"],
+    "peak_stats": {"median_hr": 15, "iqr": [13, 16], "late_pct": 25}
+  },
+  "SANFRANCISCO_KSFO": {
+    "tz": "America/Los_Angeles", "peak_window_local": ["12:00", "17:00"],
+    "convergence_gap_max_f": 2.0, "min_separation_min": 5.0,
+    "secondary_fields": ["temperatureDewPoint", "windSpeed", "pressureMeanSeaLevel", "relativeHumidity", "windDirection"],
+    "peak_stats": {"median_hr": 14, "iqr": [13, 15], "late_pct": 3}
+  },
+  "JEDDAH_OEJN": {
+    "tz": "Asia/Riyadh", "peak_window_local": ["11:00", "17:00"],
+    "convergence_gap_max_f": 2.0, "min_separation_min": 5.0,
+    "secondary_fields": ["temperatureDewPoint", "windSpeed", "pressureMeanSeaLevel", "relativeHumidity", "windDirection"],
+    "peak_stats": {"median_hr": 13, "iqr": [12, 14], "late_pct": 11, "note": "window end 17:00 keeps the observed 07-11 16:00 re-heat PRE-peak so converging is available; 07-09 10:00 peak means the later phantom was post-peak"}
+  },
+  "KARACHI_OPKC": {
+    "tz": "Asia/Karachi", "peak_window_local": ["11:00", "16:00"],
+    "convergence_gap_max_f": 2.0, "min_separation_min": 5.0,
+    "secondary_fields": ["temperatureDewPoint", "windSpeed", "pressureMeanSeaLevel", "relativeHumidity", "windDirection"],
+    "peak_stats": {"median_hr": 13, "iqr": [12, 14], "late_pct": 3}
+  }
+}
