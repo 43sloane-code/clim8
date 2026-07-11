@@ -110,25 +110,33 @@ def boundary_distance(central_c: float, *, grain: str = "F") -> float:
 
 
 def compact_buckets(probs: dict[int, float], *, tail_floor: float = 0.005) -> dict[str, float]:
-    """Render a per-integer pmf as the compact market-facing cells the desk reads:
-    each interior bucket carrying ≥ `tail_floor`, with the low/high tails folded
-    into "<=lo" / ">=hi" aggregates. Always sums to ~1.0."""
+    """Render a per-integer pmf as the compact market-facing cells the desk reads: the interior span
+    [lo, hi] (lo/hi = the lowest/highest bucket carrying ≥ `tail_floor`) with the low/high tails folded
+    into "<=lo-1" / ">=hi+1" aggregates.
+
+    WP-6 (served-number campaign): the interior is emitted CONTIGUOUSLY over [lo, hi] — including any
+    sub-floor bucket that falls between lo and hi — so the cells `<=lo-1 | {lo..hi} | >=hi+1` partition
+    the integer line (each integer claimed exactly once) and NO interior mass is dropped. The old code
+    emitted only the above-floor keys, silently dropping the mass of a sub-floor interior bucket, so the
+    result did not sum to 1. A permanent runtime invariant now asserts mass preservation."""
     if not probs:
         return {}
-    keys = sorted(k for k, p in probs.items() if p >= tail_floor)
-    if not keys:                                   # everything is tail — keep the mode
-        m = max(probs, key=probs.get)
-        keys = [m]
-    lo, hi = keys[0], keys[-1]
+    above_floor = sorted(k for k, p in probs.items() if p >= tail_floor)
+    if not above_floor:                            # everything is tail — keep the mode as the interior
+        above_floor = [max(probs, key=probs.get)]
+    lo, hi = above_floor[0], above_floor[-1]
     out: dict[str, float] = {}
     below = sum(p for k, p in probs.items() if k < lo)
     above = sum(p for k, p in probs.items() if k > hi)
     if below > 0.0:
         out[f"<={lo - 1}"] = below
-    for k in keys:
-        out[str(k)] = probs[k]
+    for k in range(lo, hi + 1):                    # CONTIGUOUS interior — no interior mass dropped
+        out[str(k)] = probs.get(k, 0.0)
     if above > 0.0:
         out[f">={hi + 1}"] = above
+    # Partition invariant: below-tail | [lo..hi] | above-tail claims every integer exactly once (the
+    # cells are disjoint by structure), so the compacted pmf preserves the input's total mass.
+    assert abs(sum(out.values()) - sum(probs.values())) < 1e-9, (out, probs)
     return out
 
 
