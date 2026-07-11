@@ -193,10 +193,21 @@ def _fuse_live_floor(runmax_c, cur_f, max24_f, yesterday_max_c, wu_record_max_f=
     # while WU's OWN daily-max endpoint, the daily-series AND every hourly ob topped at 100°F
     # (peak passed at 10-11:00, declining since) — a phantom that served a 39 the contract paid
     # at 38. The register may catch a between-obs peak the hourly ROWS miss, but it can NEVER
-    # exceed WU's authoritative daily-max, which already captures real between-obs peaks. Cap it
-    # there so a register above the settlement record can never raise the lock.
+    # exceed the freshest AUTHORITATIVE evidence of how hot it actually got today.
+    #
+    # That ceiling is the HIGHER of WU's daily-max endpoint AND the current reading (cur_f) — NOT
+    # the endpoint alone. The v1 daily-max endpoint LAGS the live feed ~1-2h (2026-07-11 Jeddah,
+    # user-caught: it read 97°F while cur_f held 98°F sustained and the market settled 37), so
+    # capping the register at the lagging endpoint alone would suppress a real re-heat the current
+    # reading corroborates. cur_f is a fresh station reading, not a rolling carryover, so a register
+    # up to cur_f is attributable. (cur_f also raises the floor directly below — this keeps the
+    # register path CONSISTENT: it is never capped beneath a current reading the tool already
+    # trusts. Only the max24 rolling register is capped; cur_f itself is never capped.)
     if isinstance(max24_f, (int, float)) and isinstance(wu_record_max_f, (int, float)):
-        max24_f = min(max24_f, wu_record_max_f)
+        ceiling = wu_record_max_f
+        if isinstance(cur_f, (int, float)) and cur_f > ceiling:
+            ceiling = cur_f
+        max24_f = min(max24_f, ceiling)
 
     if isinstance(cur_f, (int, float)) and (floor_c is None or f2c(cur_f) > floor_c):
         floor_c = f2c(cur_f)

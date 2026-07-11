@@ -62,6 +62,28 @@ class TestFuseLiveFloor(unittest.TestCase):
         self.assertEqual(math.floor(floor + 0.5), 32)     # 90°F register == WU daily-max -> fuses
         self.assertIsNotNone(note)
 
+    def test_cur_f_leads_lagging_daily_max_endpoint(self):
+        # 2026-07-11 Jeddah (user-caught): the v1 daily-max endpoint LAGGED at 97°F (=36) while the
+        # v3 CURRENT reading held 98°F sustained and the market SETTLED 37. cur_f is uncapped and
+        # must lead — the phantom cap on the register must NOT drag the lock back to the lagging
+        # endpoint. runmax_c=36.11 (97°F hourly), cur_f=98, register=100, endpoint=97 -> fuses 37.
+        import math
+        floor, note = _fuse_live_floor(36.11, 98.0, 100.0, 35.0, wu_record_max_f=97.0)
+        self.assertEqual(math.floor(floor + 0.5), 37)     # cur_f 98°F leads; NOT capped to 36
+        self.assertIn("live now 98", note)
+        # and the ceiling now honours cur_f: the register may lead UP TO the fresh current reading
+        # (98°F) even though the endpoint lags at 97°F — never capped beneath a trusted current ob.
+        floor2, _ = _fuse_live_floor(36.11, None, 98.0, 35.0, wu_record_max_f=97.0)
+        self.assertAlmostEqual(floor2, 36.11, places=2)   # cur_f absent -> register still capped at 97°F endpoint
+
+    def test_declined_cur_does_not_relax_the_phantom_cap(self):
+        # The relaxation is cur_f-gated: when the current reading has DECLINED below the endpoint,
+        # the register is still capped at the endpoint (the 07-09 phantom guard is intact).
+        import math
+        floor, note = _fuse_live_floor(37.78, 95.0, 102.0, 37.0, wu_record_max_f=100.0)
+        self.assertEqual(math.floor(floor + 0.5), 38)     # cur_f 95<endpoint 100 -> register capped 100 -> 38
+        self.assertNotIn("register", note or "")
+
     def test_never_lowers_and_none_safe(self):
         floor, note = _fuse_live_floor(33.0, 88.0, 89.0, 30.0)      # both below the floor
         self.assertEqual((floor, note), (33.0, None))
