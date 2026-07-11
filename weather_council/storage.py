@@ -227,6 +227,28 @@ def _connect() -> sqlite3.Connection:
                error          TEXT,
                PRIMARY KEY (place, target_date, issued_at, token_id))"""
     )
+    # Post-mortems (Plan 3 Phase 3): one decomposed HIGH error per settled verdict that carried
+    # provenance. components_json splits the total error into INPUT / BLEND / BIAS (which
+    # telescope exactly to final−actual, identity-checked) plus a settlement_divergence
+    # diagnostic. attributed_cause is the taxonomy label. Additive/read-only — a diagnosis,
+    # never a served number. PK lets a re-run refine the same (place, target_date) idempotently.
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS postmortems (
+               place             TEXT NOT NULL,
+               target_date       TEXT NOT NULL,
+               attr              TEXT NOT NULL,   -- 'high'
+               scored_at         TEXT NOT NULL,
+               final             REAL,
+               actual            REAL,
+               total_error       REAL,
+               attributed_cause  TEXT,
+               components_json   TEXT,
+               margin            REAL,            -- distance to the nearest bucket boundary
+               crossed_boundary  INTEGER,
+               settlement_divergence REAL,
+               pipeline_version  TEXT,
+               PRIMARY KEY (place, target_date, attr))"""
+    )
     conn.commit()
     return conn
 

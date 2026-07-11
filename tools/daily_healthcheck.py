@@ -1216,6 +1216,31 @@ def main() -> int:
                              "CLOB feed before trusting depth-walk numbers.")
     lines.append("")
 
+    # ERROR ATTRIBUTION (Plan 3 Phase 3) — how settled errors decompose. SETTLEMENT attributions
+    # are ALARM-tier: they mean the model was right and the anchor/contract diverged — the one
+    # error class no forecasting improvement can fix. Read-only.
+    lines.append("ERROR ATTRIBUTION (settled post-mortems — decomposed cause histogram)")
+    try:
+        from weather_council.postmortem import attribution_histogram
+        hist = attribution_histogram()
+    except Exception as exc:
+        hist = None
+        lines.append(f"  attribution unavailable this run ({exc}).")
+    if hist is not None:
+        if not hist:
+            lines.append("  no attributed post-mortems yet (settled+provenance rows still "
+                         "accruing — pre-provenance verdicts are UNATTRIBUTABLE by design).")
+        else:
+            for cause, n in sorted(hist.items(), key=lambda kv: (-kv[1], kv[0])):
+                flag = "  ⚠ ALARM (anchor≠contract; no forecast fix)" if cause == "SETTLEMENT" else ""
+                lines.append(f"  {cause:28} {n:4}{flag}")
+            if hist.get("SETTLEMENT"):
+                lines.append("    RECOMMENDATION: a settlement/anchor divergence occurred — the "
+                             "model was right but the record it paid on differed. A human should "
+                             "check the anchor↔contract alignment before trusting coverage.")
+                status_reco.append("SETTLEMENT attribution (anchor≠contract)")
+    lines.append("")
+
     lines.append(f"requests made this run: {total_requests} "
                  f"(across {len(BASKET)} per-city clients)")
 

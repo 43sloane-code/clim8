@@ -491,3 +491,27 @@ without it.
   L0 "diagnose" tier of the plan's autonomy doctrine (L0 auto-diagnose · L1 auto-shadow · L2
   human-gated promotion). improvement_analyzer fuzzy-matched D18 (false positive — D18 is a served
   lever; this changes nothing served). KAT `tests/test_provenance.py`. Full gate 519 green.
+
+## 26. Learning-loop Phase 3 — post-mortem error decomposition (DIAGNOSIS, no served-number change)
+*Added 2026-07-11, Execution Plan 3 chain 0→3→4→5, builds on §25 (provenance).*
+For every settled verdict that carried provenance, decompose the HIGH error into components that
+TELESCOPE exactly to the total, so a recurring cause can later become a shadow-tested candidate
+(Phase 4/5) instead of a hunch:
+```
+  input_error       = naive-equal-weight raw consensus − actual   (raw inputs collectively wrong?)
+  blend_deviation   = weighted raw blend − naive raw              (did skill-weighting help/hurt?)
+  bias_contribution = the STORED applied bias                     (did the correction help THIS day?)
+  input + blend + bias  ==  final − actual   — asserted every run; a non-closing row ABORTS.
+  settlement_divergence = actual − contract-settled bucket        (anchor vs payout; separate)
+```
+- `weather_council/postmortem.py`: `build_postmortem` (pure, identity-checked — a corrupt blob
+  where the stored bias ≠ final−pre_bias raises IdentityError and writes NO row: a wrong
+  attribution is worse than none). Taxonomy by strict precedence: SETTLEMENT (model right, contract
+  paid another bucket — no forecast fix helps) → NONE-WITHIN-BUCKET (missed continuously, right
+  bucket) → dominant INPUT/BLEND/BIAS (>50% of total, crossed a boundary) → MIXED. `run_postmortems`
+  is idempotent per (place, target); `attribution_histogram` summarises. Deterministic, stdlib-only.
+- `postmortems` table (additive); `accumulate` runs it after `--verify` (failure-isolated); the
+  healthcheck ERROR ATTRIBUTION block histograms causes with SETTLEMENT flagged ALARM-tier.
+- First run: 0 scored, 312 UNATTRIBUTABLE-PREPROVENANCE (honest — provenance is new; settled+
+  provenance rows accrue forward). Read-only diagnosis (HARD RULE 2), no served number changes.
+  KAT `tests/test_postmortem.py` (8 cases). Full gate 527 green.

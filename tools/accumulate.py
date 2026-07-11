@@ -262,6 +262,17 @@ def main() -> int:
     last = out.strip().splitlines()[-1] if out.strip() else "(nothing ready)"
     _log(f"--verify rc={rc} | {last}")
 
+    # 2a. Post-mortems (Plan 3 Phase 3): now that verify has filled actual_high, decompose every
+    # settled verdict that carried provenance into INPUT/BLEND/BIAS/SETTLEMENT. Read-only diagnosis
+    # — never touches a served number; failure-isolated so it can't abort the spine.
+    try:
+        from weather_council.postmortem import run_postmortems
+        pm = run_postmortems()
+        _log(f"postmortems: scored={pm['scored']} aborted={pm['aborted']} "
+             f"pre-provenance={pm['unattributable_preprovenance']} | {pm['by_cause']}")
+    except Exception as e:
+        _log(f"postmortems failed (non-fatal): {type(e).__name__}: {e}")
+
     rc, edge_out = _run(["--edge"])
     _log(f"--edge rc={rc}")
 
