@@ -60,23 +60,37 @@ any detector output that would change a served number needs its OWN pre-reg.*
 The plan's "Open-Meteo vs Visual Crossing vs Weatherbit vs settlement-source" is WRONG for intraday
 **observations**. Actual contracted sources in `weather_council/sources.py`:
 
+*Wunderground / The Weather Company / TWC are ONE corporate entity, all on `api.weather.com` — the WU
+observation oracle, the WU v1 history, and the TWC daily FORECAST are three products of the same
+company. That shared lineage is a first-class caveat (below), not a footnote.*
+
 | Source | Endpoint | Kind | Intraday OBS? | xref role |
 |---|---|---|---|---|
-| **WU v3 current** | api.weather.com/v3/wx/observations/current | live obs (~10min) | **YES** | Axis-C obs feed #1 (the SETTLEMENT source); its cur_f-vs-record gap IS the London over-read signature |
+| **WU v3 current** (Wunderground/TWC) | api.weather.com/v3/wx/observations/current | live obs (~10min) | **YES** | Axis-C obs feed #1 (the SETTLEMENT source); its cur_f-vs-record gap IS the London over-read signature |
 | **IEM METAR** | mesonet.agron.iastate.edu ASOS | hourly obs + archive (~10y) | **YES** | Axis-C obs feed #2 + the deep historical spine (obs_final/daily_final backfill) |
-| WU v1 history | api.weather.com/v1/.../historical | recorded daily/hourly (lags 1–2h) | partial | settlement-record cross-ref |
+| WU v1 history (Wunderground/TWC) | api.weather.com/v1/.../historical | recorded daily/hourly (lags 1–2h) | partial | settlement-record cross-ref |
+| **TWC daily forecast** (The Weather Company) | api.weather.com/v3/wx/forecast/daily/5day | **FORECAST** | NO | **FORECAST cross-reference** — already measured as a signed offset in Plan 4 (`weather_council/twc_offset.py`, recommend-only, 3-gate certified). xref surfaces it as a forecast-vs-analog/served cross-check (a distinct axis from the obs Axis C) |
 | Open-Meteo | api.open-meteo.com (forecast/archive/ensemble) | FORECAST + reanalysis archive | NO (forecast) | NOT an obs feed; archive can backfill history |
 | Meteostat | bulk.meteostat.net daily | daily bulk (lags ~months) | NO | daily_final backfill only |
 | Weatherbit | api.weatherbit.io/v2.0/forecast/daily | **FORECAST only** | NO | not an obs source (plan mis-cast it) |
 | ~~Visual Crossing~~ | — | **DOES NOT EXIST in repo** | — | remove from the design |
 | HKO | data.weather.gov.hk | obs (HK) | (HK removed from basket) | n/a |
 
-**HONEST CONSTRAINT (state loudly):** for intraday OBSERVATIONS there are effectively **2 independent
-feeds — WU-v3 and IEM-METAR** — and they partly share underlying METAR. So Axis C (source-vs-source)
-is WEAKER than the plan implies. Its highest-value real check is exactly **WU-v3-current vs
-IEM-recorded** divergence (e.g. London 07-11: v3 cur 83°F vs IEM 81°F — the over-read), which is the
-one that matters. NO contracted source is chart-only → §1.1's "unusable" branch is trivially empty
-(Windy already rejected).
+**HONEST CONSTRAINTS (state loudly):**
+1. For intraday OBSERVATIONS there are effectively **2 feeds — WU-v3 and IEM-METAR** — partly sharing
+   underlying METAR. So Axis C (source-vs-source, obs) is WEAKER than the plan implies. Its
+   highest-value real check is exactly **WU-v3-current vs IEM-recorded** divergence (London 07-11:
+   v3 cur 83°F vs IEM 81°F — the over-read), which is the one that matters.
+2. **FORECAST cross-reference axis (new — Wunderground/TWC):** the TWC daily forecast is a *forecast*,
+   not an obs, so it does NOT enter the obs grid or Axis C. It enters as its own cross-check — TWC's
+   offset-adjusted call vs the analog projection (Axis B) and vs the served pick — reusing the Plan-4
+   `twc_offset` machinery. **SAME-COMPANY CIRCULARITY CAVEAT:** TWC and the WU observation oracle are
+   the SAME company (WU's displayed forecasts are TWC-powered), so TWC is NOT an independent check on
+   the WU record — it corroborates the WU forecast family, not an outside opinion. Recommend-only;
+   any promotion beyond display routes through the Plan-5 independence audit (`twc_independence.py`)
+   and the Plan-3 gate, never this layer. (IEM and Open-Meteo/Meteostat ARE outside The Weather
+   Company — they are the genuinely independent cross-references.)
+3. NO contracted source is chart-only → §1.1's "unusable" branch is trivially empty (Windy rejected).
 
 ### Historical depth — EXCEEDS target
 ~10 years of hourly IEM METAR per active city (all far above the plan's ≥3yr / ≥5yr target):
