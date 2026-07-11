@@ -103,8 +103,11 @@ def main() -> int:
         # Fetch through the shared, soft-failure-isolated cross-reference surface (Plan 4 Phase 1):
         # units='e' at the settlement anchor, °C at the edge, day matched on validTimeLocal[:10].
         pick = src.twc_forecast_daily(lat, lon, target_date, tz, "C")
-        if not pick or pick.get("fc_high") is None:
-            print(f"  {name}: no TWC forecast for {target} yet")
+        if not pick or pick.get("fc_high") is None or pick.get("fc_low") is None:
+            # tracked_forecasts requires BOTH fc_high and fc_low (NOT NULL). Skip EXPLICITLY when
+            # either is missing rather than letting INSERT OR IGNORE drop the row silently — a
+            # silent drop would be an invisible accrual gap. Never guesses the missing value.
+            print(f"  {name}: no complete TWC forecast for {target} yet")
             continue
         hC, lC = pick["fc_high"], pick["fc_low"]
         place = Place(name=name, country=country, latitude=lat, longitude=lon, timezone=tz)
