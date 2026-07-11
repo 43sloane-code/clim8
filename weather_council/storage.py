@@ -80,6 +80,12 @@ def _connect() -> sqlite3.Connection:
         # stayed unsettled. Same latent bug, same fix, as market_snapshots and
         # tracked_forecasts below. Additive/nullable: never alters an existing score.
         "station_icao": "TEXT", "station_name": "TEXT",
+        # Issue-time PROVENANCE (Plan 3 Phase 0): the decisions behind the verdict — per-source
+        # votes, applied bias, regime, spread — snapshotted at log time so a settled error can be
+        # ATTRIBUTED (Phase 3) rather than retrodicted. provenance_ok=0 marks a quarantined blob
+        # (stored anyway, alarmed); provenance_json IS NULL == UNATTRIBUTABLE-PREPROVENANCE.
+        # Additive/nullable: never alters a served number or an existing score.
+        "provenance_json": "TEXT", "provenance_ok": "INTEGER",
     }
     for col, typ in added.items():
         if col not in existing:
@@ -228,18 +234,34 @@ def _connect() -> sqlite3.Connection:
 def log_verdict(v: Verdict) -> None:
     ts = v.truth_source or {}
     station = ts.get("station") or {}
+    # Issue-time provenance (Plan 3 Phase 0): snapshot the DECISIONS behind this verdict so a
+    # settled error can be attributed later. Best-effort + quarantine-and-alarm — a provenance
+    # bug must NEVER stop the verdict itself being logged (NULL == UNATTRIBUTABLE-PREPROVENANCE).
+    prov_json, prov_ok = None, None
+    try:
+        from .provenance import build_provenance, validate_provenance
+        prov = build_provenance(v)
+        problems = validate_provenance(prov)
+        prov_ok = 0 if problems else 1
+        prov_json = json.dumps(prov)
+        if problems:
+            record_soft_failure("provenance_quarantine", ValueError("; ".join(problems)[:180]))
+    except Exception as exc:
+        record_soft_failure("provenance_build", exc)      # swallow: still log the verdict
     conn = _connect()
     with conn:
         conn.execute(
             "INSERT OR REPLACE INTO verdicts "
             "(issued_at, place, target_date, high, low, confidence, "
-            " truth_kind, station_id, station_icao, station_name, fc_lat, fc_lon) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            " truth_kind, station_id, station_icao, station_name, fc_lat, fc_lon, "
+            " provenance_json, provenance_ok) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (utc_now_iso(),
              v.place.label(), v.target, v.high, v.low, v.confidence,
              ts.get("kind"), station.get("id") or None,
              station.get("icao") or None, station.get("name") or None,
-             v.place.latitude, v.place.longitude),
+             v.place.latitude, v.place.longitude,
+             prov_json, prov_ok),
         )
     conn.close()
 

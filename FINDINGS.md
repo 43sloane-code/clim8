@@ -466,3 +466,28 @@ capture depth against, and no rules text to verify a settlement station from. Ad
 station would be exactly the phantom-serving failure class the operator flagged (§20). Karachi
 (already a settlement city, OPKC, live market) takes its place in the capture scope.
 `book_logger.FOCUS_CITIES` + `tests/test_book_logger.py` corrected. Gate 499 green.
+
+## 25. Learning-loop Phase 0 — issue-time provenance capture (FOUNDATION, no served-number change)
+*Added 2026-07-11, Execution Plan 3 (the Learning Loop) — user chose the standalone chain 0→3→4→5.*
+The decisive structural gap: the `verdicts` table persisted only the final high/low/confidence +
+anchor identity; the per-source votes, applied bias, regime classification, and ensemble spread —
+everything an error ATTRIBUTION needs — were computed at issue time and DISCARDED. Attribution
+without stored inputs is retrodiction. Phase 0 fixes it; nothing downstream (Phases 3/4/5) runs
+without it.
+
+- `weather_council/provenance.py`: `build_provenance(v)` snapshots the DECISIONS behind a verdict —
+  votes (raw + bias-corrected + weight), the blend pre/post bias (pre = final − `applied_bias_correction`),
+  the regime + consensus dicts, spread, and the git `pipeline_version` — into one compact JSON blob
+  (≤ 8 KB: decisions, not re-fetchable raw payloads). `validate_provenance` is quarantine-grade.
+  Read-only, deterministic, stdlib-only; live blob measured 4059 B / 8 valid votes.
+- `storage`: additive `provenance_json` + `provenance_ok` columns; `log_verdict` captures + validates
+  best-effort — a provenance bug NEVER stops the verdict logging (`provenance_json IS NULL` ==
+  permanently UNATTRIBUTABLE-PREPROVENANCE, counted, never guessed). Quarantine records a soft
+  failure (Plan-1 §6b), so a bad blob is stored-and-alarmed, never silently dropped.
+- `tools/provenance_audit.py`: reports attribution-component coverage (what Phase 3 needs vs what is
+  stored) + per-city attributable/pre-provenance counts. First run: **0 gaps — spec closed**; 1/436
+  attributable (the 435 pre-existing rows correctly UNATTRIBUTABLE).
+- Display/data-capture only (HARD RULE 2): no served probability, bucket, or pick changes — the
+  L0 "diagnose" tier of the plan's autonomy doctrine (L0 auto-diagnose · L1 auto-shadow · L2
+  human-gated promotion). improvement_analyzer fuzzy-matched D18 (false positive — D18 is a served
+  lever; this changes nothing served). KAT `tests/test_provenance.py`. Full gate 519 green.
