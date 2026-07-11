@@ -802,26 +802,92 @@ def _bucket_int_from_label(label: str | None) -> int | None:
     return int(m.group()) if m else None
 
 
-def _twc_bias() -> tuple[float, int] | None:
-    """Data-derived directional bias of the TWC (The Weather Channel / weather.com) FORECAST
-    vs the WU settlement, for the cross-reference note. Returns (mean_diff, n) where
-    mean_diff = mean(TWC forecast high − settled high) over ALL logged twc pairs; a negative
-    mean means TWC runs BELOW WU. None when < 8 settled pairs (too thin to state a direction
-    honestly). Read-only. TWC is a FORECAST cross-reference ONLY — never blended into the
-    verdict, never the oracle (WU settles, IEM cross-checks the observation)."""
+def _twc_cross_reference(v: Verdict) -> dict | None:
+    """The TWC (Weather Company / weather.com) cross-reference for this (place, target): the raw
+    published forecast, the MEASURED signed offset vs the WU oracle (weather_council.twc_offset,
+    three-gate certified), and — only once a direction is CERTIFIED (ABOVE/BELOW) — the
+    offset-adjusted reading beside the council's own. Returns None when no TWC forecast was captured
+    for the day (the block is then absent).
+
+    Recommend-only and purely additive: WU remains the settlement oracle, TWC never votes and never
+    settles, and NOTHING here touches the council's served numbers. The offset is earned
+    prospectively — it reads UNMEASURED (no adjustment) for weeks until n≥20, which is correct."""
+    place = v.place.label()
     try:
         from weather_council import storage as _st
         conn = _st._connect()
-        rows = conn.execute(
-            "SELECT fc_high, actual_high FROM tracked_forecasts "
-            "WHERE source='twc' AND fc_high IS NOT NULL AND actual_high IS NOT NULL").fetchall()
+        row = conn.execute(
+            "SELECT fc_high FROM tracked_forecasts WHERE source='twc' AND place=? "
+            "AND target_date=? ORDER BY issued_at LIMIT 1",
+            (place, str(v.target))).fetchone()
         conn.close()
     except Exception:
         return None
-    diffs = [r[0] - r[1] for r in rows]
-    if len(diffs) < 8:
+    if not row or row[0] is None:
         return None
-    return sum(diffs) / len(diffs), len(diffs)
+    raw = float(row[0])
+    try:
+        from weather_council.twc_offset import estimate_offsets
+        est = next((e for e in estimate_offsets("twc")
+                    if e.place == place and e.attr == "high"), None)
+    except Exception:
+        est = None
+
+    sub = "hong kong" in place.lower()
+    grain = est.grain if est else "C"
+    council_high = v.high
+    out = {
+        "raw": round(raw, 3), "raw_bucket": _native_reading_int(raw, grain, sub), "grain": grain,
+        "council_high": round(council_high, 3),
+        "council_bucket": _native_reading_int(council_high, grain, sub),
+        "direction": est.direction if est else "UNMEASURED",
+        "n": est.n if est else 0,
+        "median_offset": est.median_offset if est else None,
+        "ci_95": list(est.ci_95) if (est and est.ci_95) else None,
+        "sign_test_p": est.sign_test_p if est else None,
+        "mae_twc": est.mae_twc if est else None,
+        "mae_council": est.mae_council if est else None,
+        "label": est.label() if est else "UNMEASURED (n=0)",
+        "adjusted": None, "adjusted_bucket": None, "divergence": None,
+        "divergence_threshold": None, "amber": False,
+    }
+    # The adjustment applies ONLY for a certified direction — never off a non-significant median.
+    if est is not None and est.is_certified:
+        adjusted = raw - est.median_offset
+        div = abs(adjusted - council_high)
+        # Yardstick = 2× the council's OWN recent MAE for this city (measured, not a magic
+        # constant); fall back to 2.0° only when no paired council errors exist yet.
+        thresh = 2.0 * (est.mae_council if est.mae_council else 1.0)
+        out.update(adjusted=round(adjusted, 3),
+                   adjusted_bucket=_native_reading_int(adjusted, grain, sub),
+                   divergence=round(div, 3), divergence_threshold=round(thresh, 3),
+                   amber=bool(div > thresh))
+    return out
+
+
+def _twc_cross_reference_lines(v: Verdict) -> list[str]:
+    """Render the TWC cross-reference block (raw AND adjusted side by side with n + CI). Empty when
+    no TWC forecast was captured for the day — a raw reading is never shown without its parent, and
+    an adjusted reading is never shown without its raw. Recommend-only; council numbers untouched."""
+    ref = _twc_cross_reference(v)
+    if ref is None:
+        return []
+    g = ref["grain"]
+    L = ["      TWC cross-reference (recommend-only; WU record remains the oracle):",
+         f"        raw forecast    : {ref['raw']:.1f}°{g}  (bucket {ref['raw_bucket']}°{g})",
+         f"        measured offset : {ref['label']}"]
+    if ref["adjusted"] is not None:
+        L.append(f"        offset-adjusted : {ref['adjusted']:.1f}°{g}  "
+                 f"(bucket {ref['adjusted_bucket']}°{g}; council {ref['council_high']:.1f}°{g})")
+        if ref["amber"]:
+            L.append(f"        divergence      : {ref['divergence']:.1f}°{g} vs council — "
+                     f"⚠ LARGE (> 2× council MAE {ref['mae_council']:.1f}°{g}) — flag for review")
+        else:
+            L.append(f"        divergence      : {ref['divergence']:.1f}°{g} vs council — consistent")
+    else:
+        L.append("        (no certified direction yet — no adjustment applied; "
+                 "WU settles, TWC never blended)")
+    return L
 
 
 def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
@@ -904,22 +970,9 @@ def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
     else:
         L.append("        → the signals split — a genuine coin-flip; neither side has a "
                  "day-ahead edge (σ-ceiling), the intraday lock decides")
-    # TWC cross-reference bias (data-derived) — TWC forecasts run systematically off the WU
-    # settlement; state which way (from the logged pairs) so the reader can adjust. Display
-    # ONLY: WU remains the oracle, IEM the observation cross-ref, TWC is never blended.
-    if twc_raw is not None:
-        _tb = _twc_bias()
-        if _tb is not None:
-            _m, _n = _tb
-            _dir = "BELOW" if _m < 0 else "ABOVE"
-            _wu_scale = twc_raw - _m           # TWC put on the WU/settled scale
-            L.append(f"        TWC (Weather Channel) forecast {twc_raw:.1f}°C — CROSS-REFERENCE only "
-                     f"(WU settles · IEM cross-checks; TWC never blended). Over {_n} logged pairs "
-                     f"TWC runs {abs(_m):.1f}°C {_dir} the WU settlement → WU-scale read ~{_wu_scale:.1f}°C; "
-                     f"treat TWC as a soft {'floor' if _m < 0 else 'ceiling'}.")
-        else:
-            L.append(f"        TWC (Weather Channel) forecast {twc_raw:.1f}°C — cross-reference only "
-                     f"(WU settles); its bias vs WU is still accruing (<8 settled pairs).")
+    # The TWC forecast keeps its seat as a divergent SIGNAL in the panel above (the 07-02 lesson:
+    # dismissing it IS the mistake). Its measured signed offset vs the oracle is rendered as its own
+    # dedicated cross-reference block (_twc_cross_reference_lines) — raw + certified offset-adjusted.
     return L
 
 
@@ -1057,6 +1110,7 @@ def _bucket_call_lines(v: Verdict, ceiling=None, comparison=None) -> list[str]:
                      "remaining-rise over prior days' records collapses σ as the peak nears "
                      "(auto-delivered by the afternoon run)")
         L.extend(_cross_check_lines(v, c, comparison))
+        L.extend(_twc_cross_reference_lines(v))
     # Reality check: the REALIZED served-vs-settlement rate (not the revisable
     # backtest, which overstates live skill because the historical-forecast archive
     # is revised toward truth). This is the number that has actually been happening.
@@ -1737,6 +1791,9 @@ def verdict_to_dict(
         d["settlement_reference"] = settlement_ref
     if cross_reference is not None:
         d["anchor_cross_reference"] = cross_reference
+    # TWC signed-offset cross-reference (Plan 4 Phase 4) — nullable parallel of the rendered block;
+    # recommend-only, never a served number. None when no TWC forecast was captured for the day.
+    d["twc_cross_reference"] = _twc_cross_reference(v)
     return d
 
 
