@@ -566,3 +566,46 @@ only after it clears a deflated statistical bar. `tools/shadow_score.py` + `shad
   KAT `tests/test_shadow.py` (15 cases: transforms, delta-sign geometry, all four terminal states,
   Bonferroni widening flips PROMOTE→ACCRUING, served-path-untouched invariant, idempotence). Full
   gate 548 green. **Plan 3 chain 0→3→4→5 complete.**
+
+## 29. TWC as a measured signed-offset cross-reference (Plan 4) — recommend-only, WU stays the oracle
+*Added 2026-07-11, Execution Plan 4 (phases 0→1→2→3→4→5). The Weather Company forecast enters as an
+ADDITIONAL cross-reference only — same standing as IEM. WU airport records remain the settlement
+oracle; TWC never votes, never settles. Its known tendency to run above/below the oracle is measured
+per city with a signed sign+magnitude and applied to its DISPLAYED reading only.*
+- **Phase 0 (probe):** `reports/twc_probe.json` + `ledger/preregistered/twc_offset.md` freeze the
+  live schema (`calendarDayTemperatureMax/Min` ∥ `validTimeLocal`) and the gate. api.weather.com is
+  the SAME allowlisted host + `WU_API_KEY` as the WU truth path — no new host/key. Verified: local tz
+  per city (day = local calendar day, matched UTC-independently on `validTimeLocal[:10]`); local-
+  tomorrow = index 1 (demonstrated for Manila, max UTC divergence); geocode honored at the settlement
+  anchor (not centroid); integer-rounded values. NO backfill — TWC has no forecast archive; the
+  offset is earned PROSPECTIVELY (n=0 at birth, stated honestly).
+- **Phase 1 (fetch):** `Sources.twc_forecast_daily(lat,lon,target,tz,grain)` — units='e' (whole-°F,
+  the settlement grain) at the anchor geocode, converts once at the edge, matches the day on
+  `validTimeLocal[:10]`. Soft-failure tag `twc_forecast` (distinct from the truth path's, so
+  healthcheck tells which product broke). The forward-logger delegates to it (DRY). KAT
+  `test_sources_twc.py`.
+- **Phase 2 (clock — already live):** `twc_forecast_logger` runs daily in accumulate, logging
+  `source='twc'` into `tracked_forecasts` (28 rows, 22 settled) and grading against the identical
+  anchored WU oracle via the existing `settle_tracked_forecasts()`. `test_twc_tracking.py` pins the
+  accrual contract (idempotent PK, council paired at capture, °F→°C stored unrounded, settle-against-
+  anchor); hardened the `fc_low NOT NULL` silent-drop into an explicit skip.
+- **Phase 3 (the new math):** `weather_council/twc_offset.py` — `OffsetEstimate` per (place, attr):
+  n, median (PRIMARY, busted-day robust) + mean signed offset (TWC − actual), seeded bootstrap CI on
+  the median (reuses edge.py SEED/SAMPLES + percentile convention), exact two-sided binomial sign test
+  (ties excluded + counted), mae_twc/mae_council/paired-delta. **THREE-GATE certification** (same
+  discipline as edge.py): `direction` ABOVE/BELOW asserted ONLY when n≥20 AND sign-p<0.05 AND CI
+  excludes zero; else NEUTRAL (enough data, no bias) or UNMEASURED (n<20). Directions are LIVE +
+  REVOCABLE — every call recomputes, so a growing n that pulls the CI over zero drops to NEUTRAL
+  automatically. `tools/twc_offset_report.py` CLI. KAT `test_twc_offset.py` (15).
+- **Phase 4 (display):** `run._twc_cross_reference[_lines]` — raw AND offset-adjusted (raw − median,
+  ONLY when certified) side by side with n + CI, divergence AMBER when |adjusted − council| > 2× the
+  council's OWN recent MAE (measured yardstick). Replaces the ad-hoc n≥8 mean note (`_twc_bias`
+  removed); `verdict_to_dict` gains a nullable `twc_cross_reference`. Pure additive — touches NO
+  council number (pinned). KAT `test_twc_crossref.py` (5).
+- **Phase 5 (independence guard):** `tools/twc_independence.py` — before anyone eyes the blend,
+  correlates TWC's signed errors with the council blend error and each member's error (from Plan 3
+  provenance), per city, at n≥30 paired days. Flags |r|≥0.9 as marginal-info-~0. STRICTLY read-only
+  (grep-provable + DB-unchanged KAT); blend inclusion routes through the Plan-3 gate, never this plan.
+  KAT `test_twc_independence.py` (6).
+- **Status now:** every offset cell reads UNMEASURED (n=6–8); the uncertified early read has council
+  MAE below TWC in every measurable cell. Correct accruing output. Full gate green.
