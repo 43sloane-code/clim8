@@ -515,3 +515,25 @@ TELESCOPE exactly to the total, so a recurring cause can later become a shadow-t
 - First run: 0 scored, 312 UNATTRIBUTABLE-PREPROVENANCE (honest — provenance is new; settled+
   provenance rows accrue forward). Read-only diagnosis (HARD RULE 2), no served number changes.
   KAT `tests/test_postmortem.py` (8 cases). Full gate 527 green.
+
+## 27. Learning-loop Phase 4 — lessons aggregator + budgeted candidate queue (the THROTTLE)
+*Added 2026-07-11, Execution Plan 3 chain, builds on §26 (post-mortems).*
+Turns a RECURRING post-mortem cause into a falsifiable, shadow-testable candidate — but only under
+a HARD budget, because the loop makes hypotheses at machine speed while disconfirming data accrues
+at one settled day per city per day; an unbudgeted tuner on n≈20–60 certifies noise with
+mathematical certainty. `tools/lessons.py`:
+- `detect_patterns`: groups post-mortems by (city, dominant cause), tests whether the component
+  systematically HURT (two-sided exact binomial sign-test, stdlib `comb`), with hard floors n≥8 &
+  p<0.05, and **prints the number of (city,cause) cells scanned** — the multiple-comparisons
+  denominator, carried onto every candidate, never hidden. INPUT (no corrective transform) is
+  never a candidate; only BIAS (scale_bias) and BLEND (toward_naive) are.
+- `emit_candidates`: each candidate is a deterministic parameterized transform + a pre-registered
+  effect SIGN (must win in its claimed direction), never free-form. **THE BUDGET: ≤2 ACTIVE/city,
+  ≤4 repo-wide/calendar-month** — excess patterns become DEFERRED-BUDGET (ranked by effect size).
+  Every candidate ever emitted keeps `K_candidates_ever` = the running total, the Bonferroni
+  denominator Phase 5 deflates by. Raising the budget is a certification-bar change (ledger entry),
+  same doctrine as MIN_SETTLED — the budget IS the design, not a limitation to engineer around.
+- Deterministic (month is data-derived from max(scored_at), no wall clock), stdlib-only,
+  self-tested. Queue at `ledger/candidates.json`. READ-ONLY: emits to a queue, never a served
+  number. Real run: 0 cells (post-mortems still accruing). KAT `tests/test_lessons.py` (6 cases,
+  incl. the ≤4/month deferral). Full gate 533 green.
