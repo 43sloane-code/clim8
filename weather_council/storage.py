@@ -249,6 +249,29 @@ def _connect() -> sqlite3.Connection:
                pipeline_version  TEXT,
                PRIMARY KEY (place, target_date, attr))"""
     )
+    # Shadow forecasts (Plan 3 Phase 5): each ACTIVE candidate's transform re-applied to the SAME
+    # issue-time inputs stored in provenance, scored against the SAME realized high beside the
+    # served verdict — a paired counterfactual, never rendered, never served, never fed back.
+    # served_logloss/shadow_logloss are a COMMON-PROXY pair (identical σ + bucket ladder, differing
+    # only by the transform's mean-shift), so only their DELTA is meaningful — it is NOT the served
+    # calibration edge.py measures. delta_logloss = served − shadow (>0 ⇒ the candidate helped).
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS shadow_forecasts (
+               candidate_id    TEXT NOT NULL,
+               place           TEXT NOT NULL,
+               target_date     TEXT NOT NULL,
+               scored_at       TEXT NOT NULL,
+               served_high     REAL,
+               shadow_high     REAL,
+               actual          REAL,
+               sigma           REAL,
+               served_logloss  REAL,
+               shadow_logloss  REAL,
+               served_brier    REAL,
+               shadow_brier    REAL,
+               delta_logloss   REAL,   -- served − shadow; >0 ⇒ candidate improved bucket log-loss
+               PRIMARY KEY (candidate_id, place, target_date))"""
+    )
     conn.commit()
     return conn
 

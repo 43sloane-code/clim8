@@ -537,3 +537,32 @@ mathematical certainty. `tools/lessons.py`:
   self-tested. Queue at `ledger/candidates.json`. READ-ONLY: emits to a queue, never a served
   number. Real run: 0 cells (post-mortems still accruing). KAT `tests/test_lessons.py` (6 cases,
   incl. the ≤4/month deferral). Full gate 533 green.
+
+## 28. Learning-loop Phase 5 — shadow scorer + human promotion gate (the L1→L2 boundary)
+*Added 2026-07-11, Execution Plan 3 chain (0→3→4→5 complete), builds on §27 (candidates) + §25 (provenance).*
+Tests each ACTIVE candidate WITHOUT ever touching a served number, and hands the decision to a human
+only after it clears a deflated statistical bar. `tools/shadow_score.py` + `shadow_forecasts` table:
+- `apply_transform`: re-derives the SHADOW high by applying the candidate's transform to the SAME
+  frozen issue-time inputs in provenance (§25) — pure function of stored decisions, no forecast
+  recomputed. `scale_bias` shrinks the applied bias toward 0; `toward_naive` shrinks skill-weighting
+  toward equal-weight, then re-applies the same bias.
+- `score_day`: scores served (=final) and shadow (=transform) as a **common-proxy** Gaussian bucket
+  pmf — identical stored σ + integer-°C ladder, differing only by the transform's mean shift — so
+  the paired `delta_logloss = served − shadow` (>0 ⇒ candidate helped) isolates the transform's
+  marginal effect and nothing else. The absolute log-losses are proxy numbers, NOT the served
+  calibration §-C7/edge.py owns; only the delta is the object. Reuses `edge._logloss/_brier` verbatim.
+- `evaluate_gate` — four terminal states off the paired-bootstrap CI at **α = 0.05 / K_candidates_ever**
+  (the Phase-4 fishing denominator carried into the bar): **PROMOTE** (n≥20, CI clears zero on the
+  favourable side, sign matches predicted `+`) → prints a human-review brief and sets the candidate
+  `PROMOTION-PENDING-HUMAN`, **applies no transform**; **FALSIFIED-SIGN** (n≥20, CI clears zero the
+  WRONG way) → KILLED; **KILLED** (autonomous early, n≥10, CI already against it); **EXPIRED**
+  (>90 days). Kills and expiry are autonomous; **promotion is permanently human-gated (L2)** — a
+  PROMOTE only flags; a human must still run the HARD-RULE-1 pre-registration → frozen walk-forward →
+  sign-stable-both-halves certification and ship the transform explicitly.
+- `run_shadow` + `run_gate` write ONLY `shadow_forecasts` + the candidate's STATUS in
+  `candidates.json` — the verdicts row (the served high) is byte-for-byte identical before and after
+  (pinned by KAT). Deterministic (seeded bootstrap; `today` data-derived from max settled date),
+  stdlib-only, self-tested. Wired into the daily spine (`accumulate.py` 2a-2/2a-3, after post-mortems).
+  KAT `tests/test_shadow.py` (15 cases: transforms, delta-sign geometry, all four terminal states,
+  Bonferroni widening flips PROMOTE→ACCRUING, served-path-untouched invariant, idempotence). Full
+  gate 548 green. **Plan 3 chain 0→3→4→5 complete.**

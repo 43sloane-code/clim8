@@ -273,6 +273,35 @@ def main() -> int:
     except Exception as e:
         _log(f"postmortems failed (non-fatal): {type(e).__name__}: {e}")
 
+    # 2a-2. Lessons (Plan 3 Phase 4): turn a RECURRING attributed cause into a budgeted candidate
+    # transform. Hard-throttled (≤2/city, ≤4/month) so the loop can't certify noise. Emits to
+    # ledger/candidates.json only — never a served number.
+    try:
+        from tools.lessons import detect_patterns, emit_candidates
+        det = detect_patterns()
+        les = emit_candidates(det)
+        _log(f"lessons: scanned {det['cells_scanned']} cells, {len(det['patterns'])} pattern(s); "
+             f"emitted {len(les['emitted'])} ACTIVE, {len(les['deferred'])} DEFERRED-BUDGET, "
+             f"{les['skipped_existing']} existing (K_ever={les['K_candidates_ever']})")
+    except Exception as e:
+        _log(f"lessons failed (non-fatal): {type(e).__name__}: {e}")
+
+    # 2a-3. Shadow scorer + promotion gate (Plan 3 Phase 5): re-apply each ACTIVE candidate's
+    # transform to the SAME frozen issue-time inputs, score the paired counterfactual into
+    # shadow_forecasts, and run the Bonferroni-deflated gate. AUTONOMOUS for kills/expiry; a
+    # PROMOTION only prints a human-review brief (L2 stays human-gated) — no transform is applied.
+    try:
+        from tools.shadow_score import run_shadow, run_gate
+        sh = run_shadow()
+        g = run_gate()
+        _log(f"shadow: scored {sum(sh['scored'].values())} paired day(s) across "
+             f"{sh['candidates']} candidate(s); gate K={g['K']} today={g['today']} "
+             f"{g['changed']} status change(s)")
+        for line in g["briefs"]:                     # PROMOTION brief -> surfaced in the spine log
+            _log(line)
+    except Exception as e:
+        _log(f"shadow gate failed (non-fatal): {type(e).__name__}: {e}")
+
     rc, edge_out = _run(["--edge"])
     _log(f"--edge rc={rc}")
 
