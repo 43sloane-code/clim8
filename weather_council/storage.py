@@ -764,6 +764,12 @@ def backfill_pm_resolutions(market_data: "MarketData | None" = None,
         except ValueError:
             continue
         res = md.fetch_resolution(resolved_event_slug(place_label, day))
+        if res is not None and getattr(res, "no_match", False):
+            # WP-1 fail-closed: the feed had events but none matched this slug exactly. Do NOT settle
+            # (leave pm_resolved_label NULL); surface the near-miss for human repair (slug drift).
+            report.append(f"{place_label} {target}: NO MATCH for the settlement slug — "
+                          f"candidates: {list(res.near_miss_slugs)} (left unsettled, not poisoned)")
+            continue
         if res is None or not res.resolved or not res.winning_label:
             continue                       # not finalized / not found — retry later
         now = utc_now_iso()

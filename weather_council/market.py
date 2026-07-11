@@ -468,6 +468,14 @@ def resolved_event_slug(city_label: str, target: dt.date) -> str:
     return event_slug(city_label, target, "high")
 
 
+def _match_event_by_slug(raw, slug: str):
+    """WP-1: the ONE shared exact-slug matcher for `fetch_resolution` and `fetch_market_by_slug`.
+    Returns the event dict whose slug EQUALS `slug`, else None. No `raw[0]` fallback — a
+    non-matching first event is a DIFFERENT city/day and must never be mistaken for this one."""
+    return next((e for e in (raw or [])
+                 if isinstance(e, dict) and str(e.get("slug")) == slug), None)
+
+
 @dataclass(frozen=True)
 class Resolution:
     """The contract's OWN settled outcome for one city/day — the authoritative
@@ -483,6 +491,12 @@ class Resolution:
     station: str | None = None
     source: str | None = None
     end_date: str | None = None
+    # WP-1 (served-number campaign): fail-closed NO_MATCH. no_match=True means the feed returned
+    # events but NONE matched the requested slug exactly — a slug/schema-drift alarm, NOT a resolution.
+    # near_miss_slugs carries the top-3 candidate slugs for human repair. Distinct from a None return
+    # (empty/failed fetch, transient). resolved is always False when no_match is True.
+    no_match: bool = False
+    near_miss_slugs: tuple = ()
 
     def contains(self, reading_int: int) -> bool:
         """True iff a native whole-degree reading lands in the winning bucket —
@@ -556,8 +570,7 @@ class MarketData:
             raise
         except Exception:
             return None
-        event = next((e for e in (raw or [])
-                      if isinstance(e, dict) and str(e.get("slug")) == slug), None)
+        event = _match_event_by_slug(raw, slug)
         return _parse_event(event) if event is not None else None
 
     def fetch_order_book(self, token_id: str) -> dict | None:
@@ -592,12 +605,15 @@ class MarketData:
         except Exception:
             return None
         if not raw:
-            return None
-        event = next((e for e in raw
-                      if isinstance(e, dict) and str(e.get("slug")) == slug),
-                     raw[0] if isinstance(raw[0], dict) else None)
+            return None                    # empty/failed fetch — transient, retry (NOT no_match)
+        event = _match_event_by_slug(raw, slug)
         if event is None:
-            return None
+            # WP-1 fail-closed: the feed returned events but none match this slug exactly. The old
+            # code fell back to raw[0] here and could settle another city/day's contract. Refuse,
+            # and surface the top-3 candidate slugs for human repair. A missing settlement is
+            # recoverable; a wrong one is poison.
+            near = tuple(str(e.get("slug")) for e in raw[:3] if isinstance(e, dict))
+            return Resolution(slug=slug, resolved=False, no_match=True, near_miss_slugs=near)
         wm = _parse_event(event)
         if wm is None:
             return None

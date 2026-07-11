@@ -235,5 +235,53 @@ class TestLiveScorecard(unittest.TestCase):
         self.assertEqual(storage.live_bucket_scorecard("Nowhere, ZZ")["n"], 0)
 
 
+class TestWp1ExactMatch(unittest.TestCase):
+    """WP-1 (served-number campaign): fetch_resolution must NEVER settle against the wrong event.
+    Exact-slug match only; no match on non-empty raw -> NO_MATCH sentinel (fail-closed) + top-3
+    near-miss candidates; empty raw stays None (transient). Pins the fix that removed the raw[0]
+    fallback which could write another city/day's contract into pm_resolved_label."""
+    _SLUG = "highest-temperature-in-london-on-june-12-2026"
+
+    def _md(self, array):
+        return MarketData(http=FakeHTTP(array))
+
+    def test_f1a_exact_match_resolves_the_right_event(self):
+        ev = _event(self._SLUG, [("22°C", "0"), ("23°C", "1")])
+        r = self._md([ev]).fetch_resolution(self._SLUG)
+        self.assertTrue(r.resolved and r.winning_label == "23°C")
+        self.assertFalse(r.no_match)
+
+    def test_f1b_no_exact_match_is_no_match_not_raw0(self):
+        # the poison: raw[0] is a RESOLVED event for a DIFFERENT CITY. Old code returned Paris 30°C.
+        paris = _event("highest-temperature-in-paris-on-june-12-2026", [("30°C", "1")])
+        r = self._md([paris]).fetch_resolution(self._SLUG)
+        self.assertTrue(r.no_match)                       # RED on pre-fix code
+        self.assertIsNone(r.winning_label)                # never the wrong event's label
+        self.assertFalse(r.resolved)
+        self.assertIn("highest-temperature-in-paris-on-june-12-2026", r.near_miss_slugs)
+
+    def test_f1c_legacy_would_mislabel_new_refuses(self):
+        # a resolved WRONG-DAY event; the requested slug is absent. Old code -> "19°C" for june-11.
+        wrong_day = _event("highest-temperature-in-london-on-june-11-2026", [("19°C", "1")])
+        r = self._md([wrong_day]).fetch_resolution(self._SLUG)
+        self.assertNotEqual(r.winning_label, "19°C")
+        self.assertTrue(r.no_match)
+
+    def test_empty_raw_is_none_not_no_match(self):
+        self.assertIsNone(self._md([]).fetch_resolution(self._SLUG))   # transient, retry (distinct)
+
+
+class TestWp1BackfillFailClosed(TestBackfill):
+    """The backfill must refuse to settle on NO_MATCH (fail-closed) and surface the near-miss."""
+    def test_backfill_no_match_leaves_null_and_reports_near_miss(self):
+        # a real MarketData whose feed only ever returns a wrong-city resolved event
+        paris = _event("highest-temperature-in-paris-on-june-12-2026", [("30°C", "1")])
+        md = MarketData(http=FakeHTTP([paris]))
+        report = storage.backfill_pm_resolutions(md, cutoff_days=0)
+        labels = {d: lab for d, lab in self._labels()}
+        self.assertIsNone(labels["2026-06-12"])            # NOT settled against Paris
+        self.assertTrue(any("NO MATCH" in line and "paris" in line for line in report))
+
+
 if __name__ == "__main__":
     unittest.main()
