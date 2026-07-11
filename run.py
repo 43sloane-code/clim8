@@ -802,6 +802,28 @@ def _bucket_int_from_label(label: str | None) -> int | None:
     return int(m.group()) if m else None
 
 
+def _twc_bias() -> tuple[float, int] | None:
+    """Data-derived directional bias of the TWC (The Weather Channel / weather.com) FORECAST
+    vs the WU settlement, for the cross-reference note. Returns (mean_diff, n) where
+    mean_diff = mean(TWC forecast high − settled high) over ALL logged twc pairs; a negative
+    mean means TWC runs BELOW WU. None when < 8 settled pairs (too thin to state a direction
+    honestly). Read-only. TWC is a FORECAST cross-reference ONLY — never blended into the
+    verdict, never the oracle (WU settles, IEM cross-checks the observation)."""
+    try:
+        from weather_council import storage as _st
+        conn = _st._connect()
+        rows = conn.execute(
+            "SELECT fc_high, actual_high FROM tracked_forecasts "
+            "WHERE source='twc' AND fc_high IS NOT NULL AND actual_high IS NOT NULL").fetchall()
+        conn.close()
+    except Exception:
+        return None
+    diffs = [r[0] - r[1] for r in rows]
+    if len(diffs) < 8:
+        return None
+    return sum(diffs) / len(diffs), len(diffs)
+
+
 def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
     """Day-ahead CROSS-VALIDATION panel — the council bucket is never shown as the ONLY
     signal. Places the market's modal bucket and the recent-settled regime beside it and
@@ -823,9 +845,11 @@ def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
             if str(getattr(comparison, "grain", "C")).upper().startswith("F"):
                 mk = _round_half_up((mk - 32) * 5 / 9)
             signals.append(("market", mk))
-    # TWC — the settlement oracle's OWN forecast, logged point-in-time in tracked_forecasts.
-    # Surfaced at FACE VALUE (recommend-only, un-gated): on 07-02 it was the only point signal
-    # that hit while the council-cluster missed — dismissing divergent signals IS the mistake.
+    # TWC (The Weather Channel / weather.com) FORECAST, logged point-in-time in tracked_forecasts.
+    # A cross-reference ONLY (WU settles, IEM cross-checks the observation) — surfaced at FACE
+    # VALUE (recommend-only, un-gated): on 07-02 it was the only point signal that hit while the
+    # council-cluster missed — dismissing divergent signals IS the mistake.
+    twc_raw = None
     try:
         from weather_council import storage as _st
         conn = _st._connect()
@@ -835,7 +859,8 @@ def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
             (v.place.label(), str(v.target))).fetchone()
         conn.close()
         if row and row[0] is not None:
-            signals.append(("twc-oracle", _native_reading_int(float(row[0]), "C", sub)))
+            twc_raw = float(row[0])
+            signals.append(("twc-oracle", _native_reading_int(twc_raw, "C", sub)))
     except Exception:
         pass
     try:
@@ -879,6 +904,22 @@ def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
     else:
         L.append("        → the signals split — a genuine coin-flip; neither side has a "
                  "day-ahead edge (σ-ceiling), the intraday lock decides")
+    # TWC cross-reference bias (data-derived) — TWC forecasts run systematically off the WU
+    # settlement; state which way (from the logged pairs) so the reader can adjust. Display
+    # ONLY: WU remains the oracle, IEM the observation cross-ref, TWC is never blended.
+    if twc_raw is not None:
+        _tb = _twc_bias()
+        if _tb is not None:
+            _m, _n = _tb
+            _dir = "BELOW" if _m < 0 else "ABOVE"
+            _wu_scale = twc_raw - _m           # TWC put on the WU/settled scale
+            L.append(f"        TWC (Weather Channel) forecast {twc_raw:.1f}°C — CROSS-REFERENCE only "
+                     f"(WU settles · IEM cross-checks; TWC never blended). Over {_n} logged pairs "
+                     f"TWC runs {abs(_m):.1f}°C {_dir} the WU settlement → WU-scale read ~{_wu_scale:.1f}°C; "
+                     f"treat TWC as a soft {'floor' if _m < 0 else 'ceiling'}.")
+        else:
+            L.append(f"        TWC (Weather Channel) forecast {twc_raw:.1f}°C — cross-reference only "
+                     f"(WU settles); its bias vs WU is still accruing (<8 settled pairs).")
     return L
 
 
