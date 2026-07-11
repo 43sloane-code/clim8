@@ -64,10 +64,15 @@ The plan's "Open-Meteo vs Visual Crossing vs Weatherbit vs settlement-source" is
 observation oracle, the WU v1 history, and the TWC daily FORECAST are three products of the same
 company. That shared lineage is a first-class caveat (below), not a footnote.*
 
+**WUNDERGROUND IS THE ORACLE — the main anchor, never demoted.** WU airport records settle the
+market and are the truth for `obs_final`/`daily_final`. Every other source (IEM, TWC, Open-Meteo,
+Meteostat) is a CROSS-REFERENCE measured *against* the WU oracle — never co-equal, never allowed to
+override it. The xref layer produces cross-checks on the oracle; it does not replace or outvote it.
+
 | Source | Endpoint | Kind | Intraday OBS? | xref role |
 |---|---|---|---|---|
-| **WU v3 current** (Wunderground/TWC) | api.weather.com/v3/wx/observations/current | live obs (~10min) | **YES** | Axis-C obs feed #1 (the SETTLEMENT source); its cur_f-vs-record gap IS the London over-read signature |
-| **IEM METAR** | mesonet.agron.iastate.edu ASOS | hourly obs + archive (~10y) | **YES** | Axis-C obs feed #2 + the deep historical spine (obs_final/daily_final backfill) |
+| **WU v3 current** (Wunderground/TWC) | api.weather.com/v3/wx/observations/current | live obs (~10min) | **YES** | **THE ORACLE / anchor** — the settlement source and `obs_final` truth; everything else is checked against it |
+| **IEM METAR** | mesonet.agron.iastate.edu ASOS | hourly obs + archive (~10y) | **YES** | **CROSS-REFERENCE #1** against the oracle + the deep 10y historical archive for backtest (WU history is too shallow — mirrors the London SETTLE=WU / BACKTEST=IEM split). Its recorded value vs WU-v3-current IS the over-read detector |
 | WU v1 history (Wunderground/TWC) | api.weather.com/v1/.../historical | recorded daily/hourly (lags 1–2h) | partial | settlement-record cross-ref |
 | **TWC daily forecast** (The Weather Company) | api.weather.com/v3/wx/forecast/daily/5day | **FORECAST** | NO | **FORECAST cross-reference** — already measured as a signed offset in Plan 4 (`weather_council/twc_offset.py`, recommend-only, 3-gate certified). xref surfaces it as a forecast-vs-analog/served cross-check (a distinct axis from the obs Axis C) |
 | Open-Meteo | api.open-meteo.com (forecast/archive/ensemble) | FORECAST + reanalysis archive | NO (forecast) | NOT an obs feed; archive can backfill history |
@@ -77,10 +82,12 @@ company. That shared lineage is a first-class caveat (below), not a footnote.*
 | HKO | data.weather.gov.hk | obs (HK) | (HK removed from basket) | n/a |
 
 **HONEST CONSTRAINTS (state loudly):**
-1. For intraday OBSERVATIONS there are effectively **2 feeds — WU-v3 and IEM-METAR** — partly sharing
-   underlying METAR. So Axis C (source-vs-source, obs) is WEAKER than the plan implies. Its
-   highest-value real check is exactly **WU-v3-current vs IEM-recorded** divergence (London 07-11:
-   v3 cur 83°F vs IEM 81°F — the over-read), which is the one that matters.
+1. The WU oracle is the anchor; intraday obs has ONE genuinely independent cross-reference against it
+   (**IEM-METAR**) plus WU's own recorded record — partly sharing underlying METAR. So Axis C
+   (obs cross-check) is narrower than the plan's 4-source picture implies, but its highest-value real
+   check is exactly the one that matters: **WU-v3-current (the oracle's nowcast) vs the IEM/WU-recorded
+   value** (London 07-11: v3 cur 83°F vs recorded 81°F — the over-read). The cross-reference never
+   overrides the oracle; it flags when the oracle's nowcast is running ahead of its own record.
 2. **FORECAST cross-reference axis (new — Wunderground/TWC):** the TWC daily forecast is a *forecast*,
    not an obs, so it does NOT enter the obs grid or Axis C. It enters as its own cross-check — TWC's
    offset-adjusted call vs the analog projection (Axis B) and vs the served pick — reusing the Plan-4
