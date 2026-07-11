@@ -28,10 +28,9 @@ import datetime as dt
 from zoneinfo import ZoneInfo
 
 from weather_council.market import _native_reading_int
-from weather_council.sources import Place, Sources, WU_API_KEY
+from weather_council.sources import Place, Sources
 from weather_council import storage
 
-TWC_URL = "https://api.weather.com/v3/wx/forecast/daily/5day"
 GATE_MIN_PAIRS = 40                      # minimum settled pairs before the disjoint-fold gate can rule
 
 # The current WU-anchored basket (name, country -> settlement station geocode + tz). Names/countries
@@ -41,26 +40,6 @@ _STATIONS = {
     ("Manila", "Philippines"): ("RPLL", "Ninoy Aquino Intl", 14.5086, 121.0198, "Asia/Manila"),
     ("London", "United Kingdom"): ("EGLC", "London City", 51.5053, 0.0553, "Europe/London"),
 }
-
-
-def _pick(valid, highs, lows, target_iso):
-    """PURE: (high_F, low_F) for `target_iso` from the parallel TWC arrays, or None. KAT'd."""
-    for v, h, l in zip(valid or [], highs or [], lows or []):
-        if isinstance(v, str) and v[:10] == target_iso and isinstance(h, (int, float)):
-            return float(h), (float(l) if isinstance(l, (int, float)) else None)
-    return None
-
-
-def _f_to_c(f):
-    return (f - 32.0) * 5.0 / 9.0
-
-
-def fetch_twc(src: Sources, lat: float, lon: float):
-    """TWC daily forecast at a station geocode (whole-°F, matching the settlement grain)."""
-    d = src.http.get_json(TWC_URL, {"geocode": f"{lat},{lon}", "format": "json",
-                                    "units": "e", "language": "en-US", "apiKey": WU_API_KEY})
-    return (d.get("validTimeLocal"), d.get("calendarDayTemperatureMax"),
-            d.get("calendarDayTemperatureMin"))
 
 
 def _print_record():
@@ -88,17 +67,23 @@ def _print_record():
 
 
 def _selftest() -> int:
-    valid = ["2026-07-01T07:00:00+0800", "2026-07-02T07:00:00+0800"]
-    highs, lows = [90, 86], [78, 79]
-    assert _pick(valid, highs, lows, "2026-07-02") == (86.0, 79.0)        # date-aligned pick
-    assert _pick(valid, highs, lows, "2026-07-01") == (90.0, 78.0)
-    assert _pick(valid, highs, lows, "2026-07-09") is None               # missing date -> None
-    assert _pick(valid, [None, 86], lows, "2026-07-01") is None          # null high -> None
-    assert abs(_f_to_c(86) - 30.0) < 1e-9 and _native_reading_int(_f_to_c(86), "C", False) == 30
-    assert _native_reading_int(_f_to_c(90), "C", False) == 32            # 90F=32.2C -> bucket 32
+    import datetime as _dt
+    # The fetch/day-mapping/conversion contract now lives in Sources.twc_forecast_daily (KAT
+    # tests/test_sources_twc.py). Here we verify the logger's OWN glue: the date-aligned pick +
+    # °C-bucket handoff through the shared method, and the Place.label() join key.
+    class _FakeHTTP:
+        payload = {"validTimeLocal": ["2026-07-01T07:00:00+0800", "2026-07-02T07:00:00+0800"],
+                   "calendarDayTemperatureMax": [90, 86], "calendarDayTemperatureMin": [78, 79]}
+        def get_json(self, url, params): return self.payload
+    src = Sources(); src.http = _FakeHTTP()
+    pick = src.twc_forecast_daily(1.35, 103.99, _dt.date(2026, 7, 2), "Asia/Singapore", "C")
+    assert abs(pick["fc_high"] - 30.0) < 1e-9 and _native_reading_int(pick["fc_high"], "C", False) == 30
+    pick0 = src.twc_forecast_daily(1.35, 103.99, _dt.date(2026, 7, 1), "Asia/Singapore", "C")
+    assert _native_reading_int(pick0["fc_high"], "C", False) == 32       # 90°F=32.2°C -> bucket 32
+    assert src.twc_forecast_daily(1.35, 103.99, _dt.date(2026, 7, 9), "Asia/Singapore", "C") is None
     # Place.label() must match the council's join key
     assert Place("Singapore", "Singapore", 1.35, 103.99, "Asia/Singapore").label() == "Singapore, Singapore"
-    print("twc_forecast_logger selftest PASS (date-aligned pick, null guards, °F→°C bucket, label join-key)")
+    print("twc_forecast_logger selftest PASS (shared twc_forecast_daily handoff, °C bucket, label join-key)")
     return 0
 
 
@@ -113,17 +98,15 @@ def main() -> int:
     src = Sources()
     print("TWC FORECAST FORWARD-LOG  (source='twc' → tracked_forecasts; recommend-only, earning a record)")
     for (name, country), (icao, sname, lat, lon, tz) in _STATIONS.items():
-        target = (dt.datetime.now(ZoneInfo(tz)).date() + dt.timedelta(days=args.lead)).isoformat()
-        try:
-            pick = _pick(*fetch_twc(src, lat, lon), target)
-        except Exception as e:
-            print(f"  {name}: TWC fetch failed ({type(e).__name__}: {str(e)[:60]})")
-            continue
-        if not pick:
+        target_date = dt.datetime.now(ZoneInfo(tz)).date() + dt.timedelta(days=args.lead)
+        target = target_date.isoformat()
+        # Fetch through the shared, soft-failure-isolated cross-reference surface (Plan 4 Phase 1):
+        # units='e' at the settlement anchor, °C at the edge, day matched on validTimeLocal[:10].
+        pick = src.twc_forecast_daily(lat, lon, target_date, tz, "C")
+        if not pick or pick.get("fc_high") is None:
             print(f"  {name}: no TWC forecast for {target} yet")
             continue
-        hF, lF = pick
-        hC, lC = _f_to_c(hF), (_f_to_c(lF) if lF is not None else None)
+        hC, lC = pick["fc_high"], pick["fc_low"]
         place = Place(name=name, country=country, latitude=lat, longitude=lon, timezone=tz)
         ts = {"kind": "station", "station": {"icao": icao, "name": sname, "id": None}}
         # Pair the row with the council's own forecast for the same target AT CAPTURE TIME
@@ -141,7 +124,7 @@ def main() -> int:
         except Exception:
             pass
         storage.log_tracked_forecast("twc", place, target, hC, lC, c_high, c_low, ts)
-        print(f"  {name}: logged TWC lead-{args.lead} {target}  high {hF:.0f}°F={hC:.1f}°C "
+        print(f"  {name}: logged TWC lead-{args.lead} {target}  high {hC:.1f}°C "
               f"(bucket {_native_reading_int(hC, 'C', False)})")
     settled = storage.settle_tracked_forecasts(src)
     print(f"  settled {len(settled)} matured entr{'y' if len(settled) == 1 else 'ies'} against the WU record")

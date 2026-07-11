@@ -68,6 +68,10 @@ WU_GEO = {"WSSS": (1.3502, 103.994), "RPLL": (14.5086, 121.0198), "EGLC": (51.50
 _IEM_OVERLAY_TZ = {"EGLC": "Europe/London", "OPKC": "Asia/Karachi",
                    "OEJN": "Asia/Riyadh"}
 V3_CURRENT_URL = "https://api.weather.com/v3/wx/observations/current"
+# The Weather Company's own daily FORECAST product — same host + same public web key as the WU
+# observation feeds above. Used ONLY as a cross-reference (Sources.twc_forecast_daily); TWC never
+# votes and never settles. Its consumer forecast rides here behind the same WU_API_KEY.
+TWC_FORECAST_URL = "https://api.weather.com/v3/wx/forecast/daily/5day"
 WU_LOCATION = {"EGLC": "EGLC:9:GB", "RPLL": "RPLL:9:PH",
                "WSSS": "WSSS:9:SG",
                "KSFO": "KSFO:9:US",
@@ -1074,6 +1078,63 @@ class Sources:
         return {"cur_f": float(t),
                 "max24_f": float(m) if isinstance(m, (int, float)) else None,
                 "valid_local": d.get("validTimeLocal")}
+
+    def twc_forecast_daily(self, lat: float, lon: float, target: dt.date,
+                           tz: str, grain: str) -> dict | None:
+        """The Weather Company's OWN published daily forecast for a station, requested at the
+        SETTLEMENT ANCHOR's coordinates (fc_lat/fc_lon — NOT the city centroid, so the reading
+        isolates forecast bias vs the oracle rather than smuggling in an urban-gradient location
+        mismatch). Returns {'fc_high','fc_low','raw_day_label','grain'} in the market's native
+        grain for `target` (that city's LOCAL calendar day), or None if unavailable.
+
+        A CROSS-REFERENCE ONLY: this is the settlement oracle (WU/TWC) forecasting its own
+        station — never a vote, never settlement. Fetched in whole-°F (units='e', matching the
+        WU record's °F-native settlement grain) and converted once at the edge — °C for basket
+        cities, °F where the market settles °F — so TWC and the oracle compare on ONE basis (no
+        silent grain mixing). The day is matched UTC-independently on validTimeLocal[:10] (the
+        Phase-0 probe verified each element carries the station's LOCAL offset).
+
+        KEY DEPENDENCY: rides the SAME public web key as the WU truth path (WU_API_KEY); a key
+        rotation silently kills BOTH truth reads AND this cross-reference — so the soft-failure
+        tag here is 'twc_forecast', DISTINCT from the truth path's 'wu_key_or_endpoint', letting
+        healthcheck tell which product broke. A transport error or a structurally malformed
+        response records that soft failure and returns None; a well-formed response that simply
+        does not yet cover `target` returns None WITHOUT a soft failure (not published yet).
+        Never guesses a temperature."""
+        try:
+            d = self.http.get_json(
+                TWC_FORECAST_URL,
+                {"geocode": f"{lat},{lon}", "format": "json", "units": "e",
+                 "language": "en-US", "apiKey": WU_API_KEY})
+        except Exception as exc:
+            from .failures import record_soft_failure
+            record_soft_failure("twc_forecast", exc)
+            return None
+        valid = d.get("validTimeLocal") if isinstance(d, dict) else None
+        highs = d.get("calendarDayTemperatureMax") if isinstance(d, dict) else None
+        lows = d.get("calendarDayTemperatureMin") if isinstance(d, dict) else None
+        if not (isinstance(valid, list) and isinstance(highs, list) and isinstance(lows, list)):
+            from .failures import record_soft_failure
+            record_soft_failure("twc_forecast",
+                                ValueError("TWC response missing calendar-day arrays"))
+            return None
+        # Convert once at the edge: °F stays °F where the market settles °F; else whole-°F → °C.
+        to_native = ((lambda f: f) if str(grain).upper().startswith("F")
+                     else (lambda f: (f - 32.0) * 5.0 / 9.0))
+        tgt = target.isoformat()
+        for i, v in enumerate(valid):
+            if isinstance(v, str) and v[:10] == tgt and i < len(highs):
+                hF = highs[i]
+                if not isinstance(hF, (int, float)) or isinstance(hF, bool):
+                    return None                       # day present but max not set — not a guess
+                lF = lows[i] if i < len(lows) else None
+                return {
+                    "fc_high": to_native(float(hF)),
+                    "fc_low": (to_native(float(lF)) if isinstance(lF, (int, float))
+                               and not isinstance(lF, bool) else None),
+                    "raw_day_label": v, "grain": grain,
+                }
+        return None                                   # target not in the forecast horizon yet
 
     def wunderground_daily_series(self, icao: str, start: dt.date, end: dt.date,
                                   timezone: str) -> DailySeries:
