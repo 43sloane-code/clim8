@@ -136,6 +136,38 @@ include-all until flags exist (provably inert at ship time; KAT'd).
     unlabeled synthetic is a fabricated genuine; METHOD-DEFECTIVE.
 
 ---
-## Gate 0-B — outage-episode inventory & branch declaration
-*(executed Phase 0 2026-07-11; amended into this pre-reg per §4.)*
-See the "GATE 0-B RESULT" section appended below.
+## Gate 0-B — outage-episode inventory & branch declaration (executed Phase 0 2026-07-11)
+
+**Episode definition (frozen):** an outage episode = ≥2 consecutive failed/empty fetches of the
+daily-max endpoint for one station, boundaries closed by ≥3 h healthy on both sides. Single-fetch blips
+are logged, not episodes.
+
+**Inventory — mining sources, in order (receipts):**
+| Source | Evidence of daily-max endpoint outage |
+|---|---|
+| (1) `soft_failures` table | **0 rows** — no swallowed-failure records of ANY tag exist |
+| (2) `logs/accumulate.log` (`_tail_status` archive) | 454 lines total; **0** daily-max/endpoint/timeout/429/outage lines |
+| (3) watchdog duty history | not persisted to a queryable store (printed to logs); the daily-max endpoint is not a watchdog duty target |
+| (4) HTTP-error rows in the ledger | no such persistence exists |
+
+**Genuine episodes found: 0** (< 3).
+
+**BRANCH DECLARED: C — SYNTHETIC-ONLY.** WP-3 certifies on **20 synthetic episodes** from the frozen
+duration grid {1 h, 3 h, 6 h, 12 h, 24 h} × random start times **stratified by station** (RPLL, WSSS,
+EGLC + OEJN, OPKC, KSFO) **and local time-of-day**, seed **`GATE0B_SEED = 20260711`** (deterministic
+regeneration). Masking is applied at REPLAY time only — the store is never mutated — and every masked
+replay runs on WP-2-corrected daily maxes (an outage replay against uncorrected values stacks two
+defects). Every episode is labeled SYNTHETIC in the WP-3 artifact.
+
+**HEADLINE (stated plainly, per checklist item 10):** NO genuine-outage validation exists. WP-3's
+real-world outage behavior is **MEASURED-PENDING** until the first live daily-max outage is observed and
+reconciled. The "0 genuine episodes" reflects SHALLOW evidence, not proven zero-outage history:
+`soft_failures` is empty and `accumulate.log` holds only ~recent lines, and pre-fix `_tail_status`
+under-reported stderr failures (the stderr-merge fix shipped 2026-07-11 in commit aa1ca2a; historical
+entries predate it). This is not "the endpoint never failed" — it is "no failure is recoverable from the
+retained logs."
+
+**Free side-product (per §4):** this inventory is also the first measured estimate of historical
+fetch-log retention — `soft_failures` = 0 rows, `accumulate.log` = 454 lines. That shallow-retention fact
+directly informs WP-1's resumable-audit horizon and the standing plans' revision-window measurements
+(don't assume logs reach further back than they do).
