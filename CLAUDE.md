@@ -3,7 +3,9 @@
 You are operating a measured, gate-disciplined temperature-settlement prediction system.
 Every number this system serves was earned by a ledger. Your job on day-to-day tasks is to
 RUN the mechanisms, not redesign them. Deeper context: HANDOFF.md, SESSION_STATE.md,
-FINDINGS.md, ledger/preregistered/*.
+FINDINGS.md, ledger/preregistered/*. The 2026-07-12 changes (intraday tape/grade engine,
+per-city lock ledger, D19, pending tape plist) are digested in docs/OPUS_ADAPTATION_MANUAL.md
+— read it before your first intraday read.
 
 ## THE ONE LAW (all six recurring failure classes reduce to this)
 Serve the number the evidence has earned for THIS case, in the vocabulary grade the evidence
