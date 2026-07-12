@@ -91,6 +91,11 @@ the ledger certifies.
 1. NO served-number change without: pre-registration file (frozen BEFORE scoring) → leak-free
    walk-forward probe → sign-stable on BOTH chronological halves (and both cities if shared
    surface) → ship + KAT + stamp the prereg CERTIFIED. Fail → dead ledger entry, one attempt.
+   DRIVER-FIRST (operator directive 2026-07-12): the prereg must NAME the driver (the causal
+   mechanism — why should this edge exist at all), the kill condition ON THE DRIVER itself,
+   and the regime it lives in. No driver = no probe (a pattern is a coincidence not yet
+   disproven; it dies only after losses — a driver announces its death in its own series
+   first). Hierarchy: identity > driver > pattern. Template: twc_member_gate.md.
 2. Labeling/honesty fixes ship WITHOUT the gate; anything touching a served probability or
    pick does NOT.
 3. A fix is a HYPOTHESIS. Never say "improved" from a ship — only from n at the frozen bar.
