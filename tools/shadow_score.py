@@ -130,6 +130,7 @@ def score_day(prov: dict, final: float, actual: float, transform: dict) -> dict 
         return None
     sigma = (prov.get("spread") or {}).get("high")
     sigma = sigma if isinstance(sigma, (int, float)) and sigma > 0 else SIGMA_FLOOR
+    sigma = max(sigma, SIGMA_FLOOR)      # floor ONCE here so the stored sigma == the sigma scored
     ladder = _bucket_ladder(final, shadow_high, actual)
     realized = f"{_rhu(actual)}"
     served_pmf = _gauss_bucket_pmf(final, sigma, ladder)

@@ -263,11 +263,7 @@ def _selftest() -> int:
     ], "cells_scanned": 3}
     # first BLEND for HK is active (city now has 2)
     emit_candidates(det_budget, queue_path=q, db_path=dbp)
-    det_budget3 = {"patterns": [
-        {"place": "HK", "cause": "BIAS", "n": 10, "hurt": 9, "p_value": 0.02, "effect_size": 0.9},
-    ], "cells_scanned": 3}
-    # a different transform for HK (factor tweak) would be a new id — force via a distinct place tag
-    # simpler: verify the ≤2/city cap holds by checking active HK count
+    # verify the ≤2/city cap holds by checking the active HK count
     q_now = _load_queue(q)
     active_hk = [c for c in q_now if c["place"] == "HK" and c["status"] == "ACTIVE"]
     assert len(active_hk) <= MAX_ACTIVE_PER_CITY, active_hk

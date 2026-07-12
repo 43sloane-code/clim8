@@ -320,8 +320,7 @@ def _compare(
         n_residuals=n,
         verdict_high_c=verdict_c,
         verdict_reading=market.native_reading(settle_c),
-        verdict_bucket=(market.bucket_for_high(settle_c).label
-                        if market.bucket_for_high(settle_c) else None),
+        verdict_bucket=(_vb.label if (_vb := market.bucket_for_high(settle_c)) else None),
         edge_distance_c=market.edge_distance_c(settle_c),
         rounding_robust=(rr[0] if (rr := market.rounding_rule_robustness(settle_c)) else None),
         rounding_near_bucket=(rr[1] if rr else None),

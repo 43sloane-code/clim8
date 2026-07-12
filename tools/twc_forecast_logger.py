@@ -117,11 +117,11 @@ def main() -> int:
         # matched instead of joined after the fact. Best-effort: None if no verdict yet.
         c_high = c_low = None
         try:
-            conn = storage._connect()
-            row = conn.execute(
-                "SELECT high, low FROM verdicts WHERE place=? AND target_date=? "
-                "ORDER BY issued_at DESC LIMIT 1", (place.label(), target)).fetchone()
-            conn.close()
+            import contextlib
+            with contextlib.closing(storage._connect()) as conn:   # close even if execute raises
+                row = conn.execute(
+                    "SELECT high, low FROM verdicts WHERE place=? AND target_date=? "
+                    "ORDER BY issued_at DESC LIMIT 1", (place.label(), target)).fetchone()
             if row:
                 c_high, c_low = row
         except Exception:
