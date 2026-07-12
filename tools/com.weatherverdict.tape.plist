@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Intraday TAPE reader LaunchAgent — fills the London coverage gap (2026-07-12 audit).
+
+  Runs tools/tape_logger.py: for each WU-register basket city (Singapore, London) it
+  computes ONLY the intraday ceiling + vocabulary grade, appending one read of the
+  settlement surface (daily-max endpoint value+n, cur_f + v3 stamp) to
+  ledger/intraday_tape.jsonl. Endpoint motion / lead sustainment / the mechanical
+  "locked" gate all derive from that read SEQUENCE — see docs/INTRADAY_PROTOCOL.md.
+
+  Read-only / labels-only: no council run, no market fetch, no served numbers, no trades.
+
+  Fires at 15:30 and 21:45 host-local (= London-local): the existing four verdict jobs
+  cover Singapore's whole day (09:00-18:15 SGT) but read London only at 02:00-11:15
+  local — all pre-peak (July peak 15:00, IQR 13-16; sunset ~21:15). 15:30 is the
+  peak-window read; 21:45 is the post-sunset settle-grade read. Duplicate same-day rows
+  are harmless by design (more motion evidence, never a served number).
+
+  INSTALL (user-side; launchd cannot be loaded from the agent shell):
+    cp "tools/com.weatherverdict.tape.plist" ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.weatherverdict.tape.plist
+
+  RUN NOW as a test:
+    launchctl start com.weatherverdict.tape
+
+  INSPECT:
+    tail reports/tape.launchd.out.log
+    tail ledger/intraday_tape.jsonl
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.weatherverdict.tape</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-c</string>
+        <string>cd '/Users/43slauson/Desktop/mock projects/weather-verdict' &amp;&amp; PYTHONPATH=. '/Library/Frameworks/Python.framework/Versions/3.14/bin/python3' tools/tape_logger.py</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>15</integer>
+            <key>Minute</key>
+            <integer>30</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>21</integer>
+            <key>Minute</key>
+            <integer>45</integer>
+        </dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/43slauson/Desktop/mock projects/weather-verdict/reports/tape.launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/43slauson/Desktop/mock projects/weather-verdict/reports/tape.launchd.err.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
