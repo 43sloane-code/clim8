@@ -317,9 +317,13 @@ def intraday_ceiling(place: Place, target: dt.date, *,
                     wu_rec_max_f = dmax.get("max_f") if dmax else None
                 except Exception:
                     wu_rec_max_f = None
+                # WP-3: on a daily-max endpoint outage, yesterday's peak (°F) is the recent-daily-max
+                # fallback cap so the phantom cap degrades explicitly instead of vanishing.
+                yday_cap_f = (yrow[0] * 9.0 / 5.0 + 32.0) if yrow else None
                 fused, live_note = _fuse_live_floor(running_max, live_cur, live_max24,
                                                     yrow[0] if yrow else None,
-                                                    wu_record_max_f=wu_rec_max_f)
+                                                    wu_record_max_f=wu_rec_max_f,
+                                                    cap_fallback_f=yday_cap_f)
                 if fused is not None and (running_max is None or fused > running_max):
                     running_max = fused
                 feed = "wu+live"

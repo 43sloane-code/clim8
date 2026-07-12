@@ -172,7 +172,8 @@ def _history_cache_read(key: str):
         return None, None
 
 
-def _fuse_live_floor(runmax_c, cur_f, max24_f, yesterday_max_c, wu_record_max_f=None):
+def _fuse_live_floor(runmax_c, cur_f, max24_f, yesterday_max_c, wu_record_max_f=None,
+                     cap_fallback_f=None):
     """FLOOR-RAISE-ONLY fusion of the settlement station's freshest evidence into the
     running max. Returns (floor_c, note|None). Rules (the 07-04 lesson — 91°F posted ~45min
     late and the 24h register read 92°F while the half-hourly rows topped at 91):
@@ -203,11 +204,24 @@ def _fuse_live_floor(runmax_c, cur_f, max24_f, yesterday_max_c, wu_record_max_f=
     # up to cur_f is attributable. (cur_f also raises the floor directly below — this keeps the
     # register path CONSISTENT: it is never capped beneath a current reading the tool already
     # trusts. Only the max24 rolling register is capped; cur_f itself is never capped.)
-    if isinstance(max24_f, (int, float)) and isinstance(wu_record_max_f, (int, float)):
-        ceiling = wu_record_max_f
-        if isinstance(cur_f, (int, float)) and cur_f > ceiling:
-            ceiling = cur_f
-        max24_f = min(max24_f, ceiling)
+    #
+    # WP-3 (served-number campaign): on a daily-max endpoint OUTAGE (wu_record_max_f is None) this cap
+    # must NOT silently vanish — that re-opens the 07-09 phantom in a failure regime. The cap reference
+    # is the daily-max endpoint when present, ELSE a caller-supplied RECENT daily max (cap_fallback_f,
+    # e.g. yesterday's peak) — a declared degraded cap. cur_f can only RAISE the ceiling (it never caps
+    # the register, which legitimately leads cur_f — the 07-04 lesson). When NEITHER reference exists
+    # the register stays uncapped, but that is DECLARED (ABSENT_OUTAGE in the note) so it is a
+    # watchdog-visible alarm, never a silent degradation.
+    cap_ref = wu_record_max_f if isinstance(wu_record_max_f, (int, float)) else cap_fallback_f
+    outage_uncapped = False
+    if isinstance(max24_f, (int, float)):
+        if isinstance(cap_ref, (int, float)):
+            ceiling = cap_ref
+            if isinstance(cur_f, (int, float)) and cur_f > ceiling:
+                ceiling = cur_f
+            max24_f = min(max24_f, ceiling)
+        elif not isinstance(wu_record_max_f, (int, float)):
+            outage_uncapped = True      # endpoint down + no fallback — declared below, not silent
 
     if isinstance(cur_f, (int, float)) and (floor_c is None or f2c(cur_f) > floor_c):
         floor_c = f2c(cur_f)
@@ -227,6 +241,8 @@ def _fuse_live_floor(runmax_c, cur_f, max24_f, yesterday_max_c, wu_record_max_f=
             and (floor_c is None or f2c(max24_f) - floor_c <= _REG_ATTR_MARGIN_C):
         floor_c = f2c(max24_f)
         note = f"live 24h-register {max24_f:.0f}°F"
+        if outage_uncapped:                # WP-3: an uncapped register raised the floor on an outage
+            note += " [ABSENT_OUTAGE: daily-max endpoint down, register uncapped — verify]"
     return floor_c, note
 
 

@@ -76,6 +76,30 @@ class TestFuseLiveFloor(unittest.TestCase):
         floor2, _ = _fuse_live_floor(36.11, None, 98.0, 35.0, wu_record_max_f=97.0)
         self.assertAlmostEqual(floor2, 36.11, places=2)   # cur_f absent -> register still capped at 97°F endpoint
 
+    def test_wp3_outage_fallback_cap_blocks_phantom(self):
+        # WP-3: daily-max endpoint DOWN (wu_record None) but a recent daily max (100°F) supplied as the
+        # fallback -> the 102°F phantom register is still capped to 100 -> settles 38, not 39, mid-outage.
+        import math
+        floor, note = _fuse_live_floor(37.78, 99.0, 102.0, 37.0,
+                                       wu_record_max_f=None, cap_fallback_f=100.0)
+        self.assertEqual(math.floor(floor + 0.5), 38)
+        self.assertNotIn("ABSENT_OUTAGE", note or "")     # capped by the fallback, not uncapped
+
+    def test_wp3_outage_no_fallback_declares_absent(self):
+        # WP-3: endpoint down AND no fallback -> the register still fuses (uncapped) but the note
+        # DECLARES ABSENT_OUTAGE so it is a watchdog-visible alarm, never a silent phantom.
+        floor, note = _fuse_live_floor(32.2, 90.0, 92.0, 31.1,
+                                       wu_record_max_f=None, cap_fallback_f=None)
+        self.assertIn("ABSENT_OUTAGE", note)
+        self.assertIn("24h-register 92", note)
+
+    def test_wp3_healthy_parity_no_outage_marker(self):
+        # WP-3: endpoint present -> identical phantom-cap behavior, no outage marker.
+        import math
+        floor, note = _fuse_live_floor(37.78, 99.0, 102.0, 37.78, wu_record_max_f=100.0)
+        self.assertEqual(math.floor(floor + 0.5), 38)
+        self.assertNotIn("ABSENT_OUTAGE", note or "")
+
     def test_declined_cur_does_not_relax_the_phantom_cap(self):
         # The relaxation is cur_f-gated: when the current reading has DECLINED below the endpoint,
         # the register is still capped at the endpoint (the 07-09 phantom guard is intact).
