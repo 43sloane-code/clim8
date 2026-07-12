@@ -237,6 +237,9 @@ def main() -> int:
     _ledger_step("singapore pop log", "tools/singapore_pop_logger.py")
     _ledger_step("p2b 12:00 forward", "tools/p2b_1200_logger.py")
     _ledger_step("lock ledger", "tools/lock_logger.py")
+    # Driver-health: per-member bias-break watch (alert-only; member_bias_break_watch.md).
+    # ACCRUING until the settled∧provenance join fills (provenance logging began 07-11).
+    _ledger_step("member-bias break watch", "tools/member_break_watch.py")
 
     # 1e. Watchdog (Duties 1-3). Built 06-28, discovered UNSCHEDULED in the 07-04
     # re-evaluation — a guard that never runs guards nothing. It is a COMPARATOR: it needs a
