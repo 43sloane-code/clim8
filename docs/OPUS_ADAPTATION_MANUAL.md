@@ -1,144 +1,334 @@
-# ADAPTATION MANUAL — everything that changed 2026-07-12 (read once, operate simply)
+# OPERATOR ADAPTATION MANUAL — every improvement of 2026-07-12, explicit, complete
 
-*For the next session (any model). Eight commits, `4c3fc8c → 6d2aec2`. CLAUDE.md is still
-the constitution; this manual is the delta — what is NEW, how to RUN it, and what got
-KILLED so you never rebuild it. Written to be followed literally.*
-
----
-
-## 0. THE ONE PENDING ACTION (user-side, blocks two mechanisms)
-
-The tape LaunchAgent is written but **NOT loaded** (verified absent from
-`~/Library/LaunchAgents` at writing). Until the user runs this, London gets no
-peak-window tape reads AND no in-window lock-certification rows:
-
-```
-cp "tools/com.weatherverdict.tape.plist" ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.weatherverdict.tape.plist
-```
-
-If a day passes and `ledger/intraday_tape.jsonl` has no London row near 15:30 London
-time, remind the user. Do NOT run launchctl yourself (classifier-denied; user-side only).
+*For the next session (Opus 4.8 or any model). This REPLACES the mid-session version of
+this file. It covers ALL 19 weather-verdict commits (`4c3fc8c → 63f88bd`) and both
+tv_trading_agent commits (`b14f423`, `da0cbbc`) from 2026-07-12. CLAUDE.md remains the
+constitution; this manual is the complete delta: every new mechanism, every rule, every
+refusal, every live number as of writing. Follow it literally. Where this manual and a
+ledger disagree, the ledger wins — then fix this manual.*
 
 ---
 
-## 1. THE INTRADAY TAPE + GRADE ENGINE (the big change — why and how)
+# PART I — THE LAWS (read first; everything else is these applied)
 
-**Why it exists:** the 2026-07-12 Karachi miss ("32 effectively locked", settled 33).
-Root cause was NOT the forecast — the machine's lean was right. It was memoryless runs +
-judgment vocabulary: nobody tracked that the settlement endpoint rose 90→91°F between
-runs, and "locked" had no mechanical gate. Case file: ISSUES_2026-07-12_INTRADAY_ACCURACY.md.
+## 1. The ONE LAW (unchanged, restated)
+Serve the number the evidence has earned for THIS case, in the vocabulary grade the
+evidence has earned, spoken by the machine from a ledger — never a blended statistic,
+never a story, never from memory.
 
-**What exists now (3 pieces):**
+## 2. THE DRIVER-FIRST LAW (NEW — operator directive 2026-07-12, in CLAUDE.md HARD RULE 1)
+Every hypothesis starts with a MACRO DRIVER — a causal reason the edge should exist at
+all — never a spotted pattern. Verbatim consequences:
+- **No driver = no probe.** A pattern with no driver is a coincidence not yet disproven;
+  it dies only after losses. A driver gives a testable chain: what to test, what should
+  kill the idea, and what regime it lives in. A driver edge announces its death IN THE
+  DRIVER SERIES before the P&L/pmf shows it.
+- **Hierarchy: IDENTITY > DRIVER > PATTERN.** Identities (a running max is monotone;
+  sunset ends the day; the contract's quantizer) cannot die while the settlement rule
+  holds. Drivers are physics/mechanisms, watchable in their own series. Patterns are
+  quarantined to display or forward-falsification.
+- **State the driver at its TRUE strength.** The operator caught the first application
+  overstating ("TWC is the oracle" — it is not; see §12). An overstated driver produces
+  a wrong death-watch as surely as no driver produces a blind one.
+- **Every pre-registration must now name:** the driver, the kill condition ON THE DRIVER
+  itself, and the regime it lives in. Template: `ledger/preregistered/twc_member_gate.md`.
+- **A driver is necessary, NOT sufficient** (D18: real driver, sign-stable, sub-bucket →
+  dead). The frozen gate stays sovereign over SIZE.
+- **Driver monitors are MEASURED series with mechanical thresholds** — "the driver looks
+  healthy" spoken as narration is a story.
+- Run `improvement_analyzer.py --propose "<the candidate's OWN keywords>"` + grep
+  `ledger/dead_candidates.jsonl` before RECOMMENDING any named candidate — conversational
+  recommendations count (the AIFS/D02 near-miss, §13).
 
-| Piece | File | What it does |
-|---|---|---|
-| Tape | `weather_council/intraday_tape.py` → `ledger/intraday_tape.jsonl` | Every live run appends one read of the settlement surface: daily-max endpoint (value + n_obs) and v3 cur_f (+ its own timestamp). Pure functions over the row SEQUENCE answer: endpoint rising? stable? cur_f sustained? measured lead-bank rate. |
-| Grade | `weather_council/intraday_grade.py` | Classifies each read into ONE grade; chooses ALL intraday vocabulary. Real NOAA sunset (lat/lon), archive-derived peak-close hour, grain-aware (SF renders °F). |
-| Wiring | `run.py _grade_for` + grade-driven `_bucket_call_lines` | Auto on every `--lead 0` run. JSON export certifies the grade (auditable after the fact). |
-
-**How to operate it — three rules, no judgment:**
-
-1. Run `PYTHONPATH=. python3 run.py "<City>" --lead 0`. **Quote the BUCKET CALL block
-   verbatim. Never upgrade a word.** "LOCK/final" prints iff `Grade.may_say_locked` —
-   post-sunset, or peak-window-closed + endpoint stable across ≥2 reads + not rising +
-   obs declining. If it doesn't print LOCK, the word "locked" does not exist.
-2. A cur_f lead renders as a **live coin-flip** — SUSTAINED (held across reads on a
-   refreshing v3 stamp = corroborated, often banks) or SINGLE-READ (wait one read).
-   Name both buckets. Pick neither. Never dismiss the lead, never call it banked.
-3. The **settling surface headlines every block**: the WU daily-max endpoint (value+n).
-   The on-hour table and any nowcast are context. The endpoint is what pays.
-
-Full one-pager: `docs/INTRADAY_PROTOCOL.md`. Light reader (no council, no market):
-`PYTHONPATH=. python3 tools/tape_logger.py` — Singapore + London only (Manila is
-deliberately excluded: no `_LIVE_REGISTER` consult, and adding it touches a served
-number, out of scope by user directive).
-
----
-
-## 2. PER-CITY LOCK LEDGER (London can now certify)
-
-`tools/lock_logger.py` was Singapore-hardwired; now `CITIES` = Singapore + London.
-Same file (`ledger/singapore_lock.jsonl` — historical name), rows carry `city`
-(legacy rows migrate to "Singapore" on load). What to know:
-
-- **Singapore's frozen bar is byte-unchanged** (hours 12–18, n≥20, −10pp). KAT'd.
-- **London**: cert hours 13–18 local, same bar; settles on the **WU EGLC record**
-  (whole-°F max → whole-°C round-half-up). The prereg's old "IEM" line was SUPERSEDED
-  by the 2026-07-07 "wunderground only" directive — documented in
-  `ledger/preregistered/london_lock_instrumentation.md`. Never revert London settle to IEM.
-- London's only in-window scheduled runner is the tape job (15:30) — see §0.
-- Watchdog Duty 2 now guards BOTH cities' crossover (baseline has WSSS + EGLC rows;
-  a missing EGLC fold is a RED by design).
-- **Known pre-existing RED, deliberately not silenced:** Duty 2 was already red on
-  WSSS@14:00 (replay 75.0% vs pinned 79.3%) BEFORE this work. Do not re-pin to make it
-  green; if it persists across runs it needs its own adjudication (window-roll noise vs
-  real regression).
+## 3. The vocabulary grades (unchanged, now MACHINE-ENFORCED — §4)
+observation (banked, 100%) > physics (post-sunset / mechanical final) > climatology
+(backtest %, labeled) > model (extrapolation, labeled). **banked** = on the settlement
+record. **locked/final** = only when the mechanical gate prints it. **coin-flip** = both
+buckets named, no pick. Legitimacy is grade-match, not outcome.
 
 ---
 
-## 3. WHAT GOT KILLED TODAY (never rebuild; cite the ID and stop)
+# PART II — THE INTRADAY SYSTEM (the day's core shipment; commits 4c3fc8c, 9d7d08b, 4c31932)
 
-| Dead | ID | One-line verdict |
-|---|---|---|
-| AIFS as 10th member (proposed in-conversation) | **D02** (pre-existing) | Already dead: "noise, 3 attempts"; forecast members 0/6. Lesson saved to memory: run `improvement_analyzer --propose "<candidate's own keywords>"` on every NAMED candidate BEFORE recommending it — conversational proposals count. |
-| SF native-°F headline pmf | **D19** (new) | Pre-registered, probed once on 10y KSFO (3,628 days): the naive °F pmf LOSES to the served °C pmf read as a °F answer (log score fails both halves; modal hit not sign-stable). At day-ahead σ (~4°F) with n≈160 residuals, °F grain over-fits bin noise; °C bucketing is an accidental regularizer. **The °C headline stands on evidence. For SF quote the SETTLEMENT-section °F figures, never the headline.** A future °F headline = smoothed-density mechanism, own prereg, must beat the °C-split baseline. |
+## 4. What was built and why
+The 2026-07-12 Karachi miss ("32 effectively locked", settled 33) was a vocabulary breach
+powered by MEMORYLESS runs: nobody tracked the settlement endpoint rising 90→91°F between
+runs; "locked" had no mechanical gate; the LEADING copy carried a dismissal bias. Case
+file: ISSUES_2026-07-12_INTRADAY_ACCURACY.md. Three pieces fix it:
 
-Standing exchange rule (encoded in `docs/NWP_LITERATURE_MAP.md`): a published MAE/CRPS
-gain transfers here ONLY if it survives at the settlement-bucket grain under the frozen
-gate. 19 dead candidates say the exchange rate is usually zero. Day-ahead levers: spend
-nothing (0/19; market ties the council 44%=44%). Accuracy is manufactured by
-observations (intraday), imported upstream physics, and correct bookkeeping — everything
-else protects it or pretends to it.
+**(a) The TAPE — `weather_council/intraday_tape.py` → `ledger/intraday_tape.jsonl`.**
+Every live lead-0 run appends one read per city: `endpoint_f` + `endpoint_n` (the WU
+daily-max record — the surface that pays), `cur_f` + `cur_ts` (the v3 nowcast and ITS OWN
+obs timestamp). Pure derivations over the row sequence:
+- `endpoint_motion(rows)` → (rising, stable): rising = max_f strictly increased on its
+  latest change; stable = last 2 defined reads share one max_f; <2 reads → (False, False).
+- `cur_f_sustained(rows)` → rule G4 mechanical: last 2 cur_f reads at-or-above the latest
+  whole-°F AND ≥2 DISTINCT v3 timestamps (a FROZEN stamp = the London 07-11 stale
+  over-read → NOT sustained; refreshing = the Karachi/Jeddah class).
+- `lead_bank_rate(before_date=...)` → measured (banked, total) over COMPLETED days with an
+  uncorroborated lead; replaces anecdotes in the render once n accrues.
+
+**(b) The GRADE — `weather_council/intraday_grade.py`.** Pure classifier; chooses ALL
+intraday vocabulary. Grades: `final` / `leading_coinflip` / `declining_provisional` /
+`holding_provisional` / `banked_floor`. The single boolean `may_say_locked` is TRUE only:
+post-sunset (REAL NOAA solar geometry from station lat/lon — includes the equation-of-time
+term; validated ±5 min vs the certified lock clocks), OR peak-window-closed (the archive's
+own leak-free peaked-by-q0.95 hour, computed by intraday_ceiling from the same history as
+the rise pmf — unknown → NEVER closed) AND endpoint stable across ≥2 reads AND not rising
+AND obs declining AND no live lead. Grain-aware: San Francisco renders °F. Post-sunset
+with a still-standing lead → settles the BANKED bucket and says the lead never banked.
+
+**(c) The WIRING — `run.py`.** `_grade_for(place, target, ceiling)` appends the tape row,
+loads the day's rows, computes motion/sustainment/bank-rate, computes sunset, returns the
+Grade. `_bucket_call_lines` renders EXCLUSIVELY via `grade_lines(...)` — the old
+three-branch copy (LOCK on day_state alone; the "treat it as a lean, not a floor"
+dismissal line) is DELETED. The JSON export certifies the grade (`_ceiling_to_dict`), so a
+served read is auditable after the fact. `IntradayCeiling` gained fields:
+`wu_daily_max_n`, `live_valid_local`, `peak_close_hour`.
+
+## 5. HOW TO OPERATE IT — the three rules, no judgment allowed
+1. `PYTHONPATH=. python3 run.py "<City>" --lead 0 [--market] [--intraday]` — compute the
+   CITY-LOCAL date first. **Quote the BUCKET CALL block VERBATIM. Never upgrade a word.**
+   If LOCK doesn't print, the word "locked" does not exist this read.
+2. A lead renders as a **live coin-flip**: SUSTAINED (corroborated freshness — often banks
+   via a between-obs peak) or SINGLE-READ (wait one refreshed read). Name both buckets.
+   Pick neither. Never dismiss the lead; never call it banked. If the machine ALSO prints
+   the market's modal, report the corroboration honestly (e.g. London 07-12: lead
+   sustained BUT market 91% on the banked bucket = SPLIT corroboration — still a coin-flip).
+3. The **settling surface headlines every block**: WU daily-max endpoint value + n. The
+   on-hour table and any nowcast are context. Know the flip arithmetic (e.g. London
+   endpoint 82°F: needs 84°F to flip 28→29; 83°F stays 28).
+
+## 6. The tape scheduler — `tools/tape_logger.py` + `tools/com.weatherverdict.tape.plist`
+- **STATUS: LOADED and verified firing** (user loaded 2026-07-12 ~14:54; 15:30 firing
+  produced tape rows + lock rows). Fires 15:30 + 21:45 host-local (host = UTC+1, currently
+  = London local; after late-October DST split it becomes 14:30/20:45 London — still
+  serviceable, documented, do not "fix").
+- Reads Singapore + London ONLY (both `_LIVE_REGISTER` + `_HOURLY_STATION`). Manila is
+  EXCLUDED BY DESIGN: no v3 register consult, rows would be empty, and adding the consult
+  touches a served number — out of scope by user directive 2026-07-04. Do not add it.
+- The 21:45 firing is London's POST-SUNSET settle-grade read. tape_logger also runs
+  lock_logger at its firings (§7) — its 15:30 run is the ONLY scheduled runner inside
+  London's certification hours.
+- SF is on-demand: for an SF lock, run lead-0 manually ~14:30–15:00 PDT.
+
+## 7. Per-city lock ledger — `tools/lock_logger.py` (commits 527732a, 6d2aec2)
+Executes `london_lock_instrumentation.md` §1. `CITIES` = Singapore + London. One ledger
+file (`ledger/singapore_lock.jsonl`, historical name), rows carry `city`; legacy rows
+migrate to "Singapore" on load. City-scoped settle (a Singapore settlement map can NEVER
+settle a same-date London row — KAT'd); per-city coverage/certify/report; **Singapore's
+frozen bar byte-unchanged** (hours 12–18, n≥20, −10pp). London: cert hours 13–18 local,
+same frozen bar, **settles on the WU EGLC record** — the prereg's "IEM-EGLC" line was
+SUPERSEDED by the 2026-07-07 "wunderground only" directive (documented in the stamped
+prereg; never revert London lock settle to IEM). First London row: 2026-07-12 14:00 local,
+modal 29 @ 0.73. eval_harness's Singapore view is unchanged (coverage defaults city="Singapore").
+
+## 8. Two-city crossover guard (same commits)
+`tools/accumulate.py` now emits BOTH cities' replay crossover (`--city singapore` then
+`--city london`, merge-by-ICAO into `reports/crossover_now.json`).
+`reports/crossover_baseline.json` re-pinned as a DOCUMENTED BREAKPOINT: WSSS values
+byte-identical, EGLC added from a clean 2026-07-12 emit (13:00 .420 / 14:00 .655 /
+15:00 .832 / 16:00 .933). Watchdog Duty 2 now REDs on a missing EGLC fold — by design.
+**KNOWN PRE-EXISTING RED, deliberately NOT silenced:** Duty 2 was already red on
+WSSS@14:00 (replay 75.0% vs pinned 79.3%) BEFORE this work. Do NOT re-pin WSSS to green
+it. If it persists across several accumulate runs, adjudicate (window-roll noise vs real
+regression) as its own item.
+
+## 9. Member-bias break watch (commits ed31704, 13d2245) — G1 of the driver audit
+`weather_council/member_break.py` + `tools/member_break_watch.py` + KATs; wired into
+accumulate. Generalizes Duty 3b (which watched only ECMWF@Changi) to EVERY
+(city, member) cell. Mechanics: raw_high − actual_high per member from settled provenance
+votes (RAW bias is the driver series a provider's model-cycle upgrade breaks; the
+correction consumes it downstream). First 20 settled errors per cell = FROZEN reference
+(`reports/member_bias_ref.json`; code NEVER moves a written pin — re-pin is a human,
+documented breakpoint). BREAK = rolling-10 mean outside the reference's seeded bootstrap
+99% CI of 10-means — the same break test as the TWC monitor. Seasonal drift CANNOT
+false-alarm (0.03σ/day for a month stays inside the CI; a 2σ step exits immediately —
+both KAT'd). **Alert-only:** a BREAK routes a human to the fold-gated recalibration path;
+it never auto-corrects. **STATUS: 0 cells, arming** — provenance logging began 07-11 and
+none has settled; first pins ≈3 weeks out. The empty-join run honestly asserts nothing.
 
 ---
 
-## 4. DAILY OPERATIONS QUICKREF (unchanged laws, new instruments)
+# PART III — THE GATES AND REFUSALS (what was killed, what is frozen, what fires next)
 
-```
-Verdict:        PYTHONPATH=. python3 run.py "<City>" --lead 0     # city-LOCAL date
-Light tape:     PYTHONPATH=. python3 tools/tape_logger.py         # SG + London
-Lock ledger:    PYTHONPATH=. python3 tools/lock_logger.py         # all cities, idempotent
-Machine status: PYTHONPATH=. python3 tools/eval_harness.py        # trust its ranking
-Before ANY "improve X":  python3 tools/improvement_analyzer.py --propose "<X's own keywords>"
-                         + grep -i "<keywords>" ledger/dead_candidates.jsonl
-Full gate:      make check          # 650+ tests; pre-commit runs it
-Commit flow:    branch → commit → checkout main → merge --ff-only → push (never bundle
-                structural with prompt/text changes)
-```
+## 10. D19 — SF native-°F headline pmf: FAILED its own gate (commits caadb46, 9833dcf)
+Pre-registered FIRST (`sf_native_f_headline.md`, committed before scoring), probed ONCE
+(`reports/backtest_sf_native_f.py`, 10y KSFO, 3,628 leak-free walk-forward days, grain
+sanity 3629/3649): quantizing the same residual cloud at whole-°F **LOSES** to the served
+°C pmf read as a °F answer — log score fails BOTH halves (−3.372 vs −3.159; −3.314 vs
+−3.165), modal hit not sign-stable (H1 +1.9, H2 −2.4). Mechanism: at day-ahead σ (~4°F)
+with n≈160 residuals, a °F empirical pmf over-fits bin noise across ~15 buckets; °C
+bucketing is an accidental regularizer. **Consequences you must obey:** the °C headline
+STANDS on evidence; SF stays on-demand, out of the basket; **for SF always quote the
+SETTLEMENT-section °F figures, never the °C headline** — and beware the °C cross-check
+narration: it can manufacture a model-vs-market "disagreement" that does not exist at the
+°F grain (observed live 07-12: °C said "council outlier", °F said both modal 72–73°F).
+A future °F headline = a NEW mechanism (smoothed/shrunk density), its own prereg, must
+beat the °C-split baseline. Do not re-run the probe as a fresh attempt.
 
-**Clocks (waiting IS the work; nothing accelerates them except not missing days):**
-TWC 9th-member 25/40 (~1 week) · PoP regime split 4/15 dry days · p2b 8/60 ·
-Singapore lock bins accruing · London lock n=1 (first row 2026-07-12) ·
-tape lead-bank ledger n=3 days · Jeddah 07-12 settle to confirm (was 97°F/36 banked,
-tail open toward 37).
+## 11. D02 / the AIFS lesson (no commit — a refusal)
+AIFS-as-member was proposed in conversation and is DEAD (D02, "noise, 3 attempts";
+forecast members 0/6 as a class). The near-miss: the analyzer was run on the task phrase,
+not the candidate's own keywords. **Procedure now:** analyzer + dead-ledger grep on every
+NAMED candidate before recommending it. Saved to persistent memory.
 
-**The vocabulary law (the reason today happened):** the grade is machine-chosen — banked
-= on the settlement record; locked = mechanical gate only; boundary = both buckets, no
-conviction; a fix is a hypothesis until n at the frozen bar. Legitimacy is grade-match,
-not outcome.
+## 12. The TWC 9th-member gate (commits bfb468f, 923c6e4, 498e67a, f7dba56) — FIRES ~1 WEEK
+`ledger/preregistered/twc_member_gate.md`, registered at n=25/40, revised three times
+pre-completion (all logged; pass thresholds G1/G2/G4 never touched):
+- **The oracle correction (operator, twice):** TWC is NOT the oracle. The oracle is the
+  Wunderground OBSERVATION record — station sensors TWC merely redistributes — chosen by
+  the market for PUBLIC VERIFIABILITY; nothing TWC-branded ever settles. TWC's driver is
+  modest: *plausibly* calibrated against the same redistributed record — and even that
+  identity is an ASSUMPTION, tested by G3′.
+- **Driver decomposition:** Driver A = station-MOS heritage (gain on divergence days; dies
+  on offset BREAK). Driver B = settlement-convention alignment (gain on °F-boundary days;
+  dies if their target isn't the WU-displayed record). Confound C = cycle FRESHNESS (a
+  newer forecast beating latency-bound members is timing, not a driver).
+- **G1** council+TWC beats council-alone exact-bucket, both folds. **G2** same on
+  CRPS/log. **G3′ (amended — the original sign-stability test would have refused a
+  PERFECTLY calibrated TWC):** offset CONSISTENT across folds — sign-stable, OR ~0 medians
+  (CI-overlap) WITH TWC error-sd below the council's both folds; materially sign-flipping
+  = refuse even if G1/G2 pass. **G4** independence (errors not spanned by the panel).
+- **Adjudication before any Plan-3 promotion:** stratify the gain by °F-boundary
+  proximity / divergence tercile / vintage proxy. Unattributable or freshness-explained →
+  promote (if at all) labeled "timing advantage, driver UNRESOLVED".
+- **Death-watch if shipped (decay-toward-zero REMOVED — offset→0 with shrinking spread is
+  the driver IMPROVING):** offset BREAK (20-pair median outside prior 40-pair CI);
+  error-sd crossover above the council's; °F-boundary stratum gain vanishing; correlation
+  rise. Any one RETIRES the member before bucket-hit degradation is visible.
+- **When the clock hits 40:** run the gate exactly as written. Ship or dead-letter. Do
+  not renegotiate criteria at scoring time.
+
+## 13. Own-forecast program amendments (commits 31d135e, 816465b)
+- **The centerpiece insight (teach yourself this):** D15's autopsy — "morning-cloud
+  information is absorbed into the running-max ratchet by ~13:00" — is an IDENTITY
+  out-competing a DRIVER. The whole intraday conditioning family (D07/D08/D11/D13/D15)
+  died racing the ratchet, not because its drivers were fake. P2b is the hour BEFORE the
+  identity eats the information.
+- **P2b (`p2b_1200_forward.md`, clock 8/60):** criteria 1–5 untouched; ADDED adjudication —
+  at gate time the gain must live in the CLOUDY tercile (the physics' prediction); clear-
+  tercile or uniform gains are recorded as noise-consistent; wrong-stratum passes proceed
+  labeled "driver UNRESOLVED". Criterion 5 (live-feed degeneracy) recognized as the
+  driver-integrity kill.
+- **P3 (`p3_dayahead_model.md`, Stage-B carve-out clock 6/40, model frozen at 4bf504b, no
+  re-tuning):** ADDED adjudication — a Stage-B pass must attribute its gain (council-vs-own
+  divergence tercile × predictor-signal days) AND show council-error independence (the G4
+  convention) before any P4 shadow promotion; unattributable → "driver UNRESOLVED".
+
+## 14. Learning-loop convention (commit 63f88bd)
+CAUSE ≠ DRIVER: postmortem attribution says WHERE an error lives; a driver says WHY. The
+loop already refuses driverless hypotheses coarsely (lessons `_TRANSFORM`: INPUT is
+logged, never a candidate). The convention (in the lessons.py docstring — an instruction
+to the HUMAN at the promotion gate): before promoting any shadow-PROMOTED candidate,
+cross-reference the driver diagnostics for its (city, cause) cell — member_break
+(pipeline change), recency_bias (seasonal drift), Duty 2/3 (climatology/contract drift).
+Diagnosis found → take the diagnosed path; the candidate is EVIDENCE of a break, not a
+lesson. No diagnosis → promote labeled "driver UNRESOLVED". Budget priority for
+driver-attributed candidates = recommendation only.
 
 ---
 
-## 5. FILE MAP OF EVERYTHING NEW TODAY
+# PART IV — tv_trading_agent (commits b14f423, da0cbbc)
 
+## 15. Funding carry (grade A−)
+- Driver: leverage demand paying shorts via PUBLISHED 8h funding. The cond arm already
+  trades the driver (sits out when trailing-30d ≤ 0 — currently sitting out).
+- **ADDED — DRIVER COMPRESSION watch** in funding_forward.py: rolling-90d funding
+  annualized vs the annualized cost floor (the FX-carry slow-death mode, distinct from
+  the fast 30d flip). **First live read: +0.7%/yr vs 1.2%/yr floor → COMPRESSED** — a
+  watch, not a verdict (one FLAT quarter can't split structural from cyclical). Check it
+  on every weekly run.
+- Kill conditions: flip (trailing ≤0), compression (90d ≤ cost floor). NOT in the driver
+  series and never modelled away: venue/FTX, liquidation mechanics. UNLEVERABLE stands
+  (~1–2× only).
+
+## 16. VRP (grade B: driver real, extraction FAILED — verdict stands)
+- The hardened-gate FAIL (0/11 OOS, margin unmodelled) is UNCHANGED. Do not re-claim.
+- **ADDED — driver fields at open** in vrp_forward.py (additive keys; settlement math and
+  old rows untouched): `trailing_rv` (30d, 365-cal), `ex_ante_spread` = IV − RV30 (the
+  driver itself), `regime` (BULL/FLAT/BEAR, 90d ±10% rule). Every settled window is now
+  ATTRIBUTABLE: thin-spread loss = the driver said no ex-ante; thick-spread loss = tail
+  realization. Driver-death signal: ex-ante spread persistently ≤ friction floor.
+
+## 17. Consensus protocol (instrument A, edge F — measured)
+- **ADDED — DRIVER-FIRST TIER MIX line** in the render (labels only): "13 PATTERN + 2
+  STATISTICAL voters, 0 DRIVER-backed" + the replay verdict (PF 0.51 → abstention is the
+  measured correct behavior). "15 mechanisms agree" is one tape read 15 pattern-shaped
+  ways; the gates and the off-switch carry the epistemics, not the vote count.
+- No conviction math, thresholds, or inputs changed. Forward issuance log deliberately
+  skipped (0.5% issuance ≈ years to n). The repo's driver edges (VRP, funding) stay
+  OUTSIDE the aggregator by design.
+
+---
+
+# PART V — LIVE STATE, PROCEDURE, PROHIBITIONS, FILES
+
+## 18. Live state at writing (2026-07-12 ~17:50 host)
+| Item | State |
+|---|---|
+| Tape | 7 rows (4 SG + 3 London); plist LOADED, firing verified; 21:45 tonight = London settle-grade read |
+| London 07-12 high | 28°C banked (endpoint 82°F n=31) · 29°C SUSTAINED lead (cur_f 84°F ×3 refreshing reads) — machine-labeled coin-flip; market 90.8% on 28; endpoint needs 84°F to flip; resolves at the 21:45 read |
+| TWC clock | 25/40 at last check (~1 week; gate frozen+revised, §12) |
+| p2b | 8/60 · PoP 4/15 dry days · London lock accruing from 07-12 (first rows) · Singapore lock bins ACCRUING (all hours n<20) |
+| Member-break watch | 0 cells, arming (~3 weeks to first pins) |
+| Duty 2 | RED on WSSS@14:00 — PRE-EXISTING, left standing deliberately; adjudicate only if persistent |
+| Funding driver | COMPRESSED (90d +0.7% vs 1.2% floor); cond arm sitting out; VRP window open (06-24, settles 07-24) |
+| Open follow-ups | Jeddah 07-12 settle to confirm vs the corrected 36 lean (H4 tail); London 21:45 outcome vs today's coin-flip |
+
+## 19. Daily procedure (in order; the automation does most of it)
+1. Anything to adjudicate? Read `reports/tape.launchd.out.log`, accumulate log tails,
+   Duty 2/3 verdicts, member_break output, DRIVER COMPRESSION line (weekly, trading).
+2. Verdicts: quote the machine (Part II §5). Never override; never re-pick a coin-flip.
+3. Before ANY "improve/optimize/add X": analyzer --propose with X's OWN keywords + dead-
+   ledger grep + name driver/kill/regime or STOP (Part I §2).
+4. Any change: labeling/instrumentation ships with KATs + `make check` (weather) /
+   `verify.py` (trading); anything touching a served probability goes prereg → frozen
+   probe → both-halves sign-stability → one attempt.
+5. Commit flow: branch → commit (pre-commit runs the gate) → `merge --ff-only` → push.
+   Never bundle structural with docs/prompt changes. Do NOT commit automation-churn
+   ledger files with code unless they're part of the change.
+6. When a clock fills (TWC first): run its gate EXACTLY as frozen; ship or dead-letter;
+   stamp the prereg; update this manual's live-state table.
+
+## 20. NEVER-DO (the complete refusal list as of tonight)
+Day-ahead accuracy levers (0/19, σ-ceiling) · relitigate D01–D19 (grep first!) · AIFS or
+any driverless NWP member (D02 class) · naive °F headline for SF (D19) · London lock
+settle on IEM (superseded 07-07) · Manila model/feed changes (user directive) · re-pin
+WSSS Duty-2 to silence the red · move a written member-break or crossover pin in code ·
+call a lead "banked" or say "locked" when the grade doesn't print it · pick a side on a
+machine-labeled coin-flip · claim "improved" from a ship (only n at the frozen bar) ·
+compare live runs as A/B (frozen data only) · LLM-as-signal, latency arb, Windy vision,
+paid-API-for-accuracy · leverage funding carry ≥3× or re-claim VRP "clears" · remove the
+protocol's off-switch or its tier-mix line · let the learning loop self-promote (L2 is
+permanently human-gated) · launchctl from the agent shell (user-side only).
+
+## 21. Complete file map of the day
 ```
-weather_council/intraday_tape.py        the memory (+ KAT tests/test_intraday_tape.py)
-weather_council/intraday_grade.py       the vocabulary gate (+ KAT tests/test_intraday_grade.py)
-weather_council/intraday_ceiling.py     +endpoint n, v3 stamp, peak-close hour fields
-run.py                                  _grade_for + grade-driven BUCKET CALL render
-tools/tape_logger.py                    light SG+London reader; also runs lock_logger
-tools/com.weatherverdict.tape.plist     15:30 + 21:45 (NOT YET LOADED — §0)
-tools/lock_logger.py                    per-city (CITIES config; migration; KATs extended)
-tools/accumulate.py                     two-city crossover emit
-reports/crossover_baseline.json         +EGLC rows (documented breakpoint)
-reports/backtest_sf_native_f.py         the D19 probe (do not re-run as a fresh attempt)
-ledger/preregistered/sf_native_f_headline.md      FAILED stamp + numbers
-ledger/preregistered/london_lock_instrumentation.md  EXECUTED stamp + supersession
-docs/INTRADAY_PROTOCOL.md               the one-page intraday runbook
-docs/NWP_LITERATURE_MAP.md              textbook→repo dispositions + citations
-docs/OPUS_ADAPTATION_MANUAL.md          this file
+NEW  weather_council/intraday_tape.py + tests/test_intraday_tape.py
+NEW  weather_council/intraday_grade.py + tests/test_intraday_grade.py (unittest — the
+     first pytest-style version ran ZERO tests under the gate; that bug is the reason
+     the header warns about it)
+NEW  weather_council/member_break.py + tools/member_break_watch.py + tests/test_member_break.py
+NEW  tools/tape_logger.py + tools/com.weatherverdict.tape.plist + tests/test_tape_logger.py
+NEW  reports/backtest_sf_native_f.py (D19 probe — do not re-run as an attempt)
+NEW  ledger/preregistered/{twc_member_gate,sf_native_f_headline,member_bias_break_watch}.md
+NEW  docs/{INTRADAY_PROTOCOL,NWP_LITERATURE_MAP,DRIVER_AUDIT,OPUS_ADAPTATION_MANUAL}.md
+MOD  weather_council/intraday_ceiling.py (endpoint n, v3 stamp, peak_close_hour,
+     peak_close_hour_from_history)
+MOD  run.py (_grade_for; grade-driven _bucket_call_lines; grade-certifying JSON export)
+MOD  tools/lock_logger.py (per-city) + tests/test_lock_logger.py + tests/test_live_floor.py
+MOD  tools/accumulate.py (two-city crossover; member-break step) · reports/crossover_baseline.json (+EGLC)
+MOD  tools/lessons.py (driver-adjudication docstring) · tools/twc_forecast_logger.py (oracle correction)
+MOD  ledger/preregistered/{london_lock_instrumentation (EXECUTED), p2b_1200_forward,
+     p3_dayahead_model} (adjudication additions) · CLAUDE.md (driver-first rule; pointers)
+tv_trading_agent:
+NEW  DRIVER_AUDIT.md
+MOD  vrp_forward.py (driver fields at open) · funding_forward.py (DRIVER COMPRESSION watch)
+MOD  protocol.py (tier-mix line)
 ```
 
-Adapt by doing, in order: check §0, run one `--lead 0` verdict and read its BUCKET CALL
-against §1's three rules, run `eval_harness`, and touch nothing the dead ledger names.
+**Adapt by doing, in order:** read Part I; run one lead-0 verdict and hold your own output
+against §5's three rules; check §18's open follow-ups (Jeddah settle, London 21:45);
+check whether the TWC clock has hit 40 — if yes, that gate is your session's real work,
+and every rule for it is already written.
