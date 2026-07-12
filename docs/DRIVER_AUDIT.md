@@ -51,6 +51,41 @@ spread–skill check (ensemble honesty) · the tape (lead-mechanism expression) 
 crossover re-emitted every accumulate run. The audit's main output is this relabeling:
 the system was driver-first in structure before it had the word.
 
+## The own-forecast program (P1–P3) — audited phase by phase (2026-07-12 extension)
+
+The program's existential driver question: why should a stdlib model trained on station
+history add anything to 8 NWP systems plus gated bias correction? PLAN_OWN_FORECAST.md
+answered it honestly BEFORE the doctrine existed: the council is already EMOS-class (the
+raw→EMOS −30% CRPS step is banked), so the only driver on offer is **the predictor step**
+(Taillardat: the gain is the predictors, not the learner) — worth a few bucket points at
+best, near the noise floor, "the likely honest outcome is closure." That is a driver
+named at its true strength, with expectations priced in advance.
+
+| Phase | Driver named | Fate | Driver-first reading |
+|---|---|---|---|
+| P1 data layer (13y tables, °F-grain-aware) | none needed — infrastructure | DONE | Tier-neutral enabler; grade A |
+| P2 state×cloud conditioning (12–14h) | morning cloud → afternoon rise physics | **D15** | The audit's centerpiece — see below |
+| P2b 12:00-only forward carve-out | same physics, at the one hour BEFORE absorption | ACCRUING 8/60 | Driver-first compliant by construction: frozen terciles, DEPLOYABLE live feed (D11's reanalysis lesson encoded), BOTH arms logged so failure is attributable |
+| P3 k-analog day-ahead (Taillardat set) | predictors the residual cloud ignores | **D17**; Stage A CLEARED, Stage B re-gate 6/40 | Predictor driver PROVEN real vs naive baselines (CRPS −6.4% vs climatology, sign-stable, first-ever full stage clear); unproven vs the council — the redundancy confound is the whole remaining question |
+| Informational own-model line | display only | SERVED (never blended) | Correctly quarantined pending Stage B |
+
+**The centerpiece: D15 is the hierarchy explaining itself.** The probe measured the cloud
+driver as REAL at 12:00 (+5.9pt, fold-stable) and DEAD by 13:00 — and its autopsy names
+the mechanism: *"morning-cloud information is absorbed into the running-max ratchet by
+~13:00."* An IDENTITY out-competed a DRIVER: the ratchet consumes the same information
+faster than any conditioner can exploit it. This is why the entire intraday conditioning
+family (D07/D08/D11/D13/D15) kept dying — not because the drivers were fake, but because
+they were racing an identity and losing. The one surviving slice (P2b) is exactly the
+hour before the identity has eaten the information. The doctrine's hierarchy is not a
+taxonomy here; it is the causal explanation of five dead candidates.
+
+**The redundancy confound (P3 Stage B's real question):** the own model sees TODAY's
+local state; the council's members embed TOMORROW's assimilated physics. Any Stage-B gain
+must therefore live in the thin slice where next-day structure is predictable from local
+today-observables BEYOND what NWP assimilated. Both open preregs now carry pre-completion
+ADJUDICATION notes (criteria untouched, clocks at 8/60 and 6/40) requiring gain
+attribution before any promotion — the TWC convention, applied here.
+
 ## Gaps (honest, dispositioned)
 
 - **G1 — member-bias break coverage.** Duty 3b watches ECMWF@Changi only; the other

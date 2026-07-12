@@ -45,3 +45,17 @@ days that did not exist when it was found, through the LIVE feed we would actual
 - CLEARS → recommend-only: eligible for the frozen-A/B serving gate at 12:00 ONLY (13:00+
   stays unconditional per D15 — no scope creep).
 - FAILS → **D16**, greps registered; the 12:00 lane closes permanently.
+
+## Driver adjudication — ADDED 2026-07-12 (pre-completion, clock at n=8/60; criteria 1–5
+## above UNTOUCHED — this governs attribution after the verdict, not the verdict)
+
+Driver-first audit (docs/DRIVER_AUDIT.md): this carve-out's driver is morning-cloud →
+afternoon-rise physics AT THE ONE HOUR before the running-max ratchet absorbs it (D15's
+autopsy: an identity out-competing a driver by 13:00). Criterion 5 is already the
+driver-integrity kill (live-feed degeneracy). Additionally, at gate time:
+- **Attribution:** report the hit/RPS delta stratified BY TERCILE. The physics predicts
+  the gain lives in the cloudy tercile (suppressed-rise days the unconditional cloud
+  over-projects); a gain concentrated in the clear tercile or uniform across cells is
+  more consistent with noise than with this driver — record it as such.
+- A pass whose gain sits in the wrong stratum proceeds to the frozen-A/B serving gate
+  labeled "driver UNRESOLVED" (the serving gate remains the sole authority on serving).
