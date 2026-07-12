@@ -21,7 +21,20 @@ AND CALIBRATED AGAINST THE SAME REDISTRIBUTED RECORD the market settles on — s
 station, same whole-°F measurement convention, same aggregation quirks — so its errors
 are measured in the settlement's own metric, whereas the 8 council members are grid
 interpolations whose station bias our correction approximates. Shared verification
-target, not insider knowledge. If TWC in fact just re-bases public NWP with no
+target, not insider knowledge.
+
+*Second operator sharpening (2026-07-12): the market settles ONLY on the
+Wunderground-branded record — nothing TWC-branded (forecast, v3 nowcast, internal obs)
+ever settles, and not by accident: an oracle is chosen for PUBLIC VERIFIABILITY, not
+freshness — the WU station-history page is the one surface any counterparty can inspect
+(the same asymmetry behind banked-vs-leading: a fresher same-company cur_f still never
+banks until the record prints). Consequence for this driver: "TWC calibrates to the same
+record" is an ASSUMPTION — TWC's internal verification target is plausibly, not provably,
+identical to the Wunderground-displayed record. The driver holds only as far as that
+identity holds, and G3 is its test: calibration to anything else shows up as an unstable
+offset against the record. Standing law reaffirmed: TWC never becomes a truth source,
+never feeds settlement, never anchors a lock — display cross-reference and gated member
+candidate only.* If TWC in fact just re-bases public NWP with no
 station-level calibration loop, this driver DOES NOT EXIST — which is exactly what G3
 (offset sign-stability) and G4 (independence) test, and why they carry more weight than
 G1/G2 under the corrected driver. The 0/6 dead forecast members (D02 AIFS, UKMO-2km,
