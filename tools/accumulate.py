@@ -244,13 +244,19 @@ def main() -> int:
     # baseline entry reads "missing" and it fires a false RED (found live on first wiring).
     try:
         env = dict(os.environ, PYTHONPATH=str(ROOT))
-        cx = subprocess.run([PY, "tools/intraday_ceiling_backtest.py", "--city", "singapore",
-                             "--hours", "13,14,15,16", "--emit-crossover",
-                             "reports/crossover_now.json"],
-                            cwd=ROOT, env=env, capture_output=True, text=True, timeout=TIMEOUT_S)
-        if cx.returncode != 0:                        # emit failure -> stale crossover; make it visible
-            _log(f"crossover emit rc={cx.returncode} (non-fatal) | "
-                 f"{_tail_status((cx.stdout or '') + (cx.stderr or ''))}")
+        # BOTH certified-lock cities (london added 2026-07-12, executing
+        # london_lock_instrumentation.md §2): --emit-crossover MERGES per-ICAO into the
+        # shared file, and the baseline now pins WSSS + EGLC — a missing city here reads as
+        # a RED "silent failure" in watchdog Duty 2, which is exactly the guard working.
+        for _cx_city in ("singapore", "london"):
+            cx = subprocess.run([PY, "tools/intraday_ceiling_backtest.py", "--city", _cx_city,
+                                 "--hours", "13,14,15,16", "--emit-crossover",
+                                 "reports/crossover_now.json"],
+                                cwd=ROOT, env=env, capture_output=True, text=True,
+                                timeout=TIMEOUT_S)
+            if cx.returncode != 0:                    # emit failure -> stale crossover; visible
+                _log(f"crossover emit ({_cx_city}) rc={cx.returncode} (non-fatal) | "
+                     f"{_tail_status((cx.stdout or '') + (cx.stderr or ''))}")
         # truth-config: NEVER clobber a good config with an empty "[]" on a resolve failure — that
         # makes watchdog Duty 3 ABSTAIN (false-GREEN) on the exact drift it exists to catch. Write
         # only real output; on failure preserve the prior file (or seed "[]" only if none exists).

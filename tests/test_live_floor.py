@@ -127,7 +127,8 @@ class TestSettleCrossCheck(unittest.TestCase):
                  "running_max_c": 32.2, "settled_bucket": 32, "modal_bucket": 32}]
         w = settle_cross_check(rows)
         self.assertEqual(len(w), 1)
-        self.assertIn("SETTLE DIVERGENCE 2026-07-04", w[0])
+        # city-prefixed since the 2026-07-12 per-city refactor (legacy rows -> Singapore)
+        self.assertIn("SETTLE DIVERGENCE Singapore 2026-07-04", w[0])
         self.assertIn("implies 33", w[0])
         self.assertEqual(rows[0]["register_bucket"], 33)            # stamped, not rewritten
         self.assertEqual(rows[0]["settled_bucket"], 32)             # settlement untouched

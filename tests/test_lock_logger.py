@@ -47,5 +47,48 @@ class TestLockLogger(unittest.TestCase):
         self.assertEqual(_selftest(), 0)
 
 
+class TestPerCityLedger(unittest.TestCase):
+    """2026-07-12 execution of london_lock_instrumentation.md §1: per-city rows with the
+    Singapore migration default; city-scoped settle; per-city coverage so London rows can
+    never pollute Singapore's FROZEN certification table (and vice versa); London settles
+    on the WU EGLC record (the 2026-07-07 'wunderground only' directive supersedes the
+    prereg's IEM line)."""
+
+    def test_cities_config_and_frozen_singapore_bars(self):
+        from tools.lock_logger import CITIES, CERT_HOURS
+        self.assertEqual(CITIES["Singapore"]["cert_hours"], (12, 13, 14, 15, 16, 18))
+        self.assertEqual(CERT_HOURS, CITIES["Singapore"]["cert_hours"])   # frozen, unchanged
+        self.assertEqual(CITIES["London"]["icao"], "EGLC")                # WU settle, not IEM
+        self.assertIsNone(CITIES["London"]["seed_glob"])                  # live rows only
+
+    def test_migration_default_is_singapore(self):
+        from tools.lock_logger import _key
+        legacy = {"target_date": "2026-06-30", "hour": 15}
+        self.assertEqual(_key(legacy)[0], "Singapore")
+        self.assertNotEqual(_key(legacy), _key({"city": "London", **legacy}))
+
+    def test_settle_is_city_scoped(self):
+        rows = [{"target_date": "2026-06-30", "hour": 18, "kind": "sharpened",
+                 "modal_bucket": 28, "modal_prob": 1.0},                  # legacy Singapore
+                {"city": "London", "target_date": "2026-06-30", "hour": 15,
+                 "kind": "sharpened", "modal_bucket": 18, "modal_prob": 0.9}]
+        self.assertEqual(settle_rows(rows, {"2026-06-30": 28}), 1)        # Singapore only
+        self.assertIsNone(rows[1].get("settled_bucket"))
+        self.assertEqual(settle_rows(rows, {"2026-06-30": 17}, city="London"), 1)
+        self.assertFalse(rows[1]["hit"])                                  # 18 called, 17 settled
+
+    def test_coverage_isolated_per_city(self):
+        rows = ([{"target_date": f"s{i}", "hour": 15, "kind": "sharpened", "modal_bucket": 30,
+                  "modal_prob": 0.95, "hit": True} for i in range(20)] +
+                [{"city": "London", "target_date": f"l{i}", "hour": 15, "kind": "sharpened",
+                  "modal_bucket": 18, "modal_prob": 0.95, "hit": False} for i in range(20)])
+        self.assertEqual(coverage(rows, hours=(15,))[15]["hit_rate"], 1.0)   # Singapore clean
+        self.assertEqual(coverage(rows, hours=(15,), city="London")[15]["hit_rate"], 0.0)
+
+    def test_london_bucket_math_round_half_up(self):
+        self.assertEqual(_bucket_f(64), 18)     # 64°F = 17.78°C -> 18
+        self.assertEqual(_bucket_f(63), 17)     # 63°F = 17.22°C -> 17
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -101,6 +101,16 @@ def main() -> int:
         _self_test()
         return 0
     log_once()
+    # Lock-certification rows at the SAME firings (2026-07-12, london_lock_instrumentation
+    # §1 wiring): this job's 15:30 London-local run is the ONLY scheduled runner inside
+    # London's certification hours (13–18 local) — daily_verdict fires at 02:15–11:15 and
+    # accumulate at 12:00/20:00 London. lock_logger logs every configured city and is
+    # idempotent per (city, date, hour), so the extra Singapore row is harmless redundancy.
+    try:
+        from tools import lock_logger
+        lock_logger.main()
+    except Exception as exc:
+        print(f"lock_logger step failed (non-fatal): {exc}")
     return 0
 
 
