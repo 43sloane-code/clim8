@@ -58,21 +58,57 @@ mechanism is real but modest, and the gate treats it accordingly.
 - **G1 (economic object):** council+TWC (Plan-3 blend machinery, no re-tuning) beats
   council-alone exact-bucket hit on BOTH disjoint chronological folds, per city pooled.
 - **G2 (proper score):** same, on CRPS/log score — both folds.
-- **G3 (driver evidence):** the per-city signed offset is sign-stable across both folds
-  (chain link 1). An offset that flips sign between folds = no stable station effect =
-  driver absent; REFUSE even if G1/G2 pass (a gain without its driver is a coincidence).
+- **G3′ (driver evidence — AMENDED pre-completion, 2026-07-12 collaborative revision;
+  rationale below):** the per-city TWC−record offset must be CONSISTENT across both folds:
+  EITHER (a) sign-stable (a stable, correctable station bias), OR (b) fold medians'
+  bootstrap CIs overlap around ~0 AND TWC's error-sd vs the record is below the council
+  blend's on both folds (tight calibration — the driver's STRONG form). An offset that
+  materially flips sign between folds (CI-disjoint medians of opposite sign) = no
+  mechanism; REFUSE even if G1/G2 pass. *Why amended: the original G3 ("sign-stable or
+  refuse") would have refused a PERFECTLY record-calibrated TWC — near-zero offsets flip
+  sign by pure noise, so the criterion read the driver's best case as driver-absent.
+  Amended before the clock fills (n≈26/40), motivated by logic, not outcomes; G1/G2/G4
+  pass thresholds untouched.*
 - **G4 (independence):** Phase-5 correlation audit passes (TWC error not spanned by the
   member panel, r-threshold per twc_offset.md conventions).
 
 One attempt. Any failure → dead-ledger entry; TWC stays a display cross-reference only.
 
+## Driver decomposition (2026-07-12 collaborative revision — two drivers + one confound)
+
+The "shared verification target" driver is really TWO mechanisms with DIFFERENT deaths,
+plus a mundane confound that is neither:
+- **Driver A — station-MOS heritage:** TWC runs decades of MOS-class correction
+  (Glahn–Lowry lineage) on this exact METAR series. Predicts gains concentrated on
+  microclimate/council-divergence days. Dies on station hardware/siting changes or a TWC
+  model-mix change — visible as an offset BREAK.
+- **Driver B — settlement-convention alignment:** whole-°F storage, specials aggregation,
+  the displayed record's rounding. Predicts gains concentrated on °F-BOUNDARY days.
+  Dies if TWC's internal target is not the Wunderground-displayed record.
+- **Confound C — cycle freshness (NOT a driver):** TWC's endpoint updates continuously;
+  council members carry Open-Meteo cycle latency. A newer forecast beating an older one
+  is timing, not station knowledge — and shipping it labeled "station driver" aims the
+  death-watch at the wrong series.
+
+**Adjudication BEFORE Plan-3 promotion (if G1–G4 pass):** stratify TWC-added-value by
+(i) °F-boundary proximity, (ii) council-vs-record divergence tercile, (iii) log-time /
+best-available vintage proxy. Attribute the gain to A, B, or C. If the gain lives mainly
+in (iii) — or cannot be separated from freshness with the data held — promote (if at all)
+labeled "operational timing advantage, driver UNRESOLVED", never "station driver
+confirmed". Promotion remains human-gated either way.
+
 ## Driver-health monitor (how this edge announces its death AFTER shipping, if it ships)
 
-The driver is WATCHABLE independent of outcomes: the rolling per-city TWC−WU signed
-offset (already logged daily by twc_forecast_logger). Kill-in-life conditions, mechanical:
-- offset |median| decays toward 0 over a rolling 40-pair window (station alignment gone —
-  e.g., TWC re-bases its forecast off the same public NWP), or
-- offset sign flips and holds for 20+ pairs (regime change in their pipeline), or
+The driver is WATCHABLE independent of outcomes: the rolling per-city TWC−record offset
+and error-sd (already logged daily by twc_forecast_logger). Kill-in-life conditions,
+mechanical — REVISED with the decomposition (decay-toward-zero REMOVED: under the
+corrected driver, offset→0 with shrinking spread is the driver IMPROVING, not dying):
+- offset BREAK: rolling 20-pair median jumps outside the prior 40-pair bootstrap CI
+  (station hardware / TWC pipeline change — kills Driver A), or
+- TWC error-sd vs the record rises above the council blend's over a rolling 40-pair
+  window (calibration advantage gone — kills the strong form), or
+- °F-boundary-stratum gain disappears while other strata hold (identity with the
+  displayed record broken — kills Driver B), or
 - Phase-5 correlation to the council rises above the audit threshold (independence lost).
 Any of these RETIRES the member BEFORE bucket-hit degradation is statistically visible —
 the entire point of driver-first: watch the driver, not the losses.
@@ -81,9 +117,10 @@ the entire point of driver-first: watch the driver, not the losses.
 
 Station-effect-dominant days: calm/locally-forced conditions, °F-boundary days, coastal/
 microclimate cities (SF-class; Singapore sea-breeze). Expect LITTLE in strongly synoptic
-regimes where all models converge. Post-ship, gain should be reported stratified by
-council-vs-WU divergence tercile; a gain living ONLY in the wrong stratum (synoptic) is
-evidence the measured edge is not this driver, and triggers re-adjudication.
+regimes where all models converge. Post-ship, gain reported stratified by the THREE
+adjudication strata above; a gain living ONLY in the wrong stratum (synoptic, or the
+freshness proxy) is evidence the measured edge is not the named driver, and triggers
+re-adjudication.
 
 ## Scope guards
 
