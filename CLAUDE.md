@@ -45,6 +45,13 @@ the ledger certifies.
 > the two or revert settlement to IEM (KAT: test_london_settlement_is_wunderground_backtest_is_iem).
 
 ## INTRADAY LOCK — the only conviction lever (certified semantics, 2026-07-06)
+- VOCABULARY IS MACHINE-CHOSEN (2026-07-12 Karachi fix — docs/INTRADAY_PROTOCOL.md, read it
+  before ANY intraday read): quote the BUCKET CALL block verbatim. "LOCK/final" prints iff
+  post-sunset (real solar calc) or peak-closed+endpoint-stable+not-rising+declining; a cur_f
+  lead prints as an unresolved COIN-FLIP (sustained per the tape = corroborated, single-read =
+  wait); the settling `wunderground_daily_max` endpoint (value+n) headlines the block. The
+  machine's cross-run memory is ledger/intraday_tape.jsonl (endpoint motion, rule-G4 lead
+  sustainment, measured lead-bank rate) — weather_council/intraday_{grade,tape}.py.
 - The running max is a RATCHET: "banked ≥ N" = observation-grade floor, can never go down.
   The FLOOR is not the SETTLE — holding days climb (July: London 37% @16:00, SG ~30% @14:00).
 - "DECLINING" requires the last TWO reads below runmax−0.3°C (certified: single-read declines
