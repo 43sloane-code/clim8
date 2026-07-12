@@ -694,5 +694,31 @@ class TestSettlementReferenceGrain(unittest.TestCase):
         self.assertNotIn("bucket 90", text)
 
 
+class TestWp7WindowGuard(unittest.TestCase):
+    """WP-7 (served-number campaign, F7): the truth window is frozen canonical N+1 days, but a
+    NON-POSITIVE window must never leak the WHOLE series through the WU-path `[-(window+1):]` slice
+    (window=-1 -> `[-0:]` = everything). The guard clamps window to >=1."""
+    def _station(self, icao):
+        import types
+        return types.SimpleNamespace(icao=icao, name="x", id=None, latitude=1.35,
+                                     longitude=103.99, distance_km=1.0)
+
+    def test_non_positive_window_does_not_leak_whole_series(self):
+        from weather_council.sources import Sources, Place
+        from weather_council.council import Council
+        today = dt.date.today()
+        big = {(today - dt.timedelta(days=k)).isoformat(): (30.0, 24.0) for k in range(1, 81)}  # 80 days
+        s = Sources()
+        s.wunderground_daily_series = lambda icao, start, end, tz: dict(big)   # WU path returns 80
+        s.nearest_stations = lambda place: []                                  # force grid fallback
+        s.fetch_grid_neighbors = lambda place, ws, we, off=0.25: [
+            {(today - dt.timedelta(days=k)).isoformat(): (30.0, 24.0) for k in range(1, 16)}]
+        place = Place("Singapore, Singapore", "SG", 1.3502, 103.9944, "Asia/Singapore")
+        c = Council(s)
+        target = today + dt.timedelta(days=1)
+        _fp, obs, _ws, _we, _t = c._resolve_truth(place, target, -1)   # the hazard window
+        self.assertLess(len(obs), 80)     # clamped -> never the whole 80-day WU series
+
+
 if __name__ == "__main__":
     unittest.main()

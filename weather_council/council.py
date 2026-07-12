@@ -943,6 +943,12 @@ class Council:
         gap (how far the window sits, in day-of-year, from the day we predict);
         this never changes which source is chosen — it drives the out-of-season
         confidence downgrade so a station-anchored verdict stays anchored."""
+        # WP-7 (served-number campaign, F7): the truth window is CANONICAL N+1 days (frozen 2026-07 —
+        # every backtest/bias/skill number was learned under it; changing it is GATE with no identified
+        # benefit, see served_number_campaign_wp4.md/wp7). But guard the one genuine latent hazard the
+        # audit found: a NON-POSITIVE window makes the WU slice `[-(window+1):]` = `[-0:]` retain the
+        # ENTIRE series. Clamp to >=1 so it can never leak the whole history.
+        window = max(1, int(window))
         default_end = place_today(place) - dt.timedelta(days=ARCHIVE_LAG_DAYS)
 
         # Wunderground settlement-oracle truth (e.g. Manila -> RPLL): the market
@@ -960,7 +966,8 @@ class Council:
                     wu["icao"], wu_start, wu_end, place.timezone)
             except Exception:
                 series = {}
-            obs = dict(sorted(series.items())[-(window + 1):])   # most-recent `window` days
+            obs = dict(sorted(series.items())[-(window + 1):])   # most-recent window+1 days (canonical
+            #                                                      N+1 truth window, frozen — WP-7)
             if len(obs) >= MIN_SAMPLES:
                 w_start = dt.date.fromisoformat(min(obs))
                 w_end = dt.date.fromisoformat(max(obs))
