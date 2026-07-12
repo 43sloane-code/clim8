@@ -174,6 +174,84 @@ class TestDayState(unittest.TestCase):
         self.assertAlmostEqual(state_late_risk(sh, 15, "holding", False, month=1), 10/40)  # DJF thin -> state-only
 
 
+class TestBankedVsLeading(unittest.TestCase):
+    """2026-07-12 Karachi vocabulary defect (user-caught): a live v3 cur_f (91°F = 32.8°C, bucket
+    33) got fused into the running max and the headline read "33°C banked — PROVISIONAL", but 33
+    is NOT on the settlement record — the WU daily-max endpoint and every hourly ob topped at 90°F
+    (bucket 32). cur_f LEADING a lagging endpoint is intended (Jeddah 07-09/07-11); dressing that
+    uncorroborated lead in observation-grade ("banked", 100%) vocabulary is the bug — exactly the
+    London 07-11 over-read. The banked floor must be the corroborated max (32); the cur_f lead (33)
+    must render "LEADING / uncorroborated", never "banked".  feedback_market_leads_lagging_wu_endpoint.md
+    """
+
+    def _karachi_ceiling(self, *, running_max_c, banked_c, cur_f, endpoint_f, modal_bucket, pmf):
+        from weather_council.intraday_ceiling import IntradayCeiling
+        return IntradayCeiling(
+            kind="sharpened", city="Karachi, Pakistan", target="2026-07-12",
+            sub_degree=False, grain="C", hour=12.5, running_max_c=running_max_c, n_rise=40,
+            pmf=pmf, modal_bucket=modal_bucket, modal_prob=0.80,
+            day_state="holding", state_late_risk=0.13,
+            live_cur_f=cur_f, live_max24_f=cur_f, feed="wu+live",
+            banked_running_max_c=banked_c, wu_daily_max_f=endpoint_f,
+            source="Jinnah Intl OPKC (live IEM ASOS METAR, hourly) + live now 91°F")
+
+    def test_cur_f_only_lead_flags_uncorroborated(self):
+        # cur_f 91°F (32.78°C → 33) is +1°F above the daily-max endpoint 90°F (32.22°C → 32) and
+        # above every hourly ob (obs run-max 32.0°C → 32). Nothing on the record corroborates 33.
+        from weather_council.intraday_ceiling import banked_vs_leading
+        c = self._karachi_ceiling(running_max_c=32.78, banked_c=32.22, cur_f=91.0,
+                                  endpoint_f=90.0, modal_bucket=33, pmf=((33, 0.80), (34, 0.20)))
+        split = banked_vs_leading(c)
+        self.assertTrue(split["uncorroborated_lead"])
+        self.assertEqual(split["banked_bucket"], 32)     # the corroborated, observation-grade floor
+        self.assertEqual(split["led_bucket"], 33)        # the cur_f lead
+
+    def test_render_says_leading_coinflip_not_banked(self):
+        # THE contract (grade-driven since 2026-07-12 pm): the fused-cur_f bucket renders as an
+        # unresolved LIVE COIN-FLIP — the lead is named, never dressed as banked, never locked,
+        # and never dismissed (the D5/F2 correction: no "probable over-read" framing).
+        import types
+        from run import _bucket_call_lines
+        c = self._karachi_ceiling(running_max_c=32.78, banked_c=32.22, cur_f=91.0,
+                                  endpoint_f=90.0, modal_bucket=33, pmf=((33, 0.80), (34, 0.20)))
+        v = types.SimpleNamespace(
+            place=types.SimpleNamespace(label=lambda: "Karachi, Pakistan"),
+            validation=types.SimpleNamespace(residuals_high=[]), high=32.0)
+        text = "\n".join(_bucket_call_lines(v, c))
+        self.assertIn("LEADING", text)
+        self.assertIn("coin-flip", text)
+        self.assertIn("32°C banked", text)          # the corroborated floor is 32, not 33
+        self.assertNotIn("33°C banked", text)       # the cur_f lead is NEVER dressed as banked
+        self.assertNotIn("LOCK", text)              # a live lead is never lockable
+        self.assertIn("settling surface", text)     # H2: the record that pays headlines
+        self.assertIn("90°F", text)
+
+    def test_corroborated_cur_f_is_not_flagged(self):
+        # Guard against over-flagging: when cur_f == the endpoint (both 90°F → bucket 32), the lead
+        # is corroborated — no LEADING label, the banked floor is 32 (the 07-04/07-07 lead still fuses).
+        import types
+        from weather_council.intraday_ceiling import banked_vs_leading
+        from run import _bucket_call_lines
+        c = self._karachi_ceiling(running_max_c=32.22, banked_c=32.22, cur_f=90.0,
+                                  endpoint_f=90.0, modal_bucket=32, pmf=((32, 0.85), (33, 0.15)))
+        split = banked_vs_leading(c)
+        self.assertFalse(split["uncorroborated_lead"])
+        self.assertEqual(split["banked_bucket"], 32)
+        v = types.SimpleNamespace(
+            place=types.SimpleNamespace(label=lambda: "Karachi, Pakistan"),
+            validation=types.SimpleNamespace(residuals_high=[]), high=32.0)
+        text = "\n".join(_bucket_call_lines(v, c))
+        self.assertNotIn("LEADING (uncorroborated", text)
+
+    def test_no_live_fusion_returns_none(self):
+        # A replay/backtest ceiling (no banked_running_max_c set) has no distinct banked figure to
+        # draw -> None, so callers keep the plain running-max wording (v1 replays unchanged).
+        from weather_council.intraday_ceiling import banked_vs_leading
+        c = self._karachi_ceiling(running_max_c=32.78, banked_c=None, cur_f=None,
+                                  endpoint_f=None, modal_bucket=33, pmf=((33, 1.0),))
+        self.assertIsNone(banked_vs_leading(c))
+
+
 class TestLondonRegisterConsult(unittest.TestCase):
     """Regression for the 2026-07-07 London settlement UNDERSHOOT (user-caught): EGLC hourly
     topped 31°C while the WU register caught 90°F and the market SETTLED 32. London was excluded

@@ -39,7 +39,10 @@ from weather_council.security import RateLimitError, SecurityError
 from weather_council.sources import Sources, place_today, _round_half_up
 from weather_council.tc_gate import tc_halt
 from weather_council.intraday import intraday_floor
-from weather_council.intraday_ceiling import intraday_ceiling
+from weather_council.intraday_ceiling import intraday_ceiling, banked_vs_leading
+from weather_council.intraday_grade import (intraday_grade, grade_lines,
+                                            sunset_local_hour)
+from weather_council import intraday_tape
 from weather_council.station_offset import measure_settlement_offset
 from weather_council.storage import (fetch_settled_snapshots, live_bucket_scorecard,
                                      log_market_snapshot, log_verdict,
@@ -1030,7 +1033,7 @@ def _data_interpretation_lines(v: Verdict, settlement_ref=None, comparison=None)
     return L
 
 
-def _bucket_call_lines(v: Verdict, ceiling=None, comparison=None) -> list[str]:
+def _bucket_call_lines(v: Verdict, ceiling=None, comparison=None, grade=None) -> list[str]:
     c = _bucket_call(v, ceiling)
     L = ["", f"  BUCKET CALL — the {c['rule']} bucket the market settles on"]
     if c["prob"] is None:
@@ -1039,45 +1042,45 @@ def _bucket_call_lines(v: Verdict, ceiling=None, comparison=None) -> list[str]:
         return L
     span = c["span"]
     if c["used_intraday"]:
-        # LEAD with the intraday lock — the accurate, settlement-grounded prediction. It is
-        # grounded in today's running max PLUS prior days' intraday records (n_rise), which is
-        # the whole engine: where today is now + how every earlier day rose from here to its peak.
-        # HONESTY CAP (user-caught 2026-07-05): the served lock % is the BLENDED / peak-formed
-        # rate. While the day is HOLDING the peak is not demonstrably in, and holding days still
-        # climb a bucket materially often — measured on 10y EGLC, July holding@16:00 settles the
-        # current bucket only ~63% (declining@16:00 95.6%). So never present a HIGH lock while
-        # holding: lead with the banked FLOOR, mark it PROVISIONAL, and defer the confidence claim
-        # to the declining state. Full state×season recalibration is gated:
-        # ledger/preregistered/lock_state_season_calibration.md
-        _st_hold = getattr(ceiling, "day_state", None) if ceiling is not None else None
-        if _st_hold == "holding":
-            L.append(f"    ► INTRADAY FLOOR  : {c['bucket']}°C banked — PROVISIONAL (peak NOT formed; "
-                     f"day HOLDING). The {c['prob']*100:.0f}% lock assumes the peak is in — it is not; "
-                     f"high-confidence is earned only once the day DECLINES.")
-        else:
-            L.append(f"    ► INTRADAY LOCK   : {c['bucket']}°C  —  {c['tier']} {c['prob']*100:.0f}%")
-        L.append(f"      grounded in: {c['source']}")
-        # BANKED vs FINAL — the 07-04 lesson. The lock is calibrated at its own hour (replay
-        # 95.0% vs stated 94.1%, n=180) but ~5.9% of days the bucket is NOT yet banked at 15:00
-        # (18.6% at 14:00): a later reading can still RAISE it (07-04: 91°F landed at 16:00,
-        # 32→33). Never present an afternoon read as final; the settle-grade read is ~18:00.
-        if ceiling is not None and getattr(ceiling, "running_max_c", None) is not None:
-            banked = _native_reading_int(ceiling.running_max_c, "C",
-                                         "hong kong" in v.place.label().lower())
-            rise_p = max(0.0, 1.0 - (c["prob"] or 0.0))
+        # The vocabulary is chosen by the GRADE resolver, never here (2026-07-12 Karachi:
+        # "LOCK" used to fire on day_state != holding alone — blind to a still-rising
+        # settlement endpoint; the banked/leading copy also lived twice and carried a
+        # dismissal bias). intraday_grade.grade_lines is the single source of intraday
+        # wording: "LOCK/final" appears iff Grade.may_say_locked (post-sunset, or peak
+        # window closed + endpoint stable + not rising + declining), a live lead renders
+        # as an unresolved coin-flip (sustained or single-read, never dismissed), and the
+        # settling endpoint headlines the block (H2). The live grade (endpoint motion +
+        # rule-G4 sustainment off the intraday tape + real sunset) is passed in; a bare
+        # tape-less grade is derived here as the replay/JSON fallback.
+        if grade is None and ceiling is not None:
+            try:
+                grade = intraday_grade(ceiling, hour=float(ceiling.hour or 0.0))
+            except Exception:
+                grade = None
+        if grade is not None:
+            L.extend(grade_lines(grade, backtest_prob=c["prob"], source=c["source"]))
+            u = getattr(grade, "unit", "°C")
+            if (grade.banked_bucket is not None and c["bucket"] != grade.banked_bucket
+                    and not grade.may_say_locked):
+                # The Singapore A1 fix: a modal above the banked floor is a remaining-rise
+                # EXTRAPOLATION — model-grade, labeled as such, never "the live lean".
+                L.append(f"      remaining-rise modal: {c['bucket']}{u} at "
+                         f"{c['prob']*100:.0f}% — model-grade extrapolation over prior "
+                         f"days' rises, NOT an observation; the tape decides, not this.")
+            # State-conditional raise risk (probe 2026-07-04, fold-stable) while not final:
+            # a HOLDING day at 15:00 raises ~13.5% vs ~0.8% declining — say which day TODAY is.
             st = getattr(ceiling, "day_state", None)
             sr = getattr(ceiling, "state_late_risk", None)
-            if st is not None and sr is not None:
-                # state-conditional risk (probe 2026-07-04, fold-stable): a HOLDING day at 15:00
-                # raises ~13.5% of the time vs ~0.8% declining — say which day TODAY is.
-                L.append(f"      banked ≥ {banked}°C (floor) — NOT FINAL: day is {st.upper()} at "
-                         f"{int(ceiling.hour):02d}:00; historical raise-risk in this state "
-                         f"≈{sr*100:.0f}% (pmf tail {rise_p*100:.0f}%); "
-                         + ("a decline or the ~18:00 read resolves it"
-                            if st == "holding" else "settle-grade after ~18:00"))
-            else:
-                L.append(f"      banked ≥ {banked}°C (mechanical floor) — NOT FINAL: ~{rise_p*100:.0f}% "
-                         f"chance a later reading still raises the bucket; settle-grade after ~18:00")
+            if not grade.may_say_locked and st is not None and sr is not None:
+                rise_p = max(0.0, 1.0 - (c["prob"] or 0.0))
+                L.append(f"      raise-risk while {st.upper()} at {int(ceiling.hour):02d}:00 "
+                         f"≈{sr*100:.0f}% (state×season backtest; pmf tail {rise_p*100:.0f}%); "
+                         f"settlement-grade only post-sunset or on a stable, closed endpoint")
+        else:
+            # Grade resolver unavailable — serve the floor plainly, without finality words.
+            L.append(f"    ► INTRADAY : {c['bucket']}°C — {c['tier']} {c['prob']*100:.0f}% "
+                     f"(backtest; grade resolver unavailable — treat as PROVISIONAL)")
+            L.append(f"      grounded in: {c['source']}")
         if span and len(span) == 1:
             L.append("      single bucket is confident now — σ collapsed at/after the peak")
         elif span:
@@ -1133,7 +1136,8 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
            settlement_ref: dict | None = None,
            cross_reference: dict | None = None,
            c7_validated: bool = False, ceiling=None,
-           low_comparison: VerdictMarketComparison | None = None) -> str:
+           low_comparison: VerdictMarketComparison | None = None,
+           grade=None) -> str:
     L = []
     L.append(f"COUNCIL VERDICT  —  {v.place.label()}  ({v.target})")
     L.append("=" * 64)
@@ -1149,7 +1153,7 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
     if ts.get("kind") == "station":
         L.append(f"    anchored on: {ts.get('label','')}")
     L.append(f"    of: {v.target_basis}")
-    L.extend(_bucket_call_lines(v, ceiling, comparison))
+    L.extend(_bucket_call_lines(v, ceiling, comparison, grade))
     L.extend(_data_interpretation_lines(v, settlement_ref, comparison))
     cd = v.confidence_detail
     hr = cd.get("hit_rate_within_2c")
@@ -1889,6 +1893,13 @@ def _ceiling_lines(c) -> list[str]:
                  else f"{c.running_max_c:.1f}°C")
     L.append(f"    running max by {int(c.hour):02d}:00 local: {rmax_disp} "
              f"({c.source})")
+    # If a live cur_f pushed the running max a bucket above the settlement record, say so here too:
+    # the {u} figure above is a LEADING read, not a banked floor (feedback_market_leads_lagging_wu_endpoint).
+    _split = banked_vs_leading(c)
+    if _split and _split["uncorroborated_lead"]:
+        L.append(f"    ^ NOTE: the top of this running max is an UNCORROBORATED live cur_f lead "
+                 f"({_split['led_bucket']}°{u}) — banked floor is {_split['banked_bucket']}°{u} "
+                 f"(the record's own max); not observation-grade until an ob/the endpoint confirms it")
     L.append(f"    remaining-rise learned from {c.n_rise} strictly-earlier days "
              f"(leak-free, resampled through the settlement quantizer)")
     top = "  ".join(f"{b}°{u} {p*100:.0f}%" for b, p in c.pmf[:4])
@@ -1908,14 +1919,71 @@ def _ceiling_lines(c) -> list[str]:
     return L
 
 
-def _ceiling_to_dict(c) -> dict:
-    return {
+def _ceiling_to_dict(c, grade=None) -> dict:
+    d = {
         "kind": c.kind, "city": c.city, "target": c.target, "hour": c.hour,
         "running_max_c": c.running_max_c, "n_rise": c.n_rise,
         "modal_bucket": c.modal_bucket, "modal_prob": c.modal_prob,
         "pmf": [{"bucket": b, "prob": p} for b, p in c.pmf],
         "source": c.source, "note": c.note,
     }
+    # Certify the banked-vs-leading split so a served cur_f lead is auditable after the fact.
+    split = banked_vs_leading(c)
+    if split is not None:
+        d["banked_bucket"] = split["banked_bucket"]
+        d["led_bucket"] = split["led_bucket"]
+        d["cur_f_uncorroborated_lead"] = split["uncorroborated_lead"]
+    # Certify the served vocabulary GRADE (2026-07-12): what the machine was ALLOWED to say
+    # — auditable against what was said. may_say_locked False + a later "locked" claim in
+    # any narration is a vocabulary breach by construction.
+    if grade is not None:
+        d["grade"] = {
+            "name": grade.name, "may_say_locked": grade.may_say_locked,
+            "coin_flip": list(grade.coin_flip) if grade.coin_flip else None,
+            "endpoint_rising": grade.endpoint_rising,
+            "endpoint_stable": grade.endpoint_stable,
+            "peak_closed": grade.peak_closed, "post_sunset": grade.post_sunset,
+            "lead_sustained": grade.lead_sustained,
+            "endpoint_f": grade.endpoint_f, "endpoint_n": grade.endpoint_n,
+        }
+    return d
+
+
+def _grade_for(place, target, ceiling):
+    """LIVE runs only: persist this read of the settlement surface onto the intraday tape
+    (ledger/intraday_tape.jsonl) and resolve the ceiling into its honest vocabulary Grade —
+    endpoint motion + rule-G4 cur_f sustainment come from the tape's read SEQUENCE (the
+    memory each run lacked on 2026-07-12), the peak window from the ceiling's own leak-free
+    archive quantile, post-sunset from real solar geometry. Returns None when the ceiling
+    is not sharpened or anything fails; the renderer then derives a bare tape-less grade
+    and the verdict is unaffected. Labels/evidence only (HARD RULE 2)."""
+    if ceiling is None or not getattr(ceiling, "is_sharpened", False):
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        now_l = dt.datetime.now(ZoneInfo(place.timezone))
+        intraday_tape.append_read(
+            place.name, ceiling.target,
+            now_l.astimezone(dt.timezone.utc).isoformat(timespec="seconds"),
+            endpoint_f=ceiling.wu_daily_max_f, endpoint_n=ceiling.wu_daily_max_n,
+            cur_f=ceiling.live_cur_f, cur_ts=ceiling.live_valid_local)
+        rows = intraday_tape.load_reads(place.name, ceiling.target)
+        rising, stable = intraday_tape.endpoint_motion(rows)
+        sustained = (intraday_tape.cur_f_sustained(rows)
+                     if ceiling.live_cur_f is not None else None)
+        stat = intraday_tape.lead_bank_rate(before_date=ceiling.target)
+        off = now_l.utcoffset()
+        off_h = off.total_seconds() / 3600.0 if off else 0.0
+        sunset = sunset_local_hour(place.latitude, place.longitude, target, off_h)
+        hour = now_l.hour + now_l.minute / 60.0
+        return intraday_grade(ceiling, hour=hour, endpoint_rising=rising,
+                              endpoint_stable=stable, lead_sustained=sustained,
+                              post_sunset=(sunset is not None and hour > sunset),
+                              lead_bank_stat=(stat if stat[1] > 0 else None))
+    except Exception as exc:
+        from weather_council.failures import record_soft_failure
+        record_soft_failure("intraday_grade", exc)
+        return None
 
 
 def _build_comparison(
@@ -2147,12 +2215,16 @@ def main(argv=None) -> int:
         # backtest-immune signal, so compute the ceiling automatically — the BUCKET
         # CALL auto-upgrades to the high-conviction intraday bucket as the peak nears,
         # even without --intraday. The verbose intraday blocks stay opt-in (--intraday).
+        grade = None
         if args.intraday or args.lead == 0:
             try:
                 ceiling = intraday_ceiling(place, target, sources=sources)
             except Exception as exc:
                 print(f"intraday-ceiling errored (verdict unaffected): {exc}",
                       file=sys.stderr)
+            # Tape + grade: persist this read of the settlement surface and resolve the
+            # honest vocabulary (LOCK/coin-flip/provisional) from the day's read SEQUENCE.
+            grade = _grade_for(place, target, ceiling)
         if args.intraday:
             try:
                 intraday = intraday_floor(place, target, sources=sources)
@@ -2166,13 +2238,13 @@ def main(argv=None) -> int:
             if intraday is not None:
                 d["intraday"] = _intraday_to_dict(intraday, verdict)
             if ceiling is not None:
-                d["intraday_ceiling"] = _ceiling_to_dict(ceiling)
+                d["intraday_ceiling"] = _ceiling_to_dict(ceiling, grade)
             d["bucket_call"] = _bucket_call(verdict, ceiling)
             print(json.dumps(d, indent=2))
         else:
             print(render(verdict, comparison, settlement_ref, cross_reference,
                          c7_validated=c7_validated, ceiling=ceiling,
-                         low_comparison=low_comparison))
+                         low_comparison=low_comparison, grade=grade))
             if args.market and comparison is None:
                 if market_note:
                     print("\n  MARKET COMPARISON (withheld)\n    " + market_note)

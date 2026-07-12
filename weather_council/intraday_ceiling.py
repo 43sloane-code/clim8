@@ -32,7 +32,7 @@ ledger, and a pre-sunset read is a banked FLOOR, never "final".
 from __future__ import annotations
 
 __all__ = ['IntradayCeiling', 'remaining_rise_samples', 'sharpen_pmf',
-           'intraday_ceiling']
+           'intraday_ceiling', 'banked_vs_leading', 'peak_close_hour_from_history']
 
 import datetime as dt
 from dataclasses import dataclass, field
@@ -78,6 +78,25 @@ class IntradayCeiling:
     live_cur_f: float | None = None
     live_max24_f: float | None = None
     feed: str = "v1"
+    # BANKED-vs-LEADING split (2026-07-12 Karachi vocabulary fix). `running_max_c` may include a
+    # live v3 cur_f that LEADS the settlement record (intended — Jeddah 07-09/07-11). But a cur_f
+    # lead is NOT "banked" (observation-grade, 100%, can-never-go-down) until a settlement ob or
+    # the WU daily-max endpoint corroborates it — it can fail to materialise on the record (the
+    # London 07-11 over-read). `banked_running_max_c` is the observation-grade floor actually
+    # present in an ob: max(obs-only running max, WU daily-max endpoint in °C). `wu_daily_max_f`
+    # is that endpoint (°F). See feedback_market_leads_lagging_wu_endpoint.md; split via
+    # banked_vs_leading(). Labels only — never moves the served pmf/modal/running_max.
+    banked_running_max_c: float | None = None
+    wu_daily_max_f: float | None = None
+    # Grade-resolver inputs (2026-07-12 Karachi H2/H3): the endpoint's own obs-count (a growing
+    # n with a rising max_f = the settlement surface actively catching a between-obs peak), the
+    # v3 current-conditions obs timestamp (a FROZEN valid_local across reads = the London 07-11
+    # stale-cur_f over-read; a refreshing one = a live lead), and the archive's own leak-free
+    # peaked-by-q0.95 hour (computed from the SAME strictly-earlier history as the rise pmf —
+    # replaces the hand-written peak-clock fallback map). All labels-only.
+    wu_daily_max_n: int | None = None
+    live_valid_local: str | None = None
+    peak_close_hour: float | None = None
     # Peak-formed state (probe 2026-07-04, fold-stable): a day still AT its max ("holding")
     # carries ~13.5% bucket-raise risk after 15:00 vs ~0.8% once "declining" — the honest
     # NOT-FINAL risk is state-conditional. Risk-LABELING only; never moves modal/pmf.
@@ -87,6 +106,46 @@ class IntradayCeiling:
     @property
     def is_sharpened(self) -> bool:
         return self.kind == "sharpened"
+
+
+def banked_vs_leading(ceiling: "IntradayCeiling") -> dict | None:
+    """Split the live-fused running-max floor into its OBSERVATION-GRADE banked bucket and,
+    when a live v3 cur_f alone leads beyond it, the UNCORROBORATED leading bucket — the
+    vocabulary guard for the 2026-07-11 London / 2026-07-12 Karachi over-read failure mode
+    (feedback_market_leads_lagging_wu_endpoint.md).
+
+    The BANKED floor is the highest settlement bucket actually PRESENT in a settlement ob:
+    the bucket of max(obs-only running max, WU daily-max endpoint). It is observation-grade —
+    it can never go down. The LED bucket is the bucket of `running_max_c`, which may have been
+    pushed a bucket higher by a live cur_f the lagging endpoint has not yet caught up to. That
+    cur_f LEAD is intended (it correctly leads a stale v1 endpoint — Jeddah 07-09/07-11), but
+    until a settlement ob or the daily-max endpoint corroborates it, it is NOT banked: it can
+    fail to land on the settlement record.
+
+    Returns None when there is no distinct banked figure to draw (no live fusion, or missing
+    inputs) so callers keep the plain running-max wording. Otherwise returns
+    {banked_bucket, banked_c, led_bucket, uncorroborated_lead, cur_f, endpoint_f, grain} —
+    `uncorroborated_lead` is True exactly when the led bucket sits above the banked bucket.
+    Pure/labels only: it reads the ceiling, moves no served number."""
+    if ceiling is None:
+        return None
+    rm = ceiling.running_max_c
+    banked_c = ceiling.banked_running_max_c
+    if rm is None or banked_c is None:
+        return None
+    grain = getattr(ceiling, "grain", "C") or "C"
+    sub = bool(ceiling.sub_degree)
+    banked_bucket = _native_reading_int(banked_c, grain, sub)
+    led_bucket = _native_reading_int(rm, grain, sub)
+    return {
+        "banked_bucket": banked_bucket,
+        "banked_c": banked_c,
+        "led_bucket": led_bucket,
+        "uncorroborated_lead": led_bucket > banked_bucket,
+        "cur_f": ceiling.live_cur_f,
+        "endpoint_f": ceiling.wu_daily_max_f,
+        "grain": grain,
+    }
 
 
 def _running_max(obs: list[tuple[int, float]], hour: int) -> float | None:
@@ -141,6 +200,31 @@ def state_late_risk(history, hour, state, sub_degree, min_n=20, month=None, grai
     if sea is not None and len(cell) >= 30:
         return sum(cell) / len(cell)
     return (sum(st_only) / len(st_only)) if len(st_only) >= min_n else None
+
+
+def peak_close_hour_from_history(history: dict[str, list[tuple[float, float]]],
+                                 q: float = 0.95) -> float | None:
+    """Data-derived, leak-free peak-close hour: for each STRICTLY-EARLIER day, the earliest
+    hour at which the running max first equals the day's final max (the peak-attained hour);
+    return the q-quantile across days. A current hour strictly greater than this means >=q of
+    days had already peaked by now, so a new daily max is rare. Returns None on empty history
+    (the grade then refuses to call the peak window closed — never lock on an unknown clock).
+    No magic constant: the number is the archive's own peaked-by distribution, from the SAME
+    history dict the remaining-rise pmf is learned from."""
+    import math
+    peaked_at: list[float] = []
+    for obs in history.values():
+        fm = _final_max(obs)
+        if fm is None:
+            continue
+        hrs = sorted(hh for hh, c in obs if c >= fm - 1e-9)
+        if hrs:
+            peaked_at.append(hrs[0])
+    if not peaked_at:
+        return None
+    peaked_at.sort()
+    idx = min(len(peaked_at) - 1, max(0, math.ceil(q * len(peaked_at)) - 1))
+    return peaked_at[idx]
 
 
 def remaining_rise_samples(history: dict[str, list[tuple[int, float]]],
@@ -295,6 +379,14 @@ def intraday_ceiling(place: Place, target: dt.date, *,
     running_max = _running_max(todays, hour)
     day_state = _day_state(todays, hour)        # obs-only, BEFORE any register fusion
 
+    # BANKED (observation-grade) floor: the highest settlement bucket actually PRESENT in an ob.
+    # It starts at today's obs-only running max and is only ever widened by another real ob (the
+    # WU daily-max endpoint, below) — NEVER by a live cur_f/register lead. `running_max` may climb
+    # above this via a cur_f that leads the lagging endpoint (intended), but that lead is not
+    # banked until the record catches up (feedback_market_leads_lagging_wu_endpoint.md).
+    banked_running_max = running_max
+    wu_daily_max_f = None
+
     # LIVE-REGISTER CONSULT (WU cities, floor-raise only): the v1 history rows lag ~30-45min
     # and miss between-obs spikes; the oracle's own v3 current feed + 24h register is the
     # freshest read of the SAME instrument. Fused through sources._fuse_live_floor (current
@@ -303,29 +395,38 @@ def intraday_ceiling(place: Place, target: dt.date, *,
     live_cur = live_max24 = None
     feed = "v1"
     live_note = None
+    wu_daily_max_n = live_valid = None
     if key in _LIVE_REGISTER and now_hour is None:   # live runs only — replays/backtests stay v1
         try:
             live = sources.wunderground_current_v3(icao)
             if live is not None:
                 live_cur, live_max24 = live["cur_f"], live["max24_f"]
+                live_valid = live.get("valid_local")   # frozen across reads = stale cur_f (07-11)
                 yday = (target - dt.timedelta(days=1))
                 yrow = sources.wunderground_daily_series(icao, yday, yday, tz).get(yday.isoformat())
                 # WU's OWN authoritative daily-max caps the register (phantom guard, Jeddah
                 # 2026-07-09): a max24 above the settlement record's own daily high is not real.
                 try:
                     dmax = sources.wunderground_daily_max(icao, target, tz)   # WP-2: local-day max
-                    wu_rec_max_f = dmax.get("max_f") if dmax else None
+                    wu_daily_max_f = dmax.get("max_f") if dmax else None
+                    wu_daily_max_n = dmax.get("n_obs") if dmax else None
                 except Exception:
-                    wu_rec_max_f = None
+                    wu_daily_max_f = None
                 # WP-3: on a daily-max endpoint outage, yesterday's peak (°F) is the recent-daily-max
                 # fallback cap so the phantom cap degrades explicitly instead of vanishing.
                 yday_cap_f = (yrow[0] * 9.0 / 5.0 + 32.0) if yrow else None
                 fused, live_note = _fuse_live_floor(running_max, live_cur, live_max24,
                                                     yrow[0] if yrow else None,
-                                                    wu_record_max_f=wu_rec_max_f,
+                                                    wu_record_max_f=wu_daily_max_f,
                                                     cap_fallback_f=yday_cap_f)
                 if fused is not None and (running_max is None or fused > running_max):
                     running_max = fused
+                # The daily-max endpoint IS a settlement ob (it aggregates real between-obs peaks),
+                # so it CORROBORATES the banked floor; a cur_f/register lead above it does not.
+                if wu_daily_max_f is not None:
+                    endpoint_c = (wu_daily_max_f - 32.0) * 5.0 / 9.0
+                    if banked_running_max is None or endpoint_c > banked_running_max:
+                        banked_running_max = endpoint_c
                 feed = "wu+live"
         except Exception as exc:
             from .failures import record_soft_failure
@@ -353,6 +454,9 @@ def intraday_ceiling(place: Place, target: dt.date, *,
         pmf=tuple(pmf), modal_bucket=modal_b, modal_prob=modal_p,
         day_state=day_state, state_late_risk=s_risk,
         live_cur_f=live_cur, live_max24_f=live_max24, feed=feed,
+        banked_running_max_c=banked_running_max, wu_daily_max_f=wu_daily_max_f,
+        wu_daily_max_n=wu_daily_max_n, live_valid_local=live_valid,
+        peak_close_hour=peak_close_hour_from_history(history),
         source=(f"{station_name} {icao} "
                 + (f"(live Wunderground hourly, whole-°F → settlement °{grain})" if use_wu
                    else "(live IEM ASOS METAR, hourly)")
