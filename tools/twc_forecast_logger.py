@@ -1,11 +1,15 @@
 """twc_forecast_logger.py — forward-log The Weather Company's OWN daily-high forecast.
 
-The market settles on the Wunderground / Weather Company (TWC) airport record, and TWC
-publishes its OWN forecast for that same station (api.weather.com v3 — the same allowlisted
-host + key as the observation feed). That forecast is a candidate 9TH COUNCIL MEMBER, distinct
-from the 8 Open-Meteo NWP grid members: it is the settlement ORACLE forecasting its own station,
-natively — so it may capture the station/microclimate/measurement-convention effects the council's
-bias correction only approximates.
+The market settles on the Wunderground airport OBSERVATION record — the station's own
+METAR/ASOS readings, which TWC redistributes; TWC does NOT produce the observations, and
+"the settlement oracle forecasting its own station" is the WRONG framing (operator-corrected
+2026-07-12). TWC also publishes a forecast for that station (api.weather.com v3 — same
+allowlisted host + key). That forecast is a candidate 9TH COUNCIL MEMBER, distinct from the
+8 Open-Meteo NWP grid members, with one honest, modest driver: it is plausibly
+verified/calibrated against the SAME redistributed record the market settles on (same
+station, whole-°F convention, aggregation quirks), so its errors are measured in the
+settlement's own metric — which the council's bias correction only approximates. Driver
+clauses, kill conditions, and the frozen gate: ledger/preregistered/twc_member_gate.md.
 
 But it has NO historical-forecast archive (the endpoint serves only the current forecast), so it
 is NOT backtestable today — exactly the [D09] situation. An un-backtestable member cannot clear the

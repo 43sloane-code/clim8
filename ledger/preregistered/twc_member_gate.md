@@ -9,14 +9,24 @@ its own death in the driver series before the pmf shows it.*
 
 ## The driver (why a TWC forecast should add information AT ALL)
 
-TWC is The Weather Company — the same company whose Wunderground airport record IS the
-settlement oracle. Its published forecast is the oracle forecasting ITS OWN station,
-natively: station siting, measurement convention, microclimate, and the °F-native grain
-the record settles in. The 8 council members are NWP grids interpolated to a point; TWC
-is (hypothesized to be) the grid PLUS the station-level corrections the council's bias
-correction only approximates. That station-alignment is the ONLY driver on offer — the
-0/6 dead forecast members (D02 AIFS, UKMO-2km, ICON-D2, ICON-EU, AROME) had no mechanism
-beyond "another model," and died as your law predicts patterns do.
+*CORRECTED 2026-07-12 (operator-caught, before the clock fills; frozen criteria G1–G4
+unchanged): the first draft called TWC "the settlement oracle forecasting its own
+station" — WRONG. The oracle is the Wunderground OBSERVATION record: the airport's own
+METAR/ASOS sensors, which TWC merely REDISTRIBUTES (whole-°F storage, between-obs
+aggregation, the daily-max endpoint). TWC does not produce the observations and its
+forecast has NO privileged relationship to settlement.*
+
+The honest driver, at its true (weaker) strength: TWC's forecast is plausibly VERIFIED
+AND CALIBRATED AGAINST THE SAME REDISTRIBUTED RECORD the market settles on — same
+station, same whole-°F measurement convention, same aggregation quirks — so its errors
+are measured in the settlement's own metric, whereas the 8 council members are grid
+interpolations whose station bias our correction approximates. Shared verification
+target, not insider knowledge. If TWC in fact just re-bases public NWP with no
+station-level calibration loop, this driver DOES NOT EXIST — which is exactly what G3
+(offset sign-stability) and G4 (independence) test, and why they carry more weight than
+G1/G2 under the corrected driver. The 0/6 dead forecast members (D02 AIFS, UKMO-2km,
+ICON-D2, ICON-EU, AROME) had no mechanism beyond "another model"; TWC's claim to a
+mechanism is real but modest, and the gate treats it accordingly.
 
 ## The testable chain (what the driver predicts, each link falsifiable)
 
