@@ -86,6 +86,43 @@ today-observables BEYOND what NWP assimilated. Both open preregs now carry pre-c
 ADJUDICATION notes (criteria untouched, clocks at 8/60 and 6/40) requiring gain
 attribution before any promotion — the TWC convention, applied here.
 
+## The learning loop (Plan 3: provenance → postmortem → lessons → shadow) — the meta-audit (2026-07-12 extension)
+
+The loop generates candidates FROM its own errors, so the driver question is sharpest
+here: a lesson mined from residuals is pattern-class BY BIRTH unless forced to name a
+mechanism. Audited against that bar, the loop is already most of the way there:
+
+| Loop stage | Driver-first status |
+|---|---|
+| Provenance (issue-time votes/bias/regime snapshot) | The attribution SUBSTRATE — what makes causes nameable at all. Grade A infrastructure |
+| Postmortem (telescoping identity → BIAS/BLEND/INPUT/SETTLEMENT/MIXED) | Exact-cause attribution per settled error — the loop's equivalent of driver attribution, at error level |
+| Lessons (`tools/lessons.py`) | **A driver-tier filter is already built in:** `_TRANSFORM` converts only BIAS/BLEND causes into candidates; INPUT — no actionable mechanism — is "logged, never a candidate." The loop refuses to hypothesize where it has no mechanism. Plus: pre-registered effect SIGN per candidate, and THE BUDGET (≤2/city, ≤4/month) with K_candidates_ever as the Bonferroni denominator — the mining guard priced for pattern-class inputs |
+| Shadow gate (PROMOTE / FALSIFIED-SIGN / KILLED / EXPIRED / ACCRUING) | Forward falsification with a pre-registered sign — the CORRECT treatment for pattern-class candidates (the alpha-decay lesson: watch the edge's own series when no driver series exists) |
+| L2 promotion permanently human-gated; Phase-6 self-driver out of scope | The meta-identity: the loop cannot close on itself. The strongest guard in the stack |
+
+**Where the doctrine bites — cause ≠ driver.** An attributed cause says WHERE the error
+lives ("BIAS systematically hurt on this city-cell"); a driver says WHY ("that member's
+pipeline changed" / "seasonal drift the mean-bias lags" / "a feed-grain seam"). The
+transforms are corrective heuristics (halve the bias; shrink toward equal weight), not
+mechanisms — so a candidate that shadow-PROMOTES is a pattern-with-forward-armor: far
+better than backtest-mined, still driverless. And the system now owns the driver
+DIAGNOSTICS for exactly these cause classes: member_break (pipeline change),
+recency_bias (seasonal drift), Duty 2/3 (climatology/contract drift), the seam KATs.
+
+**The adjudication convention this audit adds (for the human at the promotion gate —
+which is the point: the human IS the gate, so the instruction lives in the record):**
+before promoting any shadow-PROMOTED candidate, cross-reference the driver diagnostics
+for its (city, cause) cell.
+- Diagnosis FOUND (e.g. a member-break alert covering the cell's window) → the correct
+  response is the diagnosed path (recalibration/re-pin), NOT the heuristic transform;
+  the candidate is evidence of the break, not a lesson in its own right.
+- No diagnosis → promote (if the shadow gate and budget say so) labeled
+  **"driver UNRESOLVED"** — armor-tested pattern, watched by its shadow score, expected
+  to decay like one.
+Budget note, recommendation only (changing queue ranking is a certification-bar change):
+driver-attributed candidates deserve the budget slot over unattributed ones of similar
+effect size.
+
 ## Gaps (honest, dispositioned)
 
 - **G1 — member-bias break coverage.** Duty 3b watches ECMWF@Changi only; the other

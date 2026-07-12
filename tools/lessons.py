@@ -20,6 +20,17 @@ that certifies noise with mathematical certainty. So:
 READ-ONLY w.r.t. forecasting: it emits candidates to a queue, never a served number. The queue is
 JSON in ledger/candidates.json. Deterministic (no wall-clock — the month is data-derived or
 passed), stdlib-only. Self-test:  python3 -m tools.lessons --selftest
+
+DRIVER-FIRST ADJUDICATION (2026-07-12 audit, docs/DRIVER_AUDIT.md — instruction to the HUMAN
+at the promotion gate; no behavior here changes): an attributed cause says WHERE the error
+lives, not WHY — so before promoting any shadow-PROMOTED candidate, cross-reference the
+driver diagnostics for its (city, cause) cell (member_break = pipeline change, recency_bias
+= seasonal drift, watchdog Duty 2/3 = climatology/contract drift). Diagnosis found → take
+the diagnosed path (recalibration/re-pin), not this queue's heuristic transform — the
+candidate is EVIDENCE of the break, not a lesson. No diagnosis → promote (if the shadow
+gate and budget say so) labeled "driver UNRESOLVED": an armor-tested pattern, watched by
+its shadow score, expected to decay like one. Note _TRANSFORM already encodes the coarser
+form of this law: INPUT has no mechanism, so it is logged and never becomes a candidate.
 """
 from __future__ import annotations
 
