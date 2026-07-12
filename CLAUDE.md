@@ -113,7 +113,8 @@ the ledger certifies.
   model frozen at 4bf504b, no re-tuning.
 - Registered next refactors (do properly, with KATs, not hot-patched):
   ledger/preregistered/london_lock_instrumentation.md (lock_logger per-city + London
-  crossover guard), sf_verdict_blockers.md (native-°F headline pmf, gated).
+  crossover guard). sf native-°F headline pmf: ATTEMPTED, FAILED the gate 2026-07-12
+  (D19 — the °C pmf is the better °F answer at day-ahead σ; naive °F grain over-fits).
 
 ## FILE MAP (where each mechanism lives)
 - run.py — verdict render (SETTLEMENT_REFERENCE, holding-cap, banked/final lines)

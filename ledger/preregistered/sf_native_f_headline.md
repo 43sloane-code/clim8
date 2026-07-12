@@ -1,5 +1,25 @@
 # Pre-registration — SF native-°F HEADLINE bucket pmf (sf_verdict_blockers #4)
 
+## RESULT — FAILED THE GATE (2026-07-12, one attempt spent → dead ledger D19)
+
+Probe run once, criteria as frozen below, 3,628 eligible walk-forward days (grain sanity
+3629/3649 = 0.995 integral-°F):
+
+| Criterion | H1 (n=1814) | H2 (n=1814) | Verdict |
+|---|---|---|---|
+| C1 modal °F-bucket hit, °F vs °C-derived | .099 > .080 PASS | .092 < .116 **FAIL** | not sign-stable |
+| C2 mean log score, °F vs °C-derived | −3.372 < −3.159 **FAIL** | −3.314 < −3.165 **FAIL** | fails both |
+| C3 80%-set coverage ∈ [.70,.90] | .766 PASS | .777 PASS | honest |
+
+**The °C headline is not the defect it looked like.** At day-ahead σ (~4°F cloud) with
+n≈160 residuals, a whole-°F empirical pmf over-fits bin noise across ~15 buckets; the °C
+bucketing acts as an accidental regularizer (2°F bins, mass split). The naive native-°F
+headline SERVES WORSE °F answers than the current °C pmf read with a uniform split.
+Disposition: headline stays °C; SF stays on-demand, out of the basket. Any future °F
+headline is a NEW mechanism (smoothed/shrunk density, its own pre-registration) and must
+beat the °C-split baseline. The intraday °F lever (post-peak, σ collapsed — fine grain
+wins there) and the °F settlement-reference rendering (#3) are unaffected.
+
 *2026-07-12. FROZEN BEFORE the probe is scored. One attempt (HARD RULE 1): any criterion
 failing on either half → dead-ledger entry, the headline stays °C, SF stays out of the
 basket, and this file records the failure. The probe script is

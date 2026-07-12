@@ -24,15 +24,20 @@ earlier IEM-overlay detour. Config now mirrors Singapore/Manila exactly.*
    `TestSettlementReferenceGrain`.
 
 ## REMAINING (blocks basket promotion)
-4. **NATIVE-°F HEADLINE BUCKET PMF.** The HEADLINE bucket pmf/band + intraday lock still compute
-   in whole-°C (SEPARATE from the settlement-reference block, now fixed in #3). For SF's finer °F
-   market the °C headline (~20°C) is ~2 °F-buckets coarse. The settlement SECTION serves °F; the
-   HEADLINE distribution does not. Needs the core bucket pipeline to run in the detected grain
-   end-to-end → touches a SERVED probability → must clear the frozen gate. NOT attempted. Until
-   then SF is on-demand + archive-pattern; NOT snapshotted into the basket.
+4. **NATIVE-°F HEADLINE BUCKET PMF — ATTEMPTED 2026-07-12, FAILED THE GATE (dead ledger D19).**
+   The naive fix (quantize the same residual cloud at whole-°F) was pre-registered
+   (`sf_native_f_headline.md`) and probed once on 10y KSFO (3,628 walk-forward days): it LOSES
+   to the served °C pmf read as a °F answer — log score fails BOTH halves (−3.372 vs −3.159 /
+   −3.314 vs −3.165), modal hit not sign-stable (H1 +1.9pt, H2 −2.4pt). At day-ahead σ (~4°F)
+   with n≈160 residuals, a whole-°F empirical pmf over-fits bin noise across ~15 buckets; the
+   °C bucketing is an accidental regularizer (2°F bins). So the °C headline STANDS, and SF
+   stays on-demand / out of the basket. A future °F headline is a NEW mechanism (smoothed /
+   shrunk density estimate), needs its own pre-registration, and must beat the °C-split
+   baseline — read D19 before re-proposing.
 
 ## STATUS
-SF on-demand verdict now anchors on the live WU settlement oracle (current, °F) exactly like
-RPLL/WSSS — truth + grain SOLVED, and the settlement-reference block now renders °F end-to-end.
-Only the native-°F HEADLINE bucket pmf (#4) remains before CITIES/TWC promotion — it is gated
-(served probability). On-demand + archive-pattern layer fully usable now.
+SF on-demand verdict anchors on the live WU settlement oracle (current, °F) exactly like
+RPLL/WSSS — truth + grain SOLVED, settlement-reference block renders °F end-to-end (#3), and
+the headline pmf stays °C ON MEASURED EVIDENCE (#4 → D19: the °C pmf is the better °F answer
+at day-ahead σ; quote the SETTLEMENT section's °F figures for SF, per CLAUDE.md). Basket/TWC
+promotion remains blocked unless a smoothed-°F-density candidate clears its own gate.
