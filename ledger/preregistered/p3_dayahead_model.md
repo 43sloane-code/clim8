@@ -46,3 +46,21 @@ sets the design: the simplest learner that can carry predictors.
 - A fails → D17. A clears, B fails → D17 (with the honest split recorded). Both clear →
   recommend-only shadow member (`tracked_forecasts source='own'`, P4), promotion only via the
   same 40-pair gate as TWC. Nothing served changes under any outcome of this prereg.
+
+## Driver adjudication — ADDED 2026-07-12 (pre-completion, Stage-B carve-out clock at
+## n=6/40; criteria above UNTOUCHED — this governs attribution AFTER a pass, not the pass)
+
+Driver-first audit (docs/DRIVER_AUDIT.md): Stage A proved the PREDICTOR driver real vs
+naive baselines; the Stage-B re-gate's remaining question is pure REDUNDANCY — the own
+model sees today's local state, the council members embed tomorrow's assimilated physics,
+so a genuine gain must live in the thin slice where next-day structure is predictable
+from local today-observables BEYOND what NWP assimilated. IF the re-gate passes at n≥40
+(model frozen at 4bf504b, no re-tuning), BEFORE any P4 shadow promotion:
+1. **Attribution strata:** report the model-vs-council gain stratified by (a) council-vs-
+   own divergence tercile and (b) predictor-signal days (high cloud_8_13 / unusual
+   prev_peak_hh) vs quiet days. The driver predicts the gain CONCENTRATES in (b)-active,
+   high-divergence cells; a uniform gain at n=40 is more consistent with noise.
+2. **Independence:** own-model error vs council error correlation (the TWC G4 convention).
+   Errors ~spanned by the council = no new information, whatever the score says.
+3. A pass whose gain cannot be attributed per 1–2 promotes (if at all) labeled
+   "driver UNRESOLVED", never "predictor driver confirmed".
