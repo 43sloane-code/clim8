@@ -23,3 +23,15 @@ fill). Expected outcome: trivially ACCRUING (n ≤ 1). The value of registering 
 the design is frozen BEFORE Karachi's snapshot density grows (it is now tape-adjacent
 and manually run daily), so future scorings inherit clean criteria instead of a
 post-hoc design.
+
+## INTERIM — first scoring 2026-07-13: ACCRUING (n=1; no verdict permitted)
+
+One decision day: 2026-07-09 (the 15:14 PKT snapshot read HOLDING and was skipped by the
+frozen rule; the 16:00 snapshot read declining) — bought 34°C @ 0.87, settled 34,
+**+14.9%/unit** on $189 recorded liquidity. **Cross-city honesty flag:** this fill and
+Jeddah's 0.78 fill are the SAME afternoon (07-09, the phantom-register day, when manual
+afternoon runs happened to be made) — the study's two fattest gaps are one correlated
+session, not two independent observations. Four-market pooled picture: 13 decision days,
+8 untradeable (the mirage confound dominates), 5/5 fills won (asks .96/.95/.91/.87/.78),
+capacity $189–533 — but effective independent fill-days = 4, not 5. Design frozen;
+re-scores as Karachi's snapshot density grows (now run daily).

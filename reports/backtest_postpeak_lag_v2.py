@@ -31,6 +31,10 @@ CFG = {
     "jeddah": {"place": "Jeddah%", "icao": "OEJN", "tz": "Asia/Riyadh",
                "archive": "data/oejn_hourly_iem.jsonl", "entry_h": 15.0,
                "cert": None, "dead_id": "D22"},
+    # ADDITIVE (2026-07-13, postpeak_lag_trade_khi.md) — London/Jeddah paths untouched.
+    "karachi": {"place": "Karachi%", "icao": "OPKC", "tz": "Asia/Karachi",
+                "archive": "data/opkc_hourly_iem.jsonl", "entry_h": 15.0,
+                "cert": None, "dead_id": "D23"},
 }
 
 
