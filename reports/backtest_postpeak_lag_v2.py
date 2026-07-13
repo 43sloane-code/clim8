@@ -35,6 +35,12 @@ CFG = {
     "karachi": {"place": "Karachi%", "icao": "OPKC", "tz": "Asia/Karachi",
                 "archive": "data/opkc_hourly_iem.jsonl", "entry_h": 15.0,
                 "cert": None, "dead_id": "D23"},
+    # ADDITIVE (2026-07-13, postpeak_lag_trade_sf.md) — grain F: 2°F contract buckets,
+    # hi-INCLUSIVE bounds, win by settled-°F containment. °C cities' path is the
+    # unmodified default.
+    "sf": {"place": "San Francisco%", "icao": "KSFO", "tz": "America/Los_Angeles",
+           "archive": "data/ksfo_hourly_iem.jsonl", "entry_h": 15.0,
+           "cert": None, "dead_id": "D24", "grain": "F"},
 }
 
 
@@ -105,21 +111,28 @@ def main() -> int:
         if day_state(obs) != "declining":
             skipped_state += 1
             continue
-        b_rm = rhu(max(c for _h, c in obs))
-        if realized is not None:
-            settle = rhu(float(realized))
-        elif pm_label:
-            digits = "".join(ch for ch in pm_label if ch.isdigit())
-            settle = int(digits) if digits else None
+        grain_f = cfg.get("grain") == "F"
+        if grain_f:
+            # SF (postpeak_lag_trade_sf.md): whole-°F values, 2°F buckets hi-INCLUSIVE.
+            b_rm = rhu(max(c for _h, c in obs) * 9.0 / 5.0 + 32.0)
+            settle = rhu(float(realized) * 9.0 / 5.0 + 32.0) if realized is not None else None
         else:
-            continue
+            b_rm = rhu(max(c for _h, c in obs))
+            if realized is not None:
+                settle = rhu(float(realized))
+            elif pm_label:
+                digits = "".join(ch for ch in pm_label if ch.isdigit())
+                settle = int(digits) if digits else None
+            else:
+                continue
         if settle is None:
             continue
         entry = None
         for b in json.loads(bj):
             lo = b.get("lo") if b.get("lo") is not None else -1e9
             hi = b.get("hi") if b.get("hi") is not None else 1e9
-            if lo <= b_rm < hi or b.get("label", "").startswith(str(b_rm)):
+            contains = (lo <= b_rm <= hi) if grain_f else (lo <= b_rm < hi)
+            if contains or (not grain_f and b.get("label", "").startswith(str(b_rm))):
                 entry = b
                 break
         if entry is None:
@@ -134,7 +147,13 @@ def main() -> int:
                            "settle": settle, "ask": None, "gap": None, "liq": liq,
                            "ret": None})
             continue
-        ret = (1.0 - ask) / ask if settle == b_rm else -1.0
+        if grain_f:
+            e_lo = entry.get("lo") if entry.get("lo") is not None else -1e9
+            e_hi = entry.get("hi") if entry.get("hi") is not None else 1e9
+            win = e_lo <= settle <= e_hi
+        else:
+            win = settle == b_rm
+        ret = (1.0 - ask) / ask if win else -1.0
         trades.append({"date": target, "hh": round(hh, 2), "bucket": b_rm,
                        "settle": settle, "ask": round(float(ask), 3), "gap": gap,
                        "liq": liq, "ret": round(ret, 4)})

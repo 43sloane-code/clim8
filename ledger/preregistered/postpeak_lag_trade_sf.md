@@ -31,3 +31,22 @@ On-demand city; inventory shows AT MOST TWO qualifying decision days (07-08 18:1
 regime makes SF the coin-flip-richest book (2°F buckets on a σ≈4°F day-ahead cloud), so
 if the mirage confound spares any market it may be this one — but that is a hypothesis
 for the accrued ledger, not tonight.
+
+## INTERIM — first scoring 2026-07-13: ACCRUING (n=2; no verdict permitted)
+
+07-08 18:16 PDT: NO-ASK (mirage). 07-09 15:15 PDT: bought the 66–67°F bucket @ 0.83,
+settled 67°F — **+20.5%/unit** on $160 recorded liquidity. (Cosmetic: the probe's print
+labels the °F bucket value with "°C"; values are °F per the frozen grain rules — display
+only, numbers correct, script not edited post-scoring.)
+
+**THE STUDY'S CENTRAL FINDING, now three-books strong:** the three fattest fills across
+all five markets — Jeddah 0.78, Karachi 0.87, SF 0.83 — are ONE afternoon (2026-07-09,
+the phantom-register day, the single day manual afternoon runs were made across cities).
+Two readings, honestly held open: (a) that afternoon's register chaos left stale books
+everywhere at once; (b) SAMPLING ARTIFACT — on-demand cities only have afternoon
+snapshots when someone ran them, and 07-09 is the only multi-city afternoon session, so
+"fat fills on 07-09" may just be "we only looked on 07-09." Singapore's automated
+4×/day sampling — the only clean sampler — shows ~2¢ gaps. Reading (b) is load-bearing
+for the pooled 6/6 win record: it is dominated by one session's condition. Resolution is
+mechanical: the tape/automation now samples afternoons daily; the accrued ledgers will
+separate (a) from (b) without any design change.
