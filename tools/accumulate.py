@@ -240,6 +240,9 @@ def main() -> int:
     # Driver-health: per-member bias-break watch (alert-only; member_bias_break_watch.md).
     # ACCRUING until the settled∧provenance join fills (provenance logging began 07-11).
     _ledger_step("member-bias break watch", "tools/member_break_watch.py")
+    # S2b Kalshi SF logger (kalshi_expansion.md): dual-venue snapshots + settled-tape
+    # preservation (~67-day API retention) + CLI-vs-WU truth series. Instrumentation only.
+    _ledger_step("kalshi sf logger", "tools/kalshi_logger.py")
 
     # 1e. Watchdog (Duties 1-3). Built 06-28, discovered UNSCHEDULED in the 07-04
     # re-evaluation — a guard that never runs guards nothing. It is a COMPARATOR: it needs a

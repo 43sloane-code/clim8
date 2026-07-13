@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Kalshi SF logger LaunchAgent — S2b of the registered expansion
+  (ledger/preregistered/kalshi_expansion.md; seam: kalshi_sf_seam.md).
+
+  Runs tools/kalshi_logger.py: dual-venue matched-timestamp ladder snapshots
+  (Kalshi KXHIGHTSFO + Polymarket SF), preservation of newly-settled Kalshi trade
+  tapes (the public API retains only ~67 days — every missed day is history lost),
+  and the daily CLI-vs-WU truth series. Read-only market DATA; no trading surface
+  is allowlisted; no served number changes.
+
+  Fires at 23:30 and 05:30 host-local (host = UTC+1): 15:30 and 21:30 in San
+  Francisco — the certified post-peak hour and the pre-close evening, which NO
+  other scheduled job reaches. After the late-October DST split these drift by an
+  hour; both remain inside the useful window — documented, do not "fix".
+
+  INSTALL (user-side; launchd cannot be loaded from the agent shell):
+    cp "tools/com.weatherverdict.kalshi.plist" ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.weatherverdict.kalshi.plist
+  TEST NOW:  launchctl start com.weatherverdict.kalshi
+  INSPECT:   tail reports/kalshi.launchd.out.log ; tail -1 ledger/kalshi_snapshots.jsonl
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.weatherverdict.kalshi</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-c</string>
+        <string>cd '/Users/43slauson/Desktop/mock projects/weather-verdict' &amp;&amp; PYTHONPATH=. '/Library/Frameworks/Python.framework/Versions/3.14/bin/python3' tools/kalshi_logger.py</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>23</integer>
+            <key>Minute</key>
+            <integer>30</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>5</integer>
+            <key>Minute</key>
+            <integer>30</integer>
+        </dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/43slauson/Desktop/mock projects/weather-verdict/reports/kalshi.launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/43slauson/Desktop/mock projects/weather-verdict/reports/kalshi.launchd.err.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

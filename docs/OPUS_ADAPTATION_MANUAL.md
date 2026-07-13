@@ -355,7 +355,7 @@ ledgers remain the only trade-verdict instruments.
 | Member-break watch | 0 cells, arming (~3 weeks to first pins) |
 | Duty 2 | RED on WSSS@14:00 — PRE-EXISTING, left standing; adjudicate only if persistent |
 | Funding driver | COMPRESSED (90d +0.7% vs 1.2%/yr floor); cond arm sitting out; VRP window open (settles 07-24) |
-| Open follow-ups | TWC gate at n=40 (the next real decision); post-peak ledgers accrue unattended; **Kalshi expansion: S0+S1 EXECUTED** — hosts allowlisted (user-approved); pilot CONFIRMED SF/KXHIGHTSFO (station=KSFO pinned 3 ways; book 34k vol, 6/6 two-sided; cross-venue truth split banked: CLI 76 vs WU 74, same station same day). Next: S2 per kalshi_sf_seam.md (CLI capture, dual-venue matched-timestamp snapshots, ≥20-day accrual) |
+| Open follow-ups | TWC gate at n=40 (the next real decision); post-peak ledgers accrue unattended; **Kalshi expansion: S0+S1 EXECUTED** — hosts allowlisted (user-approved); pilot CONFIRMED SF/KXHIGHTSFO (station=KSFO pinned 3 ways; book 34k vol, 6/6 two-sided; cross-venue truth split banked: CLI 76 vs WU 74, same station same day). S2a scored ACCRUING n=67 (API retains ~67d! kill-rate 0.0%, gaps median 2.9¢/mean 8.8¢, 67/67 traded, CLI-mismatch 0 — hindsight-winner upper bound, no verdict); S2b logger BUILT+wired (dual-venue snapshots, tape preservation, CLI-vs-WU series first row −2°F) — kalshi plist LOAD PENDING (user) |
 
 ## 19. Daily procedure (in order; the automation does most of it)
 1. Anything to adjudicate? Read `reports/tape.launchd.out.log`, accumulate log tails,

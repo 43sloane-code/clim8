@@ -119,3 +119,20 @@ available today. Revised order:
 - **S2b — forward dual-venue snapshot logger + accrual:** built ONLY if S2a survives.
 The seam prereg (kalshi_sf_seam.md) rules are unchanged and S2a must honor them (FINAL-CLI
 truth via the IEM CLI-archive probe FIRST — the truth source is itself part of the test).
+
+## S2b — EXECUTED 2026-07-14 (built, smoke-verified, accruing)
+
+`tools/kalshi_logger.py` (+ KATs tests/test_kalshi_logger.py) — three duties per run:
+(1) DUAL-VENUE matched-timestamp snapshots (Kalshi KXHIGHTSFO + Polymarket SF in one row
+→ ledger/kalshi_snapshots.jsonl; cross-venue comparisons valid only within a row);
+(2) PRESERVE newly-settled winner tapes into the S2a probe's own cache (arrests the
+~67-day API retention erosion AND accrues the frozen kill test toward n=100 — the
+re-score is just re-running the untouched probe); (3) the CLI-vs-WU TRUTH SERIES
+(ledger/ksfo_cli_wu.jsonl; first row 07-12: CLI 76 vs WU 74.0, divergence −2 — the
+cross-venue split now a measured series). Seam rule 5 structurally enforced and KAT'd
+(dollar/fp strings; absent → None, never 0). Wired into accumulate; scheduled at 23:30 +
+05:30 host (= 15:30 + 21:30 PT — SF's afternoon/evening, unreachable by any other job)
+via tools/com.weatherverdict.kalshi.plist — USER-SIDE LOAD PENDING. Smoke: both venues
+captured in one row; preserve idempotent at 180; one import fix during smoke
+(match_market lives in compare, not market — caught by the row's own error field).
+S2a re-scores when the cache reaches ~100 event-days (~5 weeks).
