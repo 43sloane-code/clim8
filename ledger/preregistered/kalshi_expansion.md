@@ -102,3 +102,20 @@ corrected same-session and encoded as seam rule 5. Bonus specimen banked: the CR
 TRUTH SPLIT (07-12 KSFO: CLI 76°F vs WU ~74°F — Kalshi and Polymarket settle the same
 station on different records). Next: S2 per the seam file — CLI capture + IEM CLI-archive
 probe + dual-venue matched-timestamp snapshot logger + ≥20 market-days accrual.
+
+## S2 REORDERED 2026-07-13 (distribution-over-verdicts law: cheapest decisive test FIRST)
+
+The original S2 (build logger → wait ≥20 forward days) violates kill-velocity: Kalshi's
+PUBLIC API serves TRADE HISTORY for SETTLED markets (GET /markets/trades, cursor-paginated,
+same allowlisted host) — the KXHIGH*/legacy HIGH* families have months-to-years of settled
+daily events, i.e. a HISTORICAL distribution of afternoon price paths vs CLI settles,
+available today. Revised order:
+- **S2a — HISTORICAL KILL TEST (before ANY build beyond a fetch script):** its own frozen
+  prereg; reconstruct afternoon (post-certified-hour ET-equivalent) favorite prices from
+  settled-market trade history across ALL available KXHIGHTSFO (and predecessor-series)
+  days; the expansion's frozen kill condition applies to THIS distribution (afternoon
+  favorite gap ≤ costs on ≥80% of days → DEAD now, zero further build). Target n:
+  hundreds of market-days, not 20.
+- **S2b — forward dual-venue snapshot logger + accrual:** built ONLY if S2a survives.
+The seam prereg (kalshi_sf_seam.md) rules are unchanged and S2a must honor them (FINAL-CLI
+truth via the IEM CLI-archive probe FIRST — the truth source is itself part of the test).

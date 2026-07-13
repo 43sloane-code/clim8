@@ -13,6 +13,12 @@ has earned, spoken by the machine from a ledger — never a blended statistic, n
 never from memory. When a verdict/accuracy issue appears: name its class → apply the shipped
 mechanism → new mechanisms get ONE pre-registered probe → fold gate → labeling-first →
 the ledger certifies.
+DISTRIBUTION OVER VERDICTS (operator, 2026-07-13): the work is data cleaning, statistics,
+and KILLING bad ideas fast — ~4/100 survive honest testing; never fall in love with one.
+One correct verdict/day/fill means NOTHING; quote distributions with n or say "n=1, means
+nothing". Expectancy claims need ~1000-day-scale evidence. CHEAPEST DECISIVE TEST FIRST:
+exhaust historical data before registering a forward clock. Setups are overhead; kills
+are output.
 
 ## DAILY RUNBOOK (the commands; everything is PYTHONPATH=. from repo root)
 - Full-stack verdict:      python3 run.py "<City>" --lead N [--intraday] [--market]
