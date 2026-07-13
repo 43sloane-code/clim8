@@ -35,3 +35,20 @@ $27,769 resting liquidity) so the untradeable rate may be lower — but a deeper
 means faster repricing, so the gap may be thinner still. Jeddah is expected trivially
 ACCRUING (3 qualifying snapshots exist). Expected outcomes: London ACCRUING-or-FAIL,
 Jeddah ACCRUING.
+
+## INTERIM — first scoring 2026-07-13: BOTH ACCRUING (no verdict permitted)
+
+**London: 2 decision days** (< 20). Both untradeable (NO-ASK at 21:20/23:30 local; the
+seller-exit mirage again). The dominant fact is upstream of the market: **14 of 16
+post-16:00 snapshots read HOLDING** — EGLC's whole-°C evening plateau keeps the 2-consec
+declining rule un-triggered within its 0.3°C tolerance, so the predicate itself rarely
+fires at the 20:00 snapshot hour. A design consequence, recorded, NOT re-tuned (loosening
+the state rule post-hoc would be exactly the forbidden move).
+**Jeddah: 1 decision day — filled and won big:** 2026-07-09 15:01 local, bought 38°C
+@ 0.78, settled 38, +28.2%/unit on $282 recorded liquidity. The fattest gap in the
+three-city study (Singapore's fills were ~2¢; this was ~22¢) — and it occurred on the
+phantom-register day (07-09), when the served figure confusion may have been exactly what
+mispriced the book. n=1: suggestive, not evidence.
+**Three-city picture so far (12 decision days):** 8/12 untradeable — the mirage confound
+dominates everywhere; 4/4 fills won (asks .96/.95/.91/.78); capacity $282–533. Designs
+stay frozen; all three re-score as snapshot days accrue.
