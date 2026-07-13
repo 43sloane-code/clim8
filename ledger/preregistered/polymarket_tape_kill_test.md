@@ -43,3 +43,19 @@ pure IO and allowed. Probe: `reports/backtest_polymarket_tape.py`. Recommend-onl
 Hindsight-winner, executed-trade design — an UPPER BOUND on opportunity (the vw includes
 trades made before the outcome was knowable, and executed prices survive only where a
 counterparty existed). Survival is permission to keep testing, never tradability.
+
+## OUTCOME 2026-07-14 — ABORT UNSCORED (infrastructure; the frozen gate fired correctly)
+
+Slug resolution failed 69/89 (>20% gate) and ALL 20 "resolved" days failed the winner
+cross-check. Diagnosis (from the cache, zero gap numbers ever computed):
+1. **Universe over-broad:** the ledger contains Tokyo/Chicago/Hong Kong/Manila June
+   experiment days (~35 non-five-city days) the design's intent excluded but its frozen
+   text did not.
+2. **Bare title-slugs are ambiguous across years/series:** the London slug resolved to
+   events with °F bucket labels — NOT our °C London market (prior-year or sibling
+   series). Every "mismatch" was a wrong-event artifact. Resolution requires
+   VERIFICATION (event end-date ≈ target date AND bucket-label unit == the city's grain),
+   not trust.
+This design is SPENT. Successor: polymarket_tape_kill_test_v2.md — identical kill
+criteria, corrected universe (five cities, ~54 days), verified resolution, floor
+adjusted to the corrected universe. No evidence outcome is inherited (nothing was scored).
