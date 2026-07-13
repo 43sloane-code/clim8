@@ -229,6 +229,42 @@ driver-attributed candidates = recommendation only.
 
 ---
 
+## 14b. THE POST-PEAK SETTLEMENT-LAG STUDY (2026-07-13 — five markets, five frozen preregs, ALL ACCRUING)
+
+The first market-microstructure candidate ever probed here (dead ledger had NO market
+entries; paper_pnl measured a different trade — day-ahead modal bets). Driver: information
+latency between the public WU settling record (which we read mechanically) and thin
+prediction-market pricing. Design (frozen per city BEFORE scoring, one attempt each):
+lead-0 settled snapshots; leak-free state at issue from IEM archives (obs ≤ issue hour;
+archives extended over end-gaps by live fetches of the same fixed past window); entry =
+first snapshot/day with the shipped 2-consec DECLINING rule at/after the city's certified
+hour; BUY the running-max bucket at its RECORDED best_ask only (no ask = UNTRADEABLE,
+counted); win (1−ask)/ask, lose −1; six criteria incl. n≥20 floor, both-halves sign,
+hit>mean-ask, untradeable<50%, capacity≥$50.
+
+| Market | Prereg / probe | Days | Filled | Status |
+|---|---|---|---|---|
+| Singapore | postpeak_lag_trade.md / backtest_postpeak_lag.py (FROZEN — never edit) | 9 | 3 (.96/.95/.91, all won, ~2¢ gaps) | ACCRUING 9/20 |
+| London | postpeak_lag_trade_ldn_jed.md / backtest_postpeak_lag_v2.py | 2 | 0 — both NO-ASK; 14/16 evening snapshots read HOLDING (EGLC °C plateau; predicate rare BY DESIGN, not re-tuned) | ACCRUING 2/20 |
+| Jeddah | same file / v2 script | 1 | 1 @ .78 → +28.2% | ACCRUING 1/20 |
+| Karachi | postpeak_lag_trade_khi.md / v2 (additive CFG) | 1 | 1 @ .87 → +14.9% | ACCRUING 1/20 |
+| SF | postpeak_lag_trade_sf.md / v2 (additive grain-F branch: 2°F buckets hi-INCLUSIVE, settled-°F containment win) | 2 | 1 @ .83 → +20.5% | ACCRUING 2/20 |
+
+**What the 15 pooled days actually say:** (1) the near-lock predicate is as accurate live
+as certified — 15/15 settled the running-max bucket; (2) the dominant market behavior is
+SELLER EXIT, not price lag — 8/15 decision days had NO ASK (the mirage confound, named in
+the prereg before scoring); (3) fills are 6/6 winners at $160–533 capacity — BUT the
+**central finding**: the three fattest fills (Jeddah .78, Karachi .87, SF .83) are ONE
+afternoon — 2026-07-09, the phantom-register day AND the only multi-city manual afternoon
+session. Two readings held open in the SF stamp: (a) register chaos left stale books
+everywhere at once (episodic edge), or (b) sampling artifact — "fat fills on 07-09" may be
+"we only looked on 07-09"; Singapore's automated 4×/day sampling (the only clean sampler)
+shows ~2¢ gaps, which supports (b). **Rules for the next session:** never re-tune the
+predicates/parameters after data (frozen; dead-ids D20–D24 reserved); never quote the
+pooled 6/6 as evidence (one correlated session dominates); re-score ONLY by re-running the
+frozen scripts as snapshot days accrue past n=20 (~4–6 weeks; the automation logs what's
+needed — nothing to build); a PASS goes to a forward paper ledger first, never capital.
+
 # PART IV — tv_trading_agent (commits b14f423, da0cbbc)
 
 ## 15. Funding carry (grade A−)
@@ -264,17 +300,18 @@ driver-attributed candidates = recommendation only.
 
 # PART V — LIVE STATE, PROCEDURE, PROHIBITIONS, FILES
 
-## 18. Live state at writing (2026-07-12 ~17:50 host)
+## 18. Live state at writing (updated 2026-07-13)
 | Item | State |
 |---|---|
-| Tape | 7 rows (4 SG + 3 London); plist LOADED, firing verified; 21:45 tonight = London settle-grade read |
-| London 07-12 high | 28°C banked (endpoint 82°F n=31) · 29°C SUSTAINED lead (cur_f 84°F ×3 refreshing reads) — machine-labeled coin-flip; market 90.8% on 28; endpoint needs 84°F to flip; resolves at the 21:45 read |
-| TWC clock | 25/40 at last check (~1 week; gate frozen+revised, §12) |
-| p2b | 8/60 · PoP 4/15 dry days · London lock accruing from 07-12 (first rows) · Singapore lock bins ACCRUING (all hours n<20) |
+| 07-12 books CLOSED | London settled **28** (82°F final — the sustained 29-lead NEVER banked; the machine's refusal to pick was correct; market's 91% vindicated). Jeddah settled **36** (97°F — H4 CLOSED, the corrected 36 lean was right). Karachi 07-12 settled 33 (the original miss's day). Every 07-12 city resolved. |
+| Tape | Plist LOADED + firing on schedule; lead-bank ledger live in renders ("0/2" quoted honestly — SG/London-only composition caveat applies) |
+| Post-peak lag study | Five markets ACCRUING (§14b) — 15/15 predicate accuracy, 8/15 untradeable, 6/6 fills won but one correlated session (07-09) dominates; frozen, re-scores at n≥20 |
+| TWC clock | ~27/40 (gate frozen + thrice-revised, §12; fires within days) |
+| p2b | 8/60 · PoP 4/15 · London lock accruing (first rows 07-12/13) · Singapore lock bins ACCRUING |
 | Member-break watch | 0 cells, arming (~3 weeks to first pins) |
-| Duty 2 | RED on WSSS@14:00 — PRE-EXISTING, left standing deliberately; adjudicate only if persistent |
-| Funding driver | COMPRESSED (90d +0.7% vs 1.2% floor); cond arm sitting out; VRP window open (06-24, settles 07-24) |
-| Open follow-ups | Jeddah 07-12 settle to confirm vs the corrected 36 lean (H4 tail); London 21:45 outcome vs today's coin-flip |
+| Duty 2 | RED on WSSS@14:00 — PRE-EXISTING, left standing; adjudicate only if persistent |
+| Funding driver | COMPRESSED (90d +0.7% vs 1.2%/yr floor); cond arm sitting out; VRP window open (settles 07-24) |
+| Open follow-ups | TWC gate at n=40 (the next real decision); post-peak ledgers accrue unattended |
 
 ## 19. Daily procedure (in order; the automation does most of it)
 1. Anything to adjudicate? Read `reports/tape.launchd.out.log`, accumulate log tails,
@@ -301,7 +338,11 @@ machine-labeled coin-flip · claim "improved" from a ship (only n at the frozen 
 compare live runs as A/B (frozen data only) · LLM-as-signal, latency arb, Windy vision,
 paid-API-for-accuracy · leverage funding carry ≥3× or re-claim VRP "clears" · remove the
 protocol's off-switch or its tier-mix line · let the learning loop self-promote (L2 is
-permanently human-gated) · launchctl from the agent shell (user-side only).
+permanently human-gated) · launchctl from the agent shell (user-side only) · re-tune any
+post-peak-lag predicate/parameter after seeing data (five frozen preregs, D20–D24
+reserved; one-attempt binds the DESIGN, waiting for n is allowed) · quote the study's
+pooled 6/6 fills as evidence (one correlated session, 07-09, dominates) · trade any of it
+live (a PASS goes to a forward paper ledger first, and no PASS exists).
 
 ## 21. Complete file map of the day
 ```
@@ -312,6 +353,10 @@ NEW  weather_council/intraday_grade.py + tests/test_intraday_grade.py (unittest 
 NEW  weather_council/member_break.py + tools/member_break_watch.py + tests/test_member_break.py
 NEW  tools/tape_logger.py + tools/com.weatherverdict.tape.plist + tests/test_tape_logger.py
 NEW  reports/backtest_sf_native_f.py (D19 probe — do not re-run as an attempt)
+NEW  reports/backtest_postpeak_lag.py (Singapore, FROZEN post-scoring — never edit)
+NEW  reports/backtest_postpeak_lag_v2.py (London/Jeddah + additive Karachi CFG + additive
+     SF grain-F branch; °C default path regression-checked unchanged)
+NEW  ledger/preregistered/postpeak_lag_trade{,_ldn_jed,_khi,_sf}.md (all with INTERIM stamps)
 NEW  ledger/preregistered/{twc_member_gate,sf_native_f_headline,member_bias_break_watch}.md
 NEW  docs/{INTRADAY_PROTOCOL,NWP_LITERATURE_MAP,DRIVER_AUDIT,OPUS_ADAPTATION_MANUAL}.md
 MOD  weather_council/intraday_ceiling.py (endpoint n, v3 stamp, peak_close_hour,
