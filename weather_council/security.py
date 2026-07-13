@@ -122,6 +122,13 @@ ALLOWED_HOSTS = frozenset({
     # station-identity lesson (NYC settles on Central Park KNYC, not an airport)
     # makes each contract's terms the only trustworthy source.
     "kalshi-public-docs.s3.amazonaws.com",
+    # Polymarket public trade-history API (data-api.polymarket.com): keyless, HTTPS,
+    # JSON. USER-APPROVED 2026-07-14 for the Polymarket trade-tape kill test
+    # (ledger/preregistered/polymarket_tape_kill_test.md — read it before touching this
+    # host). READ-ONLY executed-trade history by market condition id (side/price/size/
+    # timestamp/outcome), verified public pre-approval. Same posture as the other market
+    # hosts: no order placement, no key, no signature, no funds — ever.
+    "data-api.polymarket.com",
 })
 
 MAX_BYTES = 8 * 1024 * 1024          # 8 MiB ceiling on a *compressed* body
