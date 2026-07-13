@@ -90,3 +90,15 @@ hypothesis scored under this file — each later stage carries its own pre-regis
   preliminary-vs-final correction rule, and the DST 01:00–00:59 window. CONDITION: if
   the contract terms pin a non-KSFO station, the pilot decision is re-opened, not
   forced.
+
+## S1 — EXECUTED 2026-07-13 (pilot CONFIRMED: San Francisco / KXHIGHTSFO)
+
+Full seam registration: `kalshi_sf_seam.md`. Station pinned three ways to KSFO airport
+(CLI issuedby=SFO; CLISFO product header; rules_primary). Depth verified at raw-field
+level through the repo sandbox: 34,470 contracts / 25,934 OI / 6-of-6 buckets two-sided
+(NYC/CHI/MIA also deep but not fully two-sided today). The earlier "SF book empty" read
+was a parsing artifact (legacy field names vs this API's `*_dollars`/`*_fp` strings) —
+corrected same-session and encoded as seam rule 5. Bonus specimen banked: the CROSS-VENUE
+TRUTH SPLIT (07-12 KSFO: CLI 76°F vs WU ~74°F — Kalshi and Polymarket settle the same
+station on different records). Next: S2 per the seam file — CLI capture + IEM CLI-archive
+probe + dual-venue matched-timestamp snapshot logger + ≥20 market-days accrual.
