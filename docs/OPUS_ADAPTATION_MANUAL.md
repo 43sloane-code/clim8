@@ -357,6 +357,12 @@ NEW  reports/backtest_postpeak_lag.py (Singapore, FROZEN post-scoring — never 
 NEW  reports/backtest_postpeak_lag_v2.py (London/Jeddah + additive Karachi CFG + additive
      SF grain-F branch; °C default path regression-checked unchanged)
 NEW  ledger/preregistered/postpeak_lag_trade{,_ldn_jed,_khi,_sf}.md (all with INTERIM stamps)
+NEW  reports/weather_market_calibration.py (win-rate-by-price on OUR ladders — method
+     imported from Jon-Becker/prediction-market-analysis with the market-day clustering
+     fix that repo lacks + the tradable ask-side curve; DESCRIPTIVE ONLY. Findings: books
+     calibrated at the mid; taker-NEGATIVE at the ask nearly everywhere — .30-.50 bin
+     significantly negative, sub-.05 longshots roi −0.93; the .50-.85 zone leans positive
+     but CIs cross zero. Standing risk-guards, not edges.)
 NEW  ledger/preregistered/{twc_member_gate,sf_native_f_headline,member_bias_break_watch}.md
 NEW  docs/{INTRADAY_PROTOCOL,NWP_LITERATURE_MAP,DRIVER_AUDIT,OPUS_ADAPTATION_MANUAL}.md
 MOD  weather_council/intraday_ceiling.py (endpoint n, v3 stamp, peak_close_hour,
