@@ -355,7 +355,7 @@ ledgers remain the only trade-verdict instruments.
 | Member-break watch | 0 cells, arming (~3 weeks to first pins) |
 | Duty 2 | RED on WSSS@14:00 — PRE-EXISTING, left standing; adjudicate only if persistent |
 | Funding driver | COMPRESSED (90d +0.7% vs 1.2%/yr floor); cond arm sitting out; VRP window open (settles 07-24) |
-| Open follow-ups | TWC gate at n=40 (the next real decision); post-peak ledgers accrue unattended |
+| Open follow-ups | TWC gate at n=40 (the next real decision); post-peak ledgers accrue unattended; **Kalshi expansion REGISTERED (kalshi_expansion.md) — S0 allowlist decision is the USER'S, nothing proceeds without it** (verified 07-13: KXHIGHNY ~39k contracts/day, 1–2¢ spreads, NWS CLI settle, DST 01:00–00:59 window trap pre-identified) |
 
 ## 19. Daily procedure (in order; the automation does most of it)
 1. Anything to adjudicate? Read `reports/tape.launchd.out.log`, accumulate log tails,
