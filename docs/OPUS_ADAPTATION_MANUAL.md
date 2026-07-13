@@ -309,6 +309,37 @@ the afternoon favorite residue is ~2–3¢ on thin asks with real (now observed)
 and London's answer shelf is empty. NOTHING here amends any frozen prereg; the post-peak
 ledgers remain the only trade-verdict instruments.
 
+## 14d. THE TRADE-TAPE KILL TESTS (2026-07-13/14 — the S2a schema, both venues)
+
+The distribution-over-verdicts law applied: instead of waiting weeks of forward accrual,
+the post-peak question was put to HISTORICAL executed-trade tapes on both venues, each
+under its own frozen prereg (hindsight-winner design = an UPPER BOUND built to KILL;
+survival is permission to keep testing, NEVER tradability — the asymmetry clause is
+stamped on every file).
+
+| Probe | Prereg | Outcome |
+|---|---|---|
+| Kalshi S2a (KXHIGHTSFO) | kalshi_s2a_kill_test.md | **ACCRUING n=67 < 100 floor** (the public API retains only ~67 days — discovered, pinned, and the erosion arrested by the S2b logger's preserve duty). Facts: kill-rate 0.0% vs the ≥80% bar; gaps 1.0/1.2/2.9/10.3/23.0¢ deciles, mean 8.8¢; 67/67 traded afternoons; CLI mismatches 0/67. Re-scores automatically when the cache reaches ~100 (re-run the untouched probe). |
+| Polymarket v1 (5 cities) | polymarket_tape_kill_test.md | **ABORT unscored by its own gate** — bare title-slugs resolve to wrong events (prior-year °F Londons); universe was over-broad (June Tokyo/HK/Chicago days). Zero gap numbers computed; design spent; diagnosis stamped. |
+| Polymarket v2 (verified resolution) | polymarket_tape_kill_test_v2.md | **SURVIVES at n=50: killable 26% vs the ≥80% kill bar.** Gaps 0.3/0.8/3.4/9.8/24.8¢ deciles, mean 8.2¢, halves 7.7/8.7¢. Per city: SG 6.7¢ (n21), London 10.7¢ (n20), KHI 7.1¢ (n4), JED 5.6¢ (n4), SF 3.4¢ (n1). |
+
+**The two findings that outrank the verdicts:**
+1. **Two venues, one shape** — Kalshi and Polymarket afternoon-winner gap distributions
+   are nearly identical (medians 2.9 vs 3.4¢, means 8.8 vs 8.2¢). The residue is a
+   property of afternoon weather-market pricing, not one venue's microstructure.
+2. **Quotable ≠ traded, demonstrated** — London's ask shelf is structurally EMPTY (the
+   ask-fill preregs' finding) yet its EXECUTED record carries the largest gaps (10.7¢
+   mean): trades print via arriving orders without standing asks. The tape tests and the
+   ask-fill preregs answer DIFFERENT questions; neither substitutes for the other.
+
+**Standing rules from this section:** the five ask-fill post-peak preregs remain the
+SOLE tradability instruments (still ACCRUING, untouched); never quote a tape-test
+survival as an edge (upper bound by construction); v1's lesson is procedural — event
+resolution requires VERIFICATION (end-date window + bucket-unit grain), never bare
+slugs; all three caches are committed point-in-time data (the Kalshi one is
+irreplaceable). New host data-api.polymarket.com allowlisted (user-approved 07-14),
+same read-only posture as every market host.
+
 # PART IV — tv_trading_agent (commits b14f423, da0cbbc)
 
 ## 15. Funding carry (grade A−)
@@ -355,7 +386,7 @@ ledgers remain the only trade-verdict instruments.
 | Member-break watch | 0 cells, arming (~3 weeks to first pins) |
 | Duty 2 | RED on WSSS@14:00 — PRE-EXISTING, left standing; adjudicate only if persistent |
 | Funding driver | COMPRESSED (90d +0.7% vs 1.2%/yr floor); cond arm sitting out; VRP window open (settles 07-24) |
-| Open follow-ups | TWC gate at n=40 (the next real decision); post-peak ledgers accrue unattended; **Kalshi expansion: S0+S1 EXECUTED** — hosts allowlisted (user-approved); pilot CONFIRMED SF/KXHIGHTSFO (station=KSFO pinned 3 ways; book 34k vol, 6/6 two-sided; cross-venue truth split banked: CLI 76 vs WU 74, same station same day). S2a scored ACCRUING n=67 (API retains ~67d! kill-rate 0.0%, gaps median 2.9¢/mean 8.8¢, 67/67 traded, CLI-mismatch 0 — hindsight-winner upper bound, no verdict); S2b logger BUILT+wired (dual-venue snapshots, tape preservation, CLI-vs-WU series first row −2°F) — kalshi plist LOAD PENDING (user) |
+| Open follow-ups | TWC gate at n=40 (the next real decision); post-peak ledgers accrue unattended; **Kalshi expansion: S0+S1 EXECUTED** — hosts allowlisted (user-approved); pilot CONFIRMED SF/KXHIGHTSFO (station=KSFO pinned 3 ways; book 34k vol, 6/6 two-sided; cross-venue truth split banked: CLI 76 vs WU 74, same station same day). tape kill tests DONE (§14d): Kalshi ACCRUING n=67 (0.0% kill-rate; API retention pinned), Polymarket v1 ABORT→v2 SURVIVES n=50 (26% vs 80% bar) — upper bounds only, ask-fill preregs stay the tradability instruments; S2b logger BUILT+wired; kalshi plist load still pending (user — verify with: launchctl list | grep kalshi) |
 
 ## 19. Daily procedure (in order; the automation does most of it)
 1. Anything to adjudicate? Read `reports/tape.launchd.out.log`, accumulate log tails,
