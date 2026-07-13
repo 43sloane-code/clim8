@@ -265,6 +265,50 @@ pooled 6/6 as evidence (one correlated session dominates); re-score ONLY by re-r
 frozen scripts as snapshot days accrue past n=20 (~4–6 weeks; the automation logs what's
 needed — nothing to build); a PASS goes to a forward paper ledger first, never capital.
 
+## 14c. THE CALIBRATION STUDY (2026-07-13 — win-rate-by-price on our own ladders, all five markets)
+
+Method imported from Jon-Becker/prediction-market-analysis (`win_rate_by_price`) with the
+two fixes that repo lacks and one addition: (FIX 1) inference clustered by MARKET-DAY via
+seeded bootstrap — their analyses treat each trade as independent Bernoulli, but all
+trades in one market share one resolution, so their CIs are pseudo-replicated; (FIX 2)
+chronological era split; (ADDITION) the tradable ASK-side curve beside the de-vigged mid
+— the cost model their headlines omit. Tool: `reports/weather_market_calibration.py
+[City]` (descriptive report, read-only, seeded; NOT a prereg — re-running is allowed).
+Data: 2,904 point-in-time bucket-price/outcome pairs, 89 market-day clusters.
+
+**Universal findings (every slice — pooled, SG 21 clusters, London 20, Karachi 4,
+Jeddah 4, SF 5):**
+- **Sub-5¢ longshot burn at the ask: −0.93 to −1.00, 6/6 slices** (London a perfect
+  0/487; SF burns flat through 15¢). The strongest regularity ever measured about our
+  own markets. STANDING GUARD: never buy sub-5¢ weather buckets.
+- **Mid-probability (0.30–0.50) negative at the ask** (pooled −0.165, CI excl. 0).
+  STANDING GUARD: never buy mid-probability weather buckets at market.
+- **Books are calibrated at the MID in every slice** — the market is honest where it's
+  readable; the losses live in the cost of touching it.
+
+**City-specific (know these before quoting any slice):**
+- Singapore: favorite residue ~2–3¢ on thin asks; its 0.95–0.99 bin prints roi +0.028
+  with a POSITIVE CI — **an all-wins-bin artifact**: a cluster bootstrap cannot
+  manufacture unseen losses, so the CI reflects fill-price variation only; rule of three
+  puts the true loss-rate bound near 26% at n=10, and one 0.97 loss erases ~36 wins.
+  NEVER quote that bin as an edge.
+- **Jeddah contributed the study's one OBSERVED favorite-loss** (a ~0.97 ask that went
+  to zero) — the tail Singapore's sample lacked, demonstrated rather than theoretical.
+- London: favorites structurally UNQUOTED (0–3 asks ever) — independent corroboration of
+  the post-peak mirage; plus a cheap-bin inversion FLAG (5–15¢ wins 28% vs 9.7% mid,
+  CI excluding; 15–30¢ wins 8.7% vs 21.4%, CI excluding — likely 4–5 tail days;
+  flag-grade, not tradable).
+- SF: opposite-signed cheap-bin flag (15–30¢ over-performs, noise-grade); on its flat
+  2°F ladders favorites barely exist before the afternoon.
+- Karachi/Jeddah/SF are 4–5 clusters: accrual-only; any bin CI there is arithmetic, not
+  inference (Karachi's 0.30–0.50 "+0.896 significant" is the canonical trap — one
+  recurring winner across one afternoon's snapshots).
+
+**Relationship to the post-peak study (§14b):** two independent instruments now agree —
+the afternoon favorite residue is ~2–3¢ on thin asks with real (now observed) tail risk,
+and London's answer shelf is empty. NOTHING here amends any frozen prereg; the post-peak
+ledgers remain the only trade-verdict instruments.
+
 # PART IV — tv_trading_agent (commits b14f423, da0cbbc)
 
 ## 15. Funding carry (grade A−)
@@ -357,12 +401,8 @@ NEW  reports/backtest_postpeak_lag.py (Singapore, FROZEN post-scoring — never 
 NEW  reports/backtest_postpeak_lag_v2.py (London/Jeddah + additive Karachi CFG + additive
      SF grain-F branch; °C default path regression-checked unchanged)
 NEW  ledger/preregistered/postpeak_lag_trade{,_ldn_jed,_khi,_sf}.md (all with INTERIM stamps)
-NEW  reports/weather_market_calibration.py (win-rate-by-price on OUR ladders — method
-     imported from Jon-Becker/prediction-market-analysis with the market-day clustering
-     fix that repo lacks + the tradable ask-side curve; DESCRIPTIVE ONLY. Findings: books
-     calibrated at the mid; taker-NEGATIVE at the ask nearly everywhere — .30-.50 bin
-     significantly negative, sub-.05 longshots roi −0.93; the .50-.85 zone leans positive
-     but CIs cross zero. Standing risk-guards, not edges.)
+NEW  reports/weather_market_calibration.py (win-rate-by-price on OUR ladders, city-slice
+     arg — findings, guards, and the per-city traps digested in §14c; DESCRIPTIVE ONLY)
 NEW  ledger/preregistered/{twc_member_gate,sf_native_f_headline,member_bias_break_watch}.md
 NEW  docs/{INTRADAY_PROTOCOL,NWP_LITERATURE_MAP,DRIVER_AUDIT,OPUS_ADAPTATION_MANUAL}.md
 MOD  weather_council/intraday_ceiling.py (endpoint n, v3 stamp, peak_close_hour,
