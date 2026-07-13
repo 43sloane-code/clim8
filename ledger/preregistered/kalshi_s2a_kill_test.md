@@ -46,3 +46,31 @@ so it is a NECESSARY-condition test built to KILL. Survival does NOT establish
 tradability: the honest tradable version (entry conditioned on the leak-free running-max
 state at trade time, IEM archive) is S3's separate, own-prereg probe, permitted only if
 this survives. A pass here is permission to keep testing, nothing more.
+
+## INTERIM — first scoring 2026-07-14: ACCRUING (n=67 < 100 floor; no verdict permitted)
+
+**Universe truth discovered:** the public API retains settled markets only ~67 days back
+(180 settled events exist; 113 older ones return ZERO markets by every route — a retention
+window, verified at series level: 402 settled markets = 67 event-days). The accessible
+history IS 67 days, and it ERODES DAILY — the trade cache banked by this probe
+(reports/streams/kalshi_s2a_cache.jsonl) is irreplaceable point-in-time data.
+
+**Facts on the 67 days (facts, not verdict):** kill-rate 0.0% vs the ≥80% bar (not one
+day priced the afternoon winner to within costs); gap deciles 10/25/50/75/90 =
+1.0/1.2/2.9/10.3/23.0¢, mean 8.8¢; era halves 6.9¢/10.6¢ (not decaying); 67/67 days had
+afternoon winner trades (the Polymarket no-ask mirage is ABSENT); median afternoon winner
+volume 5,342 contracts; CLI cross-check mismatches: 0/67.
+
+**Asymmetry reminder (frozen above, restated):** hindsight-winner design — these gaps are
+an UPPER BOUND on opportunity; the vw includes trades made before the outcome was
+knowable. Tradability is S3's running-max-conditioned question, on these same 67 days'
+tapes, under its own prereg.
+
+**Per the frozen verdict order:** ACCRUING; the S2b forward-logger decision returns to
+the user — with the note that S2b now serves double duty: it accrues toward the n=100
+floor AND arrests the daily erosion of the only history that exists.
+
+**Probe IO repairs during fetching (design untouched):** nested-market results absent on
+older events (re-resolved via /markets, then /markets?status=settled, then the series
+listing — all zero for pre-May events, confirming retention, not a bug); the completeness
+check initially treated refetchable flags as final (fixed before any verdict was read).
