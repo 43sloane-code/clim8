@@ -47,12 +47,17 @@ def settle_won(bucket, pm_label, realized_c, grain):
 
 
 def main():
+    import sys
+    place_filter = sys.argv[1] if len(sys.argv) > 1 else None   # e.g. "Singapore"
     con = sqlite3.connect(DB)
     rows = con.execute(
         "SELECT place, target_date, buckets_json, pm_resolved_label, realized_high, grain "
         "FROM market_snapshots WHERE pm_resolved_label IS NOT NULL OR realized_high IS NOT NULL "
         "ORDER BY target_date").fetchall()
     con.close()
+    if place_filter:
+        rows = [r for r in rows if r[0].lower().startswith(place_filter.lower())]
+        print(f"CITY SLICE: {place_filter} ({len(rows)} settled snapshots)")
 
     # pair = (cluster_key, mid_price, ask, won)
     pairs = []
