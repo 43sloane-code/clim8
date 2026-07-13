@@ -54,3 +54,17 @@ prior paper-P&L "profit" was a thin-price artifact; the market was RIGHT on the 
 07-12 coin-flip. The most likely failure modes here: (a) untradeable mirage (no real ask
 post-peak), (b) the market already reprices by 15:00 (gap ≈ 0), (c) n too thin. Expected
 outcome: ACCRUING or FAIL.
+
+## INTERIM — first scoring 2026-07-13: ACCRUING (n=9 < 20; no verdict permitted)
+
+Facts, not verdicts: predicate days 9 (holding-skips 12). The running-max bucket settled
+correctly on 9/9 — the near-lock condition is as strong live as certified. BUT 6/9 were
+UNTRADEABLE (no ask on the record) — prior failure mode (a), the mirage confound, is the
+DOMINANT phenomenon: sellers exit once the bucket is decided; the market is not asleep,
+it is one-sided. The 3 fills (asks .96/.95/.91) all won: +4.2/+5.3/+9.9 per unit — and
+the driver gap when tradeable was only +1.5 to +2.5 CENTS (the market had already
+repriced to within ~2pts of certified probability wherever an ask existed). Recorded
+bucket liquidity on filled days: $345–533. The design and criteria stay FROZEN; the
+probe re-runs only as recorded days accrue past n=20 (~4–6 weeks at current density —
+the accumulate automation logs the needed snapshots daily; nothing to build). One-attempt
+applies to the design, not to waiting for n.
