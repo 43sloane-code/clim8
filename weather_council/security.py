@@ -106,6 +106,22 @@ ALLOWED_HOSTS = frozenset({
     # live blend until it earns history). Keyed: the API key rides in the request
     # PARAMS (never a logged URL) and is read from WEATHERBIT_API_KEY at runtime.
     "api.weatherbit.io",
+    # Kalshi PUBLIC market-data API (api.elections.kalshi.com): keyless, HTTPS,
+    # JSON. USER-APPROVED 2026-07-13 as S0 of the registered Kalshi weather-market
+    # expansion (ledger/preregistered/kalshi_expansion.md — read it before touching
+    # this host). READ-ONLY market data (series/events/markets/orderbooks) for the
+    # KXHIGH*/KXLOW* daily-temperature families, ingested only to ARCHIVE
+    # point-in-time ladders exactly as the Polymarket hosts above are. NO trading
+    # endpoint is ever called, no key, no signature, no account, no funds — the
+    # authenticated trading surface is deliberately NOT allowlisted, and adding it
+    # would require its own registration and explicit user instruction.
+    "api.elections.kalshi.com",
+    # Kalshi public contract-terms documents (kalshi-public-docs.s3.amazonaws.com):
+    # keyless, HTTPS, PDF. Same S0 approval. Read-only, consumed solely to PIN each
+    # market's settlement station/rules at seam-registration time (S1) — the
+    # station-identity lesson (NYC settles on Central Park KNYC, not an airport)
+    # makes each contract's terms the only trustworthy source.
+    "kalshi-public-docs.s3.amazonaws.com",
 })
 
 MAX_BYTES = 8 * 1024 * 1024          # 8 MiB ceiling on a *compressed* body

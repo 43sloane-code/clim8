@@ -69,3 +69,24 @@ hypothesis scored under this file — each later stage carries its own pre-regis
 - This file does NOT authorize trading, accounts, or auth of any kind — a future
   decision that would need its own registration and the user's explicit instruction.
 - Budget: ONE pilot city through S3 before any second city is even proposed.
+
+## S0 — EXECUTED 2026-07-13 (user-approved; both hosts allowlisted; verified through the repo sandbox)
+
+- `api.elections.kalshi.com` + `kalshi-public-docs.s3.amazonaws.com` added to
+  `security.ALLOWED_HOSTS` with full registration-referencing comments; the trading
+  surface remains deliberately un-allowlisted. Smoke test THROUGH SafeHTTPClient (SSRF
+  guard, size caps, allowlist in-path): KXHIGHNY series fetched clean.
+- **Enumeration (S1 opening fact): 53 KXHIGH*/KXLOW* series.** Cities confirmed: NYC,
+  Chicago, Miami, Austin, Denver, Houston, LA, Philadelphia, Atlanta, Boston, Dallas,
+  DC, Las Vegas, Minneapolis, New Orleans, OKC, Phoenix, San Antonio, Seattle, and
+  **San Francisco (KXHIGHTSFO)**. The lineup contains generation variants/duplicates
+  (KXHIGHOU vs KXHIGHHOU; KXHIGHDEN vs KXHIGHTEMPDEN; KXLOWNY vs KXLOWNYC) — S1 must
+  select the ACTIVE series per city by checking open events, never by name.
+- **Pilot recommendation: San Francisco via KXHIGHTSFO** — the only city where the
+  full pipeline already exists (10y KSFO IEM archive, °F grain suite, certified clocks:
+  declining@15:00 ≈ 96%, @16:00 ≈ 99%, pattern layer). Seam work reduces to: pin the
+  CLI settlement station from the contract terms (NWS "San Francisco" climate reports
+  can be issued for the airport OR downtown — DO NOT assume KSFO), the
+  preliminary-vs-final correction rule, and the DST 01:00–00:59 window. CONDITION: if
+  the contract terms pin a non-KSFO station, the pilot decision is re-opened, not
+  forced.
