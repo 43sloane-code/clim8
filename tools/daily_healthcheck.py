@@ -228,7 +228,9 @@ def _walk_forward(votes, observed, bias_method, power):
     spread = statistics.pstdev(signed) if len(signed) >= 2 else None
     return (statistics.mean(errs) if errs else None,
             (hits / n) if n else None, n, skill, cover, bias, spread,
-            rank_inputs, pits)
+            rank_inputs, pits, resid)   # resid: ADDITIVE (2026-07-14, dispersion_inflation
+                                        # prereg loader) — the ordered signed residual
+                                        # streams per attr; monitoring-only consumers.
 
 
 def _screened_blend_on_date(votes, attr, day, train, bias_method, power, floor):
@@ -568,7 +570,7 @@ def main() -> int:
         res = {}
         for variant in VARIANTS:
             (mae, hit, n, skill, cover, bias, spread,
-             rank_inputs, pit_vals) = _walk_forward(votes, observed, *variant)
+             rank_inputs, pit_vals, _resid) = _walk_forward(votes, observed, *variant)
             res[variant] = (mae, hit, n, skill, cover, bias, spread)
             if mae is not None:
                 basket_acc[variant].append(mae)

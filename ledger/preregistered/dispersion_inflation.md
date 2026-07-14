@@ -38,3 +38,36 @@ The PIT WARM TILT (mean bias, z=4.5): its gated challenger (recency-weighted bia
 re-adjudicated NIGHTLY by the healthcheck and lost again today (MAE 0.7031 vs 0.7121) —
 the tilt stands as a measured limitation whose legal fix keeps losing its hearing. Scaling
 is symmetric and cannot fix a tilt; no hand-recentering is permitted.
+
+## OUTCOME 2026-07-14 — ACCRUING/unreachable (data-reality; ZERO candidate numbers read)
+
+Two loader corrections during fetching (documented, criteria untouched): (1) the live
+verdicts ledger holds 6 Manila / 131 Singapore settled rows — the stated n≈222 is the
+healthcheck's BACKTEST stream; (2) that stream, correctly loaded via the healthcheck's own
+_city_votes + _walk_forward (live variant, additive resid return), yields ~51 post-warmup
+HIGH-attr days per city — the report's "n=222" is 2 attrs × 111 days. The frozen per-city
+floor of 150 was calibrated on that misreading and is unreachable for months on any
+loader. Both probe runs exited at the n-gate BEFORE any candidate coverage/CRPS was
+computed. Design SPENT; successor v2 (below in this file) pools high+low per city
+(n≈102/city) with the floor recalibrated to the data that exists — same candidate, same
+criteria shape, no evidence inherited.
+
+# Pre-registration v2 — same candidate, pooled attrs, recalibrated floor (frozen before scoring)
+
+- Data: the SAME healthcheck backtest residual streams, HIGH and LOW pooled in day order
+  per city (n ≈ 102/city — matching the healthcheck's own pooled PIT convention, n=404
+  basket-wide, where the defect was measured).
+- Candidate, scoring, and criteria 1–2 VERBATIM from v1 (variance-match s=pstdev(last60)/
+  pstdev(all) floored at 1.0; |coverage−80| must decrease in ALL FOUR city×half cells;
+  pooled CRPS ratio ≤ 1.01).
+- Criterion 3 recalibrated: n ≥ 80 pooled days per city, else ACCRUING.
+- One attempt. FAIL → D26. PASS → implement in the served-cloud path with KATs.
+
+## v2 OUTCOME 2026-07-14 — FAIL → D26 (one attempt spent)
+
+Manila H1 .716→.765 IMPROVED · Manila H2 .716→.778 IMPROVED · Singapore H2 .741→.802
+IMPROVED · **Singapore H1 .790→.790 NOT improved** (already ~calibrated; s barely fired,
+1.015). Pooled CRPS 0.9990 (within bar). The frozen all-four-cells criterion FAILS →
+dead ledger D26, autopsy recorded there (the candidate is inert where no defect exists —
+informative for any future CONDITIONAL design, which would need its own registration).
+The healthcheck's OVER-CONFIDENT flag stands as a known measured limitation.
