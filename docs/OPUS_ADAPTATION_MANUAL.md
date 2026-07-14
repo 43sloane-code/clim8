@@ -364,6 +364,36 @@ THAT); the backtest residual streams now come from _walk_forward's ADDITIVE `res
 return (monitoring-only); loaders are IO-repairable pre-scoring, floors are not
 lowerable post-scoring (v1→v2 required zero candidate numbers read, and had it).
 
+## 14f. THE BAND-VS-MARKET-MODAL FIX (2026-07-14 SF — commit c3b88f4)
+
+The specimen: SF 07-14 served day-ahead band 28–30°C (82%) while the cross-check line
+directly below it said "the independent signals agree on 26°C; the COUNCIL (29) is the
+OUTLIER" — and WU settled 79°F = 26°C (model_prob 3.9%, market 86.5%). Diagnosis: the
+07-02 directive "widen the band toward divergent signals" existed as PROSE (the
+cross-check line) but not as MECHANISM (the band is pmf-top-k-to-80% only,
+run.py `_bucket_call`). Class: a shipped directive not wired into the surface it governs.
+
+What shipped, and what deliberately did NOT:
+- **Shipped gateless (rule 2, labeling only):** `_band_market_flag` — when the market's
+  modal bucket sits outside the served band, the band line flags it explicitly and quotes
+  the MEASURED band coverage (73–74.5%) beside the pmf-self-assessed %. Plus
+  `_market_modal_c` (the °F→°C market-modal conversion extracted from `_cross_check_lines`
+  — one source of truth for both call sites). KAT: tests/test_band_market_flag.py.
+- **NOT shipped — gated:** actually EXTENDING the band to cover the market modal is a
+  served-number change. Frozen prereg: ledger/preregistered/band_cover_market_modal.md
+  (driver: market aggregates beyond the panel, measured 43% vs 40%; kill-on-driver: the
+  market must beat the pmf where they disagree, ≥2×; floor n≥15 conditioned days). The
+  cheapest-decisive-test law was run FIRST: 46 historical day-ahead settled snapshots
+  contain only **3 conditioned days** — no verdict is reachable, so it is an ACCRUING
+  forward clock (~6.5% condition rate, months out). **D27 reserved on FAIL.**
+- The analyzer matched D14 on "band" — adjudicated in the prereg: D14 killed a band
+  NARROWING design; this candidate never touches the modal or the pmf. The
+  consensus-override anti-directive holds: no market blending, display band only.
+
+The wider lesson this section pins: when a directive lives only in prose next to the
+number it should govern, the number will contradict it on exactly the day it matters —
+grep the render path for the directive's actual mechanism before trusting the line.
+
 # PART IV — tv_trading_agent (commits b14f423, da0cbbc)
 
 ## 15. Funding carry (grade A−)
