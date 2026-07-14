@@ -340,6 +340,30 @@ slugs; all three caches are committed point-in-time data (the Kalshi one is
 irreplaceable). New host data-api.polymarket.com allowlisted (user-approved 07-14),
 same read-only posture as every market host.
 
+## 14e. THE HEALTHCHECK ADJUDICATION PRECEDENT (2026-07-14 — how a DRIFT report is handled)
+
+The nightly healthcheck flagged seven issues; "fix all" was executed as the laws
+prescribe — each item got its NAMED mechanism, one got a gated probe, and the probe's
+death was recorded. Full document: reports/healthcheck_adjudication_2026-07-14.md.
+This section is the PRECEDENT for every future DRIFT report — diff against it, don't
+re-argue.
+
+| Flag class | Prescribed response (applied 07-14) |
+|---|---|
+| MAE drift vs pinned baseline | Adjudicate vs the ~0.1°C live-feed noise floor. +0.0513 = under it → flag STANDS, no tune, NO baseline re-pin (re-pinning to silence = the forbidden move). Act only if it persists and grows. |
+| Interval coverage / under-dispersion | The one ledger-permitted fix (cand-50 scalar variance-match) was pre-registered and probed ONCE → **FAILED → D26** (Manila H1/H2 + SG H2 improved, SG H1 already-calibrated didn't move; all-four-cells bar). Autopsy: the candidate is inert where no defect exists — a future CONDITIONAL design needs its own registration + driver clause. The flag now stands as a measured limitation with a DEAD challenger — do not re-probe the scalar form. |
+| PIT warm tilt (mean bias) | Its legal challenger (recency bias) is re-adjudicated NIGHTLY by the healthcheck and keeps losing. No hand-recentering, ever. |
+| Rank-histogram U (raw panel) | Known; already served with its explanation (the council serves the residual cloud, not member spread). Never a defect to fix. |
+| Monitoring-coverage gaps (DISP tiers) | Note for human review; never tuned on one run. |
+| Boilerplate/city-list drift | Check WHERE the stale text lives first: the repo's healthcheck boilerplate was already accurate; the stale "8-city/London+HK" text is in the SCHEDULED TASK's prompt (user-side edit). |
+| C7 UNVALIDATED / market beats council | The standing law, gate holding by design. Nothing to fix. |
+
+Probe-craft lessons banked in the prereg (dispersion_inflation.md): the "n=222" in
+healthcheck reports is 2 attrs × 111 days (per-city day floors must be calibrated to
+THAT); the backtest residual streams now come from _walk_forward's ADDITIVE `resid`
+return (monitoring-only); loaders are IO-repairable pre-scoring, floors are not
+lowerable post-scoring (v1→v2 required zero candidate numbers read, and had it).
+
 # PART IV — tv_trading_agent (commits b14f423, da0cbbc)
 
 ## 15. Funding carry (grade A−)
@@ -385,6 +409,7 @@ same read-only posture as every market host.
 | p2b | 8/60 · PoP 4/15 · London lock accruing (first rows 07-12/13) · Singapore lock bins ACCRUING |
 | Member-break watch | 0 cells, arming (~3 weeks to first pins) |
 | Duty 2 | RED on WSSS@14:00 — PRE-EXISTING, left standing; adjudicate only if persistent |
+| Healthcheck 07-14 DRIFT report | Fully adjudicated (§14e; reports/healthcheck_adjudication_2026-07-14.md): all flags stand-or-dispositioned, dispersion challenger DEAD (D26), zero hand-tunes |
 | Funding driver | COMPRESSED (90d +0.7% vs 1.2%/yr floor); cond arm sitting out; VRP window open (settles 07-24) |
 | Open follow-ups | TWC gate at n=40 (the next real decision); post-peak ledgers accrue unattended; **Kalshi expansion: S0+S1 EXECUTED** — hosts allowlisted (user-approved); pilot CONFIRMED SF/KXHIGHTSFO (station=KSFO pinned 3 ways; book 34k vol, 6/6 two-sided; cross-venue truth split banked: CLI 76 vs WU 74, same station same day). tape kill tests DONE (§14d): Kalshi ACCRUING n=67 (0.0% kill-rate; API retention pinned), Polymarket v1 ABORT→v2 SURVIVES n=50 (26% vs 80% bar) — upper bounds only, ask-fill preregs stay the tradability instruments; S2b logger BUILT+wired; kalshi plist load still pending (user — verify with: launchctl list | grep kalshi) |
 
