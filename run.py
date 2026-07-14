@@ -894,6 +894,40 @@ def _twc_cross_reference_lines(v: Verdict) -> list[str]:
     return L
 
 
+def _market_modal_c(comparison=None):
+    """The market's modal bucket as a °C whole-degree bucket, or None. SF settles whole-°F,
+    so its market modal label is a °F bucket ("66-67°F") while the council/band buckets are
+    °C. Left unconverted, the cross-check panel printed "council 19°C · market 66°C" and
+    flagged a bogus "COUNCIL is the OUTLIER, 19/66 boundary" — mixing units. Convert the °F
+    reading to its °C bucket so every comparison is like-for-like (66-67°F → 19°C)."""
+    if comparison is None or not getattr(comparison, "market_modal", None):
+        return None
+    mk = _bucket_int_from_label(comparison.market_modal)
+    if mk is None:
+        return None
+    if str(getattr(comparison, "grain", "C")).upper().startswith("F"):
+        mk = _round_half_up((mk - 32) * 5 / 9)
+    return mk
+
+
+def _band_market_flag(span, market_c) -> str | None:
+    """Gateless HONESTY label (rule 2): when the market's modal bucket falls OUTSIDE the
+    served band, say so on the band line itself — the 07-02 'widen toward divergent
+    signals' discipline was prose-only until 2026-07-14 SF (band 28–30 '82%' printed one
+    line above a cross-check naming 26°C the agreed bucket; WU settled 79°F=26°C, a bucket
+    the pmf had at 4%). This flags the contradiction and quotes the MEASURED band coverage
+    (73–74.5%, healthcheck + SF calibration) instead of letting the pmf self-assessed %
+    stand alone. Whether the band should be EXTENDED to cover the market modal is a served-
+    number change gated at ledger/preregistered/band_cover_market_modal.md (ACCRUING,
+    conditioned n=3 historical — no verdict permitted; this label is not that change)."""
+    if not span or market_c is None or market_c in span:
+        return None
+    return (f"      ⚠ the MARKET's modal bucket ({market_c}°C) sits OUTSIDE this band — a "
+            f"divergent signal, not dismissed (07-02 discipline); note the band's printed % "
+            f"is pmf-self-assessed while measured coverage runs 73–74.5% "
+            f"(gated extension: band_cover_market_modal.md, ACCRUING)")
+
+
 def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
     """Day-ahead CROSS-VALIDATION panel — the council bucket is never shown as the ONLY
     signal. Places the market's modal bucket and the recent-settled regime beside it and
@@ -904,17 +938,9 @@ def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
     council = c["bucket"]
     sub = "hong kong" in v.place.label().lower()
     signals = [("council", council)]
-    if comparison is not None and getattr(comparison, "market_modal", None):
-        mk = _bucket_int_from_label(comparison.market_modal)
-        if mk is not None:
-            # SF settles whole-°F, so its market modal label is a °F bucket ("66-67°F")
-            # while every OTHER cross-check signal (council/TWC/regime) is a °C bucket. Left
-            # as-is, the panel printed "council 19°C · market 66°C" and flagged a bogus
-            # "COUNCIL is the OUTLIER, 19/66 boundary" — mixing units. Convert the °F reading
-            # to its °C bucket so the comparison is like-for-like (66-67°F → 19°C == council).
-            if str(getattr(comparison, "grain", "C")).upper().startswith("F"):
-                mk = _round_half_up((mk - 32) * 5 / 9)
-            signals.append(("market", mk))
+    mk = _market_modal_c(comparison)
+    if mk is not None:
+        signals.append(("market", mk))
     # TWC (The Weather Channel / weather.com) FORECAST, logged point-in-time in tracked_forecasts.
     # A cross-reference ONLY (WU settles, IEM cross-checks the observation) — surfaced at FACE
     # VALUE (recommend-only, un-gated): on 07-02 it was the only point signal that hit while the
@@ -1105,6 +1131,9 @@ def _bucket_call_lines(v: Verdict, ceiling=None, comparison=None, grade=None) ->
             verb = "confident band" if c["span_prob"] >= _SPAN_TARGET else "best range"
             L.append(f"      {verb} : {span[0]}–{span[-1]}°C ({c['span_prob']*100:.0f}%)  "
                      f"← the honest day-ahead call is this BAND ({len(span)} buckets), not one bucket")
+            flag = _band_market_flag(span, _market_modal_c(comparison))
+            if flag:
+                L.append(flag)
         hk = "hong kong" in v.place.label().lower()
         if hk:
             L.append("      ► pinpoint single bucket needs the intraday lock; HK has no hourly "
