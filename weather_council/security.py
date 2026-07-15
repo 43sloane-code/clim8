@@ -201,7 +201,14 @@ def _assert_public_host(host: str) -> None:
     if not infos:
         raise SecurityError(f"host {host!r} resolved to no addresses")
     for *_, sockaddr in infos:
-        ip = ipaddress.ip_address(sockaddr[0])
+        try:
+            ip = ipaddress.ip_address(sockaddr[0])
+        except ValueError as exc:
+            # A scoped IPv6 literal ("fe80::1%en0") is unparseable — and link-local
+            # is exactly what this guard exists to block. Fail closed, not crash.
+            raise SecurityError(
+                f"host {host!r} resolved to unparseable address {sockaddr[0]!r} — blocked"
+            ) from exc
         if not ip.is_global or ip.is_multicast:
             raise SecurityError(
                 f"host {host!r} resolves to non-public address {ip} — blocked"
@@ -219,6 +226,18 @@ def _validate_url(url: str) -> str:
         raise SecurityError(f"refusing non-https URL: {url!r}")
     if parts.hostname not in ALLOWED_HOSTS:
         raise SecurityError(f"host not in allowlist: {parts.hostname!r}")
+    # The allowlist names a HOST, not a netloc: _fetch/redirects rebuild the URL
+    # from the original netloc, so without these checks `host:8443` (arbitrary
+    # port on a trusted name) and `user:pass@host` (credential smuggling /
+    # request ambiguity) both validate and get fetched.
+    try:
+        port_ok = parts.port in (None, 443)
+    except ValueError:                       # non-numeric port in the netloc
+        port_ok = False
+    if not port_ok:
+        raise SecurityError(f"refusing non-443 port: {url!r}")
+    if parts.username is not None or parts.password is not None:
+        raise SecurityError(f"refusing userinfo in URL: {url!r}")
     _assert_public_host(parts.hostname)
     return parts.hostname
 
@@ -296,6 +315,7 @@ class SafeHTTPClient:
                 raise
             except urllib.error.HTTPError as exc:
                 if exc.code in RETRYABLE_STATUS and attempt < MAX_RETRIES:
+                    exc.close()      # release the response socket before retrying
                     time.sleep(_retry_after_seconds(exc.headers, attempt))
                     attempt += 1
                     continue
@@ -350,13 +370,18 @@ class SafeHTTPClient:
         out = bytearray()
         dec = zlib.decompressobj(16 + zlib.MAX_WBITS)   # 16 => gzip header
         data = body
-        while data:
-            budget = MAX_DECOMPRESSED + 1 - len(out)
-            if budget <= 0:
-                raise SecurityError("decompressed response exceeded size cap — aborting")
-            out += dec.decompress(data, budget)
-            data = dec.unconsumed_tail
-        out += dec.flush()
+        try:
+            while data:
+                budget = MAX_DECOMPRESSED + 1 - len(out)
+                if budget <= 0:
+                    raise SecurityError("decompressed response exceeded size cap — aborting")
+                out += dec.decompress(data, budget)
+                data = dec.unconsumed_tail
+            out += dec.flush()
+        except zlib.error as exc:
+            # A truncated/garbage body must fail closed inside the SecurityError
+            # taxonomy like every other transport error, not crash the run raw.
+            raise SecurityError(f"gzip body from {_host} was corrupt: {exc}") from exc
         if len(out) > MAX_DECOMPRESSED:
             raise SecurityError("decompressed response exceeded size cap — aborting")
         try:

@@ -431,7 +431,6 @@ def intraday_ceiling(place: Place, target: dt.date, *,
         except Exception as exc:
             from .failures import record_soft_failure
             record_soft_failure("ceiling_register_consult", exc)   # swallow stays; not silent
-            pass
 
     history = {d: o for d, o in by_date.items() if d < tgt_iso}
     rises = remaining_rise_samples(history, hour)

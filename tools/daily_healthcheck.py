@@ -175,11 +175,13 @@ def _walk_forward(votes, observed, bias_method, power):
     the PIT histogram can ask whether the SERVED distribution is calibrated.
 
     Returns (mae, hit_rate, n, crps_skill_vs_climatology, coverage_80, bias, σ,
-             rank_inputs, pits)."""
+             rank_inputs, pits, resid)."""
     dates = sorted(observed)
     test = dates[WARMUP:]
     if len(test) < 5:
-        return None, None, 0, None, None, None, None, [], []
+        # Arity must match the normal return (10 values incl. the additive `resid`
+        # dict) — a 9-tuple here crashed the whole healthcheck on any sparse city.
+        return None, None, 0, None, None, None, None, [], [], {"high": [], "low": []}
     errs, hits, n = [], 0, 0
     signed: list[float] = []                 # signed errors (obs − pred): accuracy + precision
     resid = {"high": [], "low": []}          # signed council residuals, in order

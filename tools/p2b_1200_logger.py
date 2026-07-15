@@ -17,6 +17,7 @@ import bisect
 import datetime as dt
 import json
 import math
+import os
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -140,11 +141,21 @@ def main() -> int:
     tz = ZoneInfo("Asia/Singapore")
     today = dt.datetime.now(tz).date().isoformat()
 
-    rows = []
-    if LEDGER.exists():
-        rows = [json.loads(l) for l in LEDGER.read_text().splitlines() if l.strip()]
+    def _read_jsonl(path) -> list:
+        # One truncated/corrupt line (non-atomic writers, kills mid-write) must
+        # not brick the whole instrument — skip it, keep the ledger readable.
+        out = []
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue
+        return out
 
-    archive_rows = [json.loads(l) for l in ARCHIVE.read_text().splitlines()]
+    rows = _read_jsonl(LEDGER) if LEDGER.exists() else []
+    archive_rows = _read_jsonl(ARCHIVE)
     archive = {r["date"]: r["obs"] for r in archive_rows}
     # keep the archive current: pull the last few days from IEM and persist complete
     # days, so yesterday's row can settle without waiting for a manual backfill
@@ -161,9 +172,14 @@ def main() -> int:
                 archive[d] = by[d]
                 archive_rows.append({"date": d, "obs": by[d]})
             archive_rows.sort(key=lambda r: r["date"])
-            with open(ARCHIVE, "w") as f:
+            # Atomic: this rewrites the 10-YEAR WSSS hourly archive in place; a
+            # crash mid-"w" would truncate an irreplaceable file. IO-hardening
+            # only — the frozen P2b design (single-read day_state) is untouched.
+            tmp = ARCHIVE.with_suffix(".jsonl.tmp")
+            with open(tmp, "w") as f:
                 for r in archive_rows:
                     f.write(json.dumps(r) + "\n")
+            os.replace(tmp, ARCHIVE)
             print(f"P2B: archive extended +{len(added)} day(s): {', '.join(sorted(added))}")
     except Exception as e:
         print(f"P2B: incremental archive update failed ({type(e).__name__}) — settling on what exists")
@@ -214,9 +230,11 @@ def main() -> int:
                   f"unc->{row['unc_modal']} cond->{row['cond_modal']}; settled {settled} prior")
 
     LEDGER.parent.mkdir(exist_ok=True)
-    with open(LEDGER, "w") as f:
+    tmp = LEDGER.with_suffix(".jsonl.tmp")
+    with open(tmp, "w") as f:           # atomic rewrite (crash-safe), design untouched
         for r in rows:
             f.write(json.dumps(r) + "\n")
+    os.replace(tmp, LEDGER)
 
     done = [r for r in rows if r.get("settled_bucket") is not None and not r.get("fallback")]
     print(f"P2B ledger: {len(rows)} rows, {len(done)} settled non-fallback / 60 needed "

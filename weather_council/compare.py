@@ -372,8 +372,13 @@ def _label_month_day(date_label: str) -> tuple[int, int] | None:
         tl = tok.lower()
         if tl in _MONTHS:
             month = _MONTHS[tl]
-        elif tok.isdigit():
-            day = int(tok)
+        elif tok.isdigit() and day is None:
+            v = int(tok)
+            if 1 <= v <= 31:
+                # first plausible day-of-month token wins — a trailing year
+                # ("July 15, 2026") must not overwrite the day with 2026 and
+                # silently unmatch the whole basket.
+                day = v
     return (month, day) if month and day else None
 
 
@@ -388,6 +393,7 @@ def match_market(
     year can't cause a false miss. Returns the first exact city+day hit."""
     cl = city.strip().lower()
     md = (target_date.month, target_date.day)
+    undated: list[WeatherMarket] = []
     for m in markets:
         if not m.city:
             continue
@@ -395,10 +401,15 @@ def match_market(
         if cl not in mc and mc not in cl:
             continue
         lab = _label_month_day(m.date_label or "")
-        if lab is not None and lab != md:
-            continue
-        return m
-    return None
+        if lab == md:
+            return m                       # exact city+day — always preferred
+        if lab is None:
+            undated.append(m)              # unparseable label — candidate, not a match
+    # An unparseable date label previously matched ANY date, so one label-drifted
+    # market could be compared (and snapshot-logged) against the wrong day. Accept
+    # it only when it is the SOLE market for the city — then it can't be a
+    # cross-day mixup, just a label we couldn't read.
+    return undated[0] if len(undated) == 1 else None
 
 
 def grain_support_note(

@@ -84,19 +84,33 @@ def _bucket_f(temp_f: float) -> int:
 def load_rows() -> list[dict]:
     if not LOG.exists():
         return []
+    rows: list[dict] = []
     with open(LOG) as f:
-        rows = [json.loads(l) for l in f if l.strip()]
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue        # one truncated line must not brick the ledger's readers
+            if isinstance(r, dict):
+                rows.append(r)
     for r in rows:                       # migration: pre-2026-07-12 rows predate the city field
         r.setdefault("city", "Singapore")
     return rows
 
 
 def save_rows(rows: list[dict]) -> None:
+    # Atomic tmp+rename: this REWRITES the whole certification ledger, and it is
+    # invoked from three schedulers (daily_verdict plists, accumulate, tape plist)
+    # — a crash mid-"w" truncated the irreplaceable file.
     LOG.parent.mkdir(exist_ok=True)
-    with open(LOG, "w") as f:
+    tmp = LOG.with_suffix(".jsonl.tmp")
+    with open(tmp, "w") as f:
         for r in sorted(rows, key=lambda r: (r.get("city", "Singapore"),
                                              r["target_date"], r["hour"])):
             f.write(json.dumps(r) + "\n")
+    os.replace(tmp, LOG)
 
 
 def _key(row: dict) -> tuple[str, str, int]:
@@ -338,27 +352,34 @@ def main() -> int:
     if args.selftest:
         return _selftest()
 
-    rows = load_rows()
-    for city in CITIES:
-        try:
-            print(f"  {log_now(rows, city)}")
-        except Exception as exc:      # one city's feed failure must not starve the others
-            print(f"  {city}: log_now failed (non-fatal): {exc}")
-    seeded = seed_from_reports(rows)
-    if seeded:
-        print(f"  seeded {seeded} row(s) from dated report files (point-in-time artifacts)")
-    for city, cfg in CITIES.items():
-        today = _dt.datetime.now(ZoneInfo(cfg["tz"])).date().isoformat()
-        unsettled = sorted({r["target_date"] for r in rows
-                            if r.get("city", "Singapore") == city
-                            and r.get("settled_bucket") is None
-                            and r["target_date"] < today})
-        if unsettled:
-            n = settle_rows(rows, fetch_settled(unsettled, city), city)
-            print(f"  {city}: settled {n} row(s) against the WU/{cfg['icao']} record")
-    for w in settle_cross_check(rows):
-        print(f"  !! {w}")
-    save_rows(rows)
+    # Three schedulers invoke this (daily_verdict plists, accumulate, tape plist)
+    # with no shared lock — a concurrent load→modify→rewrite raced away rows.
+    # Serialize the whole read-modify-write on a sidecar lock file.
+    import fcntl
+    LOG.parent.mkdir(exist_ok=True)
+    with open(LOG.with_suffix(".lock"), "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        rows = load_rows()
+        for city in CITIES:
+            try:
+                print(f"  {log_now(rows, city)}")
+            except Exception as exc:      # one city's feed failure must not starve the others
+                print(f"  {city}: log_now failed (non-fatal): {exc}")
+        seeded = seed_from_reports(rows)
+        if seeded:
+            print(f"  seeded {seeded} row(s) from dated report files (point-in-time artifacts)")
+        for city, cfg in CITIES.items():
+            today = _dt.datetime.now(ZoneInfo(cfg["tz"])).date().isoformat()
+            unsettled = sorted({r["target_date"] for r in rows
+                                if r.get("city", "Singapore") == city
+                                and r.get("settled_bucket") is None
+                                and r["target_date"] < today})
+            if unsettled:
+                n = settle_rows(rows, fetch_settled(unsettled, city), city)
+                print(f"  {city}: settled {n} row(s) against the WU/{cfg['icao']} record")
+        for w in settle_cross_check(rows):
+            print(f"  !! {w}")
+        save_rows(rows)
     report(rows)
     return 0
 

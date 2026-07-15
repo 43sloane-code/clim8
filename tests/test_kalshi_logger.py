@@ -9,7 +9,8 @@ import os
 import tempfile
 import unittest
 
-from tools.kalshi_logger import _append, _loaded_dates, fnum, parse_market
+from tools.kalshi_logger import (_append, _banked_events, _loaded_dates, fnum,
+                                 parse_market)
 
 
 class TestKalshiLogger(unittest.TestCase):
@@ -37,6 +38,29 @@ class TestKalshiLogger(unittest.TestCase):
         high_tail = parse_market({"ticker": "K-T83", "floor_strike": 84})
         self.assertEqual(high_tail["floor"], 84)
         self.assertIsNone(high_tail["cap"])
+
+    def test_trade_count_falls_back_to_integer_count(self):
+        # 2026-07-15 audit fix: count_fp absent must fall back to the integer
+        # `count`, not bank n=0 — a zero-volume tape pushes the frozen S2a kill
+        # test toward its illiquidity ABORT numerator (seam rule 5 + probe parity).
+        n_of = lambda x: (fnum(x.get("count_fp"))
+                          if fnum(x.get("count_fp")) is not None
+                          else (fnum(x.get("count")) or 0.0))
+        self.assertEqual(n_of({"count_fp": "12.5"}), 12.5)
+        self.assertEqual(n_of({"count": 7}), 7.0)              # fp absent → integer count
+        self.assertEqual(n_of({"count_fp": "", "count": 7}), 7.0)
+        self.assertEqual(n_of({}), 0.0)                        # both absent → 0, explicit
+
+    def test_flag_only_cache_rows_do_not_block_banking(self):
+        # 2026-07-15 audit fix: the S2a probe writes flag-only rows into the shared
+        # cache; they must stay refetchable — only rows carrying trades are banked.
+        with tempfile.TemporaryDirectory() as td:
+            p = os.path.join(td, "cache.jsonl")
+            _append(p, {"event": "KXHIGHTSFO-26JUL01", "flag": "winners=0-final"})
+            _append(p, {"event": "KXHIGHTSFO-26JUL02", "trades": [{"p": 0.9, "n": 1}]})
+            banked = _banked_events(p)
+            self.assertIn("KXHIGHTSFO-26JUL02", banked)
+            self.assertNotIn("KXHIGHTSFO-26JUL01", banked)
 
     def test_idempotence_keys(self):
         with tempfile.TemporaryDirectory() as td:

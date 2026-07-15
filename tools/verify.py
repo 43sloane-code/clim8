@@ -129,7 +129,9 @@ def healthcheck_basket() -> list[str]:
         basket = [c for c in (getattr(mod, "BASKET", None) or []) if isinstance(c, str)]
     except Exception:  # noqa: BLE001
         basket = []
-    return basket or ["London", "Hong Kong"]
+    # Fallback = the CURRENT tracked basket (HK was removed; Manila/Singapore/London
+    # matches accumulate's CITIES) — a stale fallback would smoke the wrong cities.
+    return basket or ["Manila", "Singapore", "London"]
 
 
 # --------------------------------------------------------------------------- #

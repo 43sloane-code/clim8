@@ -136,7 +136,10 @@ def compact_buckets(probs: dict[int, float], *, tail_floor: float = 0.005) -> di
         out[f">={hi + 1}"] = above
     # Partition invariant: below-tail | [lo..hi] | above-tail claims every integer exactly once (the
     # cells are disjoint by structure), so the compacted pmf preserves the input's total mass.
-    assert abs(sum(out.values()) - sum(probs.values())) < 1e-9, (out, probs)
+    # Raise, not `assert`: a "permanent runtime invariant" stripped under `python -O`
+    # is not permanent.
+    if abs(sum(out.values()) - sum(probs.values())) >= 1e-9:
+        raise ValueError(f"compact_buckets dropped mass: {out} vs {probs}")
     return out
 
 

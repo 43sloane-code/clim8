@@ -119,8 +119,29 @@ def duty_snapshot(c: SafeHTTPClient) -> str:
             f"({n_two} two-sided), polymarket {'ok' if poly and 'error' not in (poly or {}) else 'unavailable'}")
 
 
+def _banked_events(path: str) -> set:
+    """Events whose cache row actually CARRIES trades. The frozen S2a probe also
+    writes flag-only rows ({'event':…, 'flag':'winners=…'}) into this cache; a
+    dedupe on the bare event key treated those as banked, so the logger never
+    re-attempted them even after the API resolved — and with ~67-day retention
+    they then eroded out of reach. Flag-only rows must stay refetchable."""
+    out = set()
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and "trades" in r:
+                    out.add(r.get("event"))
+    except OSError:
+        pass
+    return out
+
+
 def duty_preserve(c: SafeHTTPClient, cap: int = 8) -> str:
-    have = _loaded_dates(CACHE, "event")
+    have = _banked_events(CACHE)
     ev = c.get_json(f"{API}/events", {"series_ticker": SERIES, "status": "settled",
                                       "limit": "200", "with_nested_markets": "true"})
     added = 0
@@ -145,13 +166,23 @@ def duty_preserve(c: SafeHTTPClient, cap: int = 8) -> str:
         _append(CACHE, {"event": et, "ticker": w.get("ticker"),
                         "floor": w.get("floor_strike"), "cap": w.get("cap_strike"),
                         "close_time": w.get("close_time"),
+                        # A tape longer than 3 pages is cut off — say so on the row,
+                        # or the S2a re-score reads a truncated tape as complete.
+                        "truncated": bool(cursor),
                         "trades": [{"ts": x.get("created_time"),
                                     "p": (fnum(x.get("yes_price_dollars"))
                                           if x.get("yes_price_dollars") not in (None, "")
                                           else (1.0 - fnum(x.get("no_price_dollars"))
                                                 if fnum(x.get("no_price_dollars")) is not None
                                                 else None)),
-                                    "n": fnum(x.get("count_fp")) or 0.0}
+                                    # seam rule 5 + probe parity: fall back to the
+                                    # integer `count` before defaulting — count_fp
+                                    # absent must not bank every trade as n=0 and
+                                    # push the frozen kill test toward the
+                                    # illiquidity ABORT numerator.
+                                    "n": (fnum(x.get("count_fp"))
+                                          if fnum(x.get("count_fp")) is not None
+                                          else (fnum(x.get("count")) or 0.0))}
                                    for x in trades]})
         added += 1
     return f"preserve: +{added} settled event(s) banked (cache now {len(have) + added})"
@@ -173,12 +204,18 @@ def duty_truth(c: SafeHTTPClient) -> str:
         pass
     if row is None and wu is None:
         return f"truth: {y} — neither source ready yet; retry next run"
+    # CLI "high" can be the non-numeric sentinel "M" (missing): it passes an
+    # is-not-None check, TypeErrors on the subtraction, and the failed duty then
+    # retries and re-fails forever, permanently blocking this date's truth row.
+    cli_high = row.get("high") if row else None
+    cli_num = (cli_high if isinstance(cli_high, (int, float))
+               and not isinstance(cli_high, bool) else None)
     _append(CLIWU, {"date": y.isoformat(),
-                    "cli_high": row.get("high") if row else None,
+                    "cli_high": cli_high,
                     "cli_time": row.get("high_time") if row else None,
                     "wu_max_f": wu,
-                    "divergence": (row.get("high") - wu)
-                    if row and row.get("high") is not None and wu is not None else None})
+                    "divergence": (cli_num - wu)
+                    if cli_num is not None and wu is not None else None})
     return (f"truth: {y} CLI {row.get('high') if row else '—'} vs WU {wu} "
             f"(divergence series appended)")
 

@@ -119,6 +119,10 @@ def recency_weighted_bias(
     the consistent dispersion for the member's skill weight. With halflife → ∞ the
     weights flatten to the plain mean (the incumbent), so this strictly
     generalizes the current estimator."""
+    if not dated_errors:
+        # A clean contract error beats the StatisticsError that the w_sum<=0
+        # branch would raise from statistics.mean([]) on empty input.
+        raise ValueError("recency_weighted_bias needs at least one dated error")
     t = dt.date.fromisoformat(target_day)
     w_sum = wb_sum = 0.0
     weights: list[float] = []

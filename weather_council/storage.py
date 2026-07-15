@@ -364,6 +364,13 @@ def verify(sources: Sources | None = None) -> list[str]:
     sources = sources or Sources()
     cutoff = (dt.date.today() - dt.timedelta(days=2)).isoformat()
     conn = _connect()
+    try:
+        return _verify_rows(conn, sources, cutoff)
+    finally:
+        conn.close()
+
+
+def _verify_rows(conn, sources: Sources, cutoff: str) -> list[str]:
     rows = conn.execute(
         "SELECT issued_at, place, target_date, high, low, "
         "       truth_kind, station_id, station_icao, station_name, "
@@ -386,7 +393,10 @@ def verify(sources: Sources | None = None) -> list[str]:
             try:
                 actual = sources.wunderground_daily_series(
                     icao_up, day, day, _WU_SETTLE_TZ[icao_up]).get(target)
-            except Exception:
+            except Exception as exc:
+                # No longer silent: a dead WU key looks exactly like "not settled
+                # yet" here — the failure class the soft-failure ALARM exists for.
+                record_soft_failure("verify_wu_fetch", exc)
                 actual = None
             truth_note = " vs Wunderground"
         elif truth_kind == "station" and station_id:
@@ -410,7 +420,8 @@ def verify(sources: Sources | None = None) -> list[str]:
                         elevation=None, distance_km=0.0)
                 try:
                     series = sources.fetch_station_daily(station)
-                except Exception:
+                except Exception as exc:
+                    record_soft_failure("verify_station_fetch", exc)
                     series = {}
                 station_cache[station_id] = series
             actual = series.get(target)
@@ -436,7 +447,6 @@ def verify(sources: Sources | None = None) -> list[str]:
             f"{place_label} {target}: predicted {high:.1f}/{low:.1f}, "
             f"actual {a_high:.1f}/{a_low:.1f}  (err {e_high:.1f}/{e_low:.1f}){truth_note}"
         )
-    conn.close()
     return report
 
 
@@ -651,6 +661,7 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
 
     from zoneinfo import ZoneInfo
     station_cache: dict[str, dict] = {}
+    wu_cache: dict[tuple[str, str], tuple | None] = {}
     report: list[str] = []
     for (issued_at, place_label, target, grain, buckets_json,
          truth_kind, station_id, station_icao, station_name,
@@ -674,14 +685,22 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
             # has no WU overlay for these airports (only EGLC/HKO), so it would leave
             # realized_label NULL — the bug this branch repairs. daily_series returns
             # the local-day (max_c, min_c) tuple settle/verify both expect.
-            fetcher = sources if injected else Sources()
-            day = dt.date.fromisoformat(target)
-            try:
-                actual = fetcher.wunderground_daily_series(
-                    icao_up, day, day, _WU_SETTLE_TZ[icao_up]).get(target)
-            except Exception as exc:
-                record_soft_failure("settle_wu_fetch", exc)   # swallow stays; no longer silent
-                actual = None
+            # One WU fetch per (station, day), not per ROW — the accumulator
+            # writes ≥2 rows/day/city, so uncached this did duplicate network
+            # fetches (and burned duplicate request budget) every settle run.
+            wu_key = (icao_up, target)
+            if wu_key in wu_cache:
+                actual = wu_cache[wu_key]
+            else:
+                fetcher = sources if injected else Sources()
+                try:
+                    day = dt.date.fromisoformat(target)
+                    actual = fetcher.wunderground_daily_series(
+                        icao_up, day, day, _WU_SETTLE_TZ[icao_up]).get(target)
+                except Exception as exc:
+                    record_soft_failure("settle_wu_fetch", exc)   # swallow stays; no longer silent
+                    actual = None
+                wu_cache[wu_key] = actual
         elif truth_kind == "station" and station_id:
             series = station_cache.get(station_id)
             if series is None:
@@ -713,7 +732,12 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
         if not actual:
             continue                       # anchor truth not yet available — retry later
         realized_high = actual[0]
-        buckets = json.loads(buckets_json)
+        try:
+            buckets = json.loads(buckets_json)
+        except ValueError as exc:
+            # One corrupt row must not abort the whole settle batch (and leak conn).
+            record_soft_failure("settle_corrupt_buckets_json", exc)
+            continue
         # Sub-degree markets (HK Observatory, 0.1°C) settle by range-containment
         # (floor: 28.6°C -> 28°C bucket), not round-half-up. _native_reading_int
         # applies the right rule given the persisted sub_degree flag.
@@ -798,30 +822,41 @@ def live_bucket_scorecard(place_label: str, max_days: int = 60) -> dict:
     out. Returns {n, hits, rate, recent:[(date, served_bucket, true_bucket, hit)]}.
     No network. n=0 when no settled day has both a resolution and a served verdict."""
     conn = _connect()
-    rows = conn.execute(
-        "SELECT DISTINCT target_date, grain, sub_degree, pm_resolved_label "
-        "FROM market_snapshots WHERE place=? AND pm_resolved_label IS NOT NULL "
-        "ORDER BY target_date DESC LIMIT ?",
-        (place_label, max_days),
-    ).fetchall()
-    hits = 0
-    recent: list[tuple[str, int, int, bool]] = []
-    for target, grain, sub_degree, pm_label in rows:
-        lo, hi = _bucket_edges(pm_label or "")
-        true_b = lo if lo is not None else hi
-        if true_b is None:
-            continue
-        vrow = conn.execute(
-            "SELECT high FROM verdicts WHERE place=? AND target_date=? "
-            "AND high IS NOT NULL ORDER BY issued_at DESC LIMIT 1",
-            (place_label, target)).fetchone()
-        if not vrow:
-            continue
-        served_b = _native_reading_int(vrow[0], grain or "C", bool(sub_degree))
-        hit = served_b == true_b
-        hits += 1 if hit else 0
-        recent.append((target, served_b, true_b, hit))
-    conn.close()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT target_date, grain, sub_degree, pm_resolved_label "
+            "FROM market_snapshots WHERE place=? AND pm_resolved_label IS NOT NULL "
+            "ORDER BY target_date DESC LIMIT ?",
+            (place_label, max_days),
+        ).fetchall()
+        hits = 0
+        recent: list[tuple[str, int, int, bool]] = []
+        for target, grain, sub_degree, pm_label in rows:
+            lo, hi = _bucket_edges(pm_label or "")
+            if lo is None and hi is None:
+                continue
+            vrow = conn.execute(
+                "SELECT high FROM verdicts WHERE place=? AND target_date=? "
+                "AND high IS NOT NULL ORDER BY issued_at DESC LIMIT 1",
+                (place_label, target)).fetchone()
+            if not vrow:
+                continue
+            served_b = _native_reading_int(vrow[0], grain or "C", bool(sub_degree))
+            # CONTAINMENT, not edge-equality (measurement-honesty fix 2026-07-15):
+            # the old `served == lo` scored a served 79 inside a winning "78-79°F"
+            # range — and any served reading inside a winning tail bucket — as a
+            # MISS, systematically UNDER-reporting the honest hit-rate consumed by
+            # eval_harness/watchdog. Mirrors Resolution.contains. The number this
+            # returns will step up on °F/tail cities; that is the correction, not
+            # an improvement claim.
+            hit = ((lo is None or served_b >= lo)
+                   and (hi is None or served_b <= hi))
+            # keep the display convention: one representative integer for the bucket
+            true_b = lo if lo is not None else hi
+            hits += 1 if hit else 0
+            recent.append((target, served_b, true_b, hit))
+    finally:
+        conn.close()
     n = len(recent)
     return {"n": n, "hits": hits, "rate": (hits / n if n else None),
             "recent": recent}

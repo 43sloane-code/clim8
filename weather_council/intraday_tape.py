@@ -66,6 +66,8 @@ def load_reads(city: str, date_iso: str, path: str = TAPE_PATH) -> list[dict]:
                     r = json.loads(line)
                 except ValueError:
                     continue
+                if not isinstance(r, dict):
+                    continue          # a JSON-valid non-dict ("null", "42") is a bad line
                 if r.get("city") == key and r.get("date") == date_iso:
                     out.append(r)
     except OSError:
@@ -121,11 +123,14 @@ def lead_bank_rate(path: str = TAPE_PATH, *, before_date: str,
                     r = json.loads(line)
                 except ValueError:
                     continue
-                if r.get("date", "") >= before_date:
+                if not isinstance(r, dict):
+                    continue
+                d = r.get("date")
+                if not d or d >= before_date:      # dateless rows can never be scored
                     continue
                 if city is not None and r.get("city") != (city or "").strip().lower():
                     continue
-                groups.setdefault((r.get("city", ""), r["date"]), []).append(r)
+                groups.setdefault((r.get("city", ""), d), []).append(r)
     except OSError:
         return 0, 0
     banked = total = 0

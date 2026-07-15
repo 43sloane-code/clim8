@@ -160,7 +160,11 @@ def _snapshotted_today(city: str) -> bool:
     idempotency key that keeps repeated daily fires from writing duplicates."""
     if not DB.exists():
         return False
-    today = dt.date.today().isoformat()
+    # issued_at is UTC; compare on UTC "today". Host-local (SGT) vs UTC mixed
+    # dates made every 00:00–07:59 SGT run invisible to the 09:00 SGT job's
+    # check, writing exactly the correlated duplicate this guard exists to stop
+    # (read-side dedup defended C7's n; the write guard's own contract was broken).
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
     con = sqlite3.connect(DB)
     try:
         row = con.execute(
@@ -254,6 +258,11 @@ def main() -> int:
         # london_lock_instrumentation.md §2): --emit-crossover MERGES per-ICAO into the
         # shared file, and the baseline now pins WSSS + EGLC — a missing city here reads as
         # a RED "silent failure" in watchdog Duty 2, which is exactly the guard working.
+        # RESET the merge file first: it persisted across runs, so a failed emit
+        # handed watchdog Duty 2 YESTERDAY'S hit-rates as "current" — stale-but-
+        # present numbers diff GREEN, defeating the missing-city-reads-RED design.
+        # After the reset, a city whose emit fails is genuinely ABSENT.
+        (ROOT / "reports" / "crossover_now.json").unlink(missing_ok=True)
         for _cx_city in ("singapore", "london"):
             cx = subprocess.run([PY, "tools/intraday_ceiling_backtest.py", "--city", _cx_city,
                                  "--hours", "13,14,15,16", "--emit-crossover",

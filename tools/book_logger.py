@@ -131,7 +131,11 @@ def main() -> int:
         print(f"'{place.name}' is not in the order-book capture scope "
               f"({', '.join(sorted(FOCUS_CITIES))}); nothing captured.")
         return 0
-    target = (dt.date.today() + dt.timedelta(days=args.lead)).isoformat()
+    # Lead is relative to the CITY's today (the --lead help already says so; the
+    # accumulate path resolves it this way via run.py) — host-local today from the
+    # SGT machine targeted the wrong civil day for SF/Karachi morning captures.
+    from weather_council.sources import place_today
+    target = (place_today(place) + dt.timedelta(days=args.lead)).isoformat()
     summary = capture_for_place(sources, place, target)
     if summary is None:
         print(f"no matching high-temperature market for {place.name} {target}; nothing captured.")

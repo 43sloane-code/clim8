@@ -267,7 +267,7 @@ def run_canary():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=False, default=os.environ.get("WX_REPO", "."))
-    ap.add_argument("--cities", default="RPLL,WSSS")
+    ap.add_argument("--cities", default="RPLL,WSSS,EGLC")   # match accumulate's explicit list
     ap.add_argument("--ab-now", help="path to JSON of current replay crossover hit-rates")
     ap.add_argument("--truth-config", help="path to JSON: [[config_path, resolved_source], ...]")
     ap.add_argument("--ecmwf-bias", type=float, default=None)

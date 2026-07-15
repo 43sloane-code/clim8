@@ -214,6 +214,10 @@ def _fuse_live_floor(runmax_c, cur_f, max24_f, yesterday_max_c, wu_record_max_f=
     # watchdog-visible alarm, never a silent degradation.
     cap_ref = wu_record_max_f if isinstance(wu_record_max_f, (int, float)) else cap_fallback_f
     outage_uncapped = False
+    # The docstring calls the fallback cap "a declared degraded cap" — declare it.
+    degraded_cap = (isinstance(max24_f, (int, float))
+                    and not isinstance(wu_record_max_f, (int, float))
+                    and isinstance(cap_ref, (int, float)))
     if isinstance(max24_f, (int, float)):
         if isinstance(cap_ref, (int, float)):
             ceiling = cap_ref
@@ -243,6 +247,8 @@ def _fuse_live_floor(runmax_c, cur_f, max24_f, yesterday_max_c, wu_record_max_f=
         note = f"live 24h-register {max24_f:.0f}°F"
         if outage_uncapped:                # WP-3: an uncapped register raised the floor on an outage
             note += " [ABSENT_OUTAGE: daily-max endpoint down, register uncapped — verify]"
+        elif degraded_cap:                 # endpoint down; register capped at the RECENT-day fallback
+            note += " [DEGRADED_CAP: daily-max endpoint down, capped at recent-day fallback]"
     return floor_c, note
 
 
@@ -328,12 +334,27 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def _clean_temp(value) -> float | None:
-    if not isinstance(value, (int, float)):
+    # bool is an int subclass: a JSON `true` in a temp field would pass a bare
+    # isinstance gate and become 1.0 °C (or f2c(True) ≈ −17 °C on °F paths).
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     v = float(value)
     if v != v or not (TEMP_MIN_C <= v <= TEMP_MAX_C):  # NaN or out of band
         return None
     return v
+
+
+def _wu_temp_f(value) -> float | None:
+    """One WU whole-°F observation, screened: bool-excluded numeric AND inside
+    the plausibility band after °F→°C. The WU settlement spine previously only
+    TYPE-checked its temps (contrary to the module contract's 'every response is
+    range- and type-checked'), so a corrupt 9999 could have become the day's
+    settling max or the live-floor cap reference. Returns the °F float or None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if _clean_temp((float(value) - 32.0) * 5.0 / 9.0) is None:
+        return None
+    return float(value)
 
 
 def _clean_temp_cell(cell: str) -> float | None:
@@ -785,7 +806,13 @@ class Sources:
         climatology and neighbour fetches — are *not* added to the operational QC
         tally: the file spans decades and several candidate stations may be
         probed, which would swamp the per-run anomaly count."""
-        txt = self.http.get_gzip_text(STATION_DAILY_URL.format(id=station.id))
+        # station.id arrives from the fetched Meteostat station list — a hostile
+        # or drifted id ("../", "?", control chars) would rewrite the URL path
+        # or raise outside the SecurityError taxonomy. Alphanumeric or nothing.
+        sid = str(station.id or "")
+        if not sid.isalnum() or len(sid) > 12:
+            return {}
+        txt = self.http.get_gzip_text(STATION_DAILY_URL.format(id=sid))
         out: DailySeries = {}
         for line in txt.splitlines():
             cols = line.split(",")
@@ -815,10 +842,10 @@ class Sources:
         # Recent METAR days win; older days keep the Meteostat value.
         else:
             # Airports whose Meteostat bulk file is stale/distant but which carry a live
-            # IEM ASOS METAR record we can overlay (the EGLC pattern, generalised): EGLC and
-            # now KSFO (San Francisco). Recent METAR days win; older days keep Meteostat.
-            # KSFO's Meteostat file lags ~100 days, so without this the SF verdict backtests
-            # on out-of-season truth — this is the fix that makes it current.
+            # IEM ASOS METAR record we can overlay (the EGLC pattern, generalised) —
+            # membership is _IEM_OVERLAY_TZ (EGLC/OPKC/OEJN). KSFO is deliberately NOT
+            # overlaid: SF anchors on its live Wunderground oracle feed (see line ~65).
+            # Recent METAR days win; older days keep the Meteostat value.
             ov_tz = _IEM_OVERLAY_TZ.get((station.icao or "").upper())
             if ov_tz:
                 modern = self.iem_overlay_truth_series((station.icao or "").upper(),
@@ -858,12 +885,6 @@ class Sources:
                 out[f"{int(y):04d}-{int(m):02d}-{int(d):02d}"] = val
         return out
 
-    def fetch_hko_daily_max(self, years: list[int]) -> dict[str, float]:
-        """Recent daily maximum temperature (date -> high_c) at the Hong Kong
-        Observatory HQ, from the HKO open-data API. The Meteostat file for the HKO
-        station stops in 1992, so it cannot supply a *modern* record; this does."""
-        return self._fetch_hko_dataset("CLMMAXT", years)
-
     def is_hko_observatory(self, station: Station) -> bool:
         """True iff this station is the Hong Kong Observatory HQ — recognised by a
         name token *and* geography (within HKO_MATCH_RADIUS_KM of the Observatory
@@ -896,6 +917,11 @@ class Sources:
             for block in ((data or {}).get("stn") or {}).get("data", []):
                 month = block.get("month")
                 mo = int(month) if str(month).isdigit() else m
+                if mo != m:
+                    # A block for another month (payload drift, or a December
+                    # block inside a January file) would be keyed with THIS
+                    # loop iteration's year — a mismatched date. Skip it.
+                    continue
                 for row in block.get("dayData", []):
                     if not row or not str(row[0]).isdigit() \
                             or len(row) <= HKO_DX_ABS_MIN_COL:
@@ -982,7 +1008,8 @@ class Sources:
 
     def iem_overlay_truth_series(self, icao: str, timezone: str, target: dt.date,
                                  back_years: int = 2) -> DailySeries:
-        """Modern daily (high, low) at an IEM-overlay airport (EGLC, KSFO) reconstructed
+        """Modern daily (high, low) at an IEM-overlay airport (_IEM_OVERLAY_TZ:
+        EGLC/OPKC/OEJN — KSFO deliberately excluded, it anchors on WU) reconstructed
         from raw IEM ASOS METAR over the local calendar day — the settlement-grade sensor
         the market resolves on, replacing the stale/distant Meteostat bulk file. Spans the
         last `back_years` up to `target`; days with too few obs fall back to Meteostat. One
@@ -1032,12 +1059,18 @@ class Sources:
 
     def _fetch_metar_raw(self, icao: str, start: dt.date, end: dt.date,
                          timezone: str) -> list[tuple[str, float]]:
+        # The IEM archive treats day2 as EXCLUSIVE. Compensate HERE, once, so
+        # every caller's (start, end) is end-INCLUSIVE — previously only
+        # eglc_current compensated, which left a structural one-day hole at the
+        # obs-cache cutoff (past segment ended at cutoff−1, fresh tail started
+        # at cutoff+1) and truncated every other caller's final day.
         tz = timezone if "/" in (timezone or "") else "Etc/UTC"
+        iem_end = end + dt.timedelta(days=1)
         txt = self.http.get_text(METAR_URL, {
             "station": icao,
             "data": ["tmpc"],
             "year1": start.year, "month1": start.month, "day1": start.day,
-            "year2": end.year, "month2": end.month, "day2": end.day,
+            "year2": iem_end.year, "month2": iem_end.month, "day2": iem_end.day,
             "tz": tz, "format": "onlycomma", "latlon": "no",
             "missing": "empty", "trace": "empty",
             "report_type": [3, 4],
@@ -1092,12 +1125,13 @@ class Sources:
         tgt_iso = target.isoformat()
         temps = []
         for o in (data.get("observations") or []):
-            t, vt = o.get("temp"), o.get("valid_time_gmt")
-            if not isinstance(t, (int, float)) or not isinstance(vt, (int, float)):
+            vt = o.get("valid_time_gmt")
+            t = _wu_temp_f(o.get("temp"))               # screened, bool-excluded
+            if t is None or isinstance(vt, bool) or not isinstance(vt, (int, float)):
                 continue
             local = dt.datetime.fromtimestamp(vt, tz=dt.timezone.utc).astimezone(zone)
             if local.date().isoformat() == tgt_iso:      # LOCAL civil day only (no straddle)
-                temps.append(float(t))
+                temps.append(t)
         if not temps:
             return None
         max_f = max(temps)
@@ -1120,11 +1154,11 @@ class Sources:
                                     "apiKey": WU_API_KEY})
         except Exception:
             return None
-        t, m = d.get("temperature"), d.get("temperatureMax24Hour")
-        if not isinstance(t, (int, float)):
+        t = _wu_temp_f(d.get("temperature"))            # screened, bool-excluded
+        m = _wu_temp_f(d.get("temperatureMax24Hour"))
+        if t is None:
             return None
-        return {"cur_f": float(t),
-                "max24_f": float(m) if isinstance(m, (int, float)) else None,
+        return {"cur_f": t, "max24_f": m,
                 "valid_local": d.get("validTimeLocal")}
 
     def twc_forecast_daily(self, lat: float, lon: float, target: dt.date,
@@ -1227,13 +1261,16 @@ class Sources:
             except Exception:
                 data = {}
             for o in (data.get("observations") or []):
-                t = o.get("temp")
+                raw_t = o.get("temp")
                 vt = o.get("valid_time_gmt")
-                if not isinstance(t, (int, float)) or not isinstance(vt, (int, float)):
+                t = _wu_temp_f(raw_t)
+                if t is None or isinstance(vt, bool) or not isinstance(vt, (int, float)):
+                    if isinstance(raw_t, (int, float)) and not isinstance(raw_t, bool):
+                        self.qc["rejected"] += 1     # numeric but implausible
                     continue
                 self.qc["screened"] += 1
                 local = dt.datetime.fromtimestamp(vt, tz=dt.timezone.utc).astimezone(zone)
-                by_date.setdefault(local.date().isoformat(), []).append(float(t))
+                by_date.setdefault(local.date().isoformat(), []).append(t)
             cur = chunk_end + dt.timedelta(days=1)
         rows: list[tuple[str, float, float]] = []
         for d, temps in by_date.items():
@@ -1265,8 +1302,9 @@ class Sources:
         except Exception:
             return None
         obs = [o for o in (data.get("observations") or [])
-               if isinstance(o.get("temp"), (int, float))
-               and isinstance(o.get("valid_time_gmt"), (int, float))]
+               if _wu_temp_f(o.get("temp")) is not None
+               and isinstance(o.get("valid_time_gmt"), (int, float))
+               and not isinstance(o.get("valid_time_gmt"), bool)]
         if not obs:
             return None
         latest = max(obs, key=lambda o: o["valid_time_gmt"])
@@ -1318,13 +1356,16 @@ class Sources:
             except Exception:
                 data = {}
             for o in (data.get("observations") or []):
-                t = o.get("temp")
+                raw_t = o.get("temp")
                 vt = o.get("valid_time_gmt")
-                if not isinstance(t, (int, float)) or not isinstance(vt, (int, float)):
+                t = _wu_temp_f(raw_t)
+                if t is None or isinstance(vt, bool) or not isinstance(vt, (int, float)):
+                    if isinstance(raw_t, (int, float)) and not isinstance(raw_t, bool):
+                        self.qc["rejected"] += 1     # numeric but implausible
                     continue
                 self.qc["screened"] += 1
                 local = dt.datetime.fromtimestamp(vt, tz=dt.timezone.utc).astimezone(zone)
-                out.append((local.strftime("%Y-%m-%d %H:%M"), (float(t) - 32.0) * 5.0 / 9.0))
+                out.append((local.strftime("%Y-%m-%d %H:%M"), (t - 32.0) * 5.0 / 9.0))
             cur = chunk_end + dt.timedelta(days=1)
         out.sort()
         return out
@@ -1337,13 +1378,13 @@ class Sources:
         {temperature_2m, record_time} or None on any failure (caller then keeps
         the grid 'current'). METAR air temperature is whole-degree °C and the
         routine cadence is ~30 min (plus SPECIs), so this updates each time EGLC
-        reports. The window end is a day ahead because the IEM archive treats the
-        end date as exclusive — without it the feed cuts off before today."""
+        reports. End dates are inclusive (the raw fetcher compensates for the
+        IEM archive's exclusive day2 — no per-caller +1 anymore)."""
         today = dt.date.today()
         try:
             obs = self.fetch_metar_observations(
                 "EGLC", today - dt.timedelta(days=1),
-                today + dt.timedelta(days=1), "Europe/London")
+                today, "Europe/London")
         except Exception:
             return None
         if not obs:
@@ -1370,12 +1411,15 @@ class Sources:
         reports, so a peak between routine obs that fell in a SPECI is captured;
         a sub-minute spike that produced no report is not (a known limitation,
         the same one the public record has)."""
+        # day2 is EXCLUSIVE on the IEM archive — compensate here so the caller's
+        # end date is inclusive (same convention as _fetch_metar_raw).
         tz = timezone if "/" in (timezone or "") else "Etc/UTC"
+        iem_end = end + dt.timedelta(days=1)
         txt = self.http.get_text(METAR_URL, {
             "station": icao,
             "data": ["tmpf", "tmpc"],
             "year1": start.year, "month1": start.month, "day1": start.day,
-            "year2": end.year, "month2": end.month, "day2": end.day,
+            "year2": iem_end.year, "month2": iem_end.month, "day2": iem_end.day,
             "tz": tz, "format": "onlycomma", "latlon": "no",
             "missing": "empty", "trace": "empty",
             "report_type": [3, 4],
@@ -1392,17 +1436,16 @@ class Sources:
             f, c = _clean_temp_cell(p[2]), _clean_temp_cell(p[3])
             if c is None:
                 continue
-            by_day.setdefault(day, []).append((c, f if f is not None else c))
+            by_day.setdefault(day, []).append(c)      # °F is used only for grain counting
             total += 1
             if abs(c - round(c)) < 0.05:
                 n_c += 1
             if f is not None and abs(f - round(f)) < 0.05:
                 n_f += 1
         daily: DailySeries = {}
-        for day, obs in by_day.items():
-            if len(obs) < 12:          # too few obs to trust a daily extreme
+        for day, cs in by_day.items():
+            if len(cs) < WU_MIN_DAY_OBS:   # too few obs to trust a daily extreme
                 continue
-            cs = [c for c, _ in obs]
             daily[day] = (max(cs), min(cs))
         frac_c = n_c / total if total else 0.0
         frac_f = n_f / total if total else 0.0

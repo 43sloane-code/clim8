@@ -18,7 +18,9 @@ import argparse
 import json
 import os
 
-CITIES = {"Manila, Philippines": "Manila", "Singapore, Singapore": "Singapore"}
+CITIES = {"Manila, Philippines": "Manila", "Singapore, Singapore": "Singapore",
+          "London, United Kingdom": "London"}   # the tracked basket (London added 2026-07-15;
+                                                # its omission blinded the live gate counts)
 LIVE_N_TARGET = 20          # settled days/city before a live rate can gate anything
 BACKTEST_DAYAHEAD = 0.54    # the backtested day-ahead bucket-hit (the optimistic ref)
 

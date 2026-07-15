@@ -404,8 +404,6 @@ def _parse_event(e: dict) -> WeatherMarket | None:
                 elif "observatory" in low:
                     source = station
             break
-    precision = f"0.1°{grain}" if tenths else f"whole °{grain}"
-
     parsed = [b for b in (_parse_bucket(m) for m in markets) if b is not None]
     if not parsed:
         return None
@@ -416,6 +414,21 @@ def _parse_event(e: dict) -> WeatherMarket | None:
     unparsed = tuple(b.label for b in parsed if b.lo is None and b.hi is None)
     if not ladder:
         return None
+    # GRAIN FAIL-CLOSED: the description regex previously fail-OPENED to °C, so a
+    # °F market with drifted phrasing would be quantized as °C — every bucket
+    # mapping wrong. The bucket labels carry the contract's own unit; use them as
+    # the cross-check. Regex miss + unit-labeled ladder → trust the labels.
+    # Regex hit that CONTRADICTS the labels → refuse the event (no comparison is
+    # better than a mis-bucketed one).
+    has_f = any("°F" in b.label for b in ladder)
+    has_c = any("°C" in b.label for b in ladder)
+    label_grain = "F" if (has_f and not has_c) else ("C" if (has_c and not has_f) else None)
+    if label_grain is not None:
+        if station is None:
+            grain = label_grain
+        elif grain != label_grain:
+            return None
+    precision = f"0.1°{grain}" if tenths else f"whole °{grain}"
     # Gamma returns buckets in arbitrary order; sort into the temperature ladder
     # (below-tail, ascending interior, above-tail) so consumers see a real CDF.
     def _order(b: MarketBucket) -> float:
@@ -557,6 +570,12 @@ class MarketData:
                 )
             except SecurityError:
                 raise
+            except Exception:
+                # Parity with the sibling fetchers (slug/book/resolution): a
+                # transient error mid-pagination returns the pages already parsed
+                # instead of killing the whole market fetch; SecurityError still
+                # fails closed above.
+                break
             if not raw:
                 break
             for e in raw:
