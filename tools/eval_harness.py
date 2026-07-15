@@ -86,7 +86,10 @@ def gather(now_sgt: _dt.datetime | None = None) -> dict:
     dry = conv = 0
     try:
         for line in (ROOT / "ledger" / "singapore_pop.jsonl").read_text().splitlines():
-            r = json.loads(line)
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue          # one corrupt line must not kill the whole gather()
             dry += r.get("regime") == "dry"
             conv += r.get("regime") == "convective"
     except OSError:
@@ -123,11 +126,17 @@ def gather(now_sgt: _dt.datetime | None = None) -> dict:
         live["twc_ledger"] = None
     state["liveness"] = live
 
+    dead = []
     try:
-        dead = [json.loads(l)["id"] for l in
-                (ROOT / "ledger" / "dead_candidates.jsonl").read_text().splitlines() if l.strip()]
+        for l in (ROOT / "ledger" / "dead_candidates.jsonl").read_text().splitlines():
+            if not l.strip():
+                continue
+            try:
+                dead.append(json.loads(l)["id"])
+            except (ValueError, KeyError):
+                continue          # corrupt/partial dead-ledger line: skip, don't crash
     except OSError:
-        dead = []
+        pass
     state["dead"] = dead
     return state
 
@@ -213,10 +222,11 @@ def directives(state: dict) -> list[str]:
             L.append("       launchctl load ~/Library/LaunchAgents/com.weatherverdict.verdict-midday.plist    (13:15 SGT — fills 12/13)")
         rank += 1
     L.append(f"  {rank}. SINGAPORE MODEL: no open defect — band coverage 90% (calibrated, "
-             f"verify_skill), lock calibrated at its hour (replay 95.0% vs stated 94.1%, n=180). "
-             f"The one deferred Singapore lever is the pre-registered PoP regime split "
-             f"(weather-bound); its gate (frozen-A/B + disjoint folds) gets built WHEN the "
-             f"dry-day clock fills, not before.")
+             f"verify_skill), lock calibrated at its hour (replay 95.0% vs stated 94.1%, n=180) "
+             f"[figures frozen as of 2026-07-06 certification — re-run verify_skill.py for "
+             f"current]. The one deferred Singapore lever is the pre-registered PoP regime "
+             f"split (weather-bound); its gate (frozen-A/B + disjoint folds) gets built WHEN "
+             f"the dry-day clock fills, not before.")
     L.append("     (Manila: OUT OF SCOPE by user directive 2026-07-04 — its under-dispersion "
              "defect stays recorded in FINDINGS/HANDOFF, unworked.)")
     rank += 1
@@ -228,10 +238,12 @@ def directives(state: dict) -> list[str]:
              f"days): lock 15:00 bin {lock15}/{N_FLOOR}; TWC {twc['n']}/{TWC_GATE} "
              f"({twc_eta}); PoP {state['pop']['dry']}/{POP_GATE_DRY} dry days "
              f"(rate-limited by the weather itself). Redundant logging already guards them.")
-    L.append("  X. Spend NOTHING on: day-ahead point/conditioning levers (0/14, physics), "
-             "consensus overrides (day-ahead market ties the council 44%=44%), retro-computed "
-             "lock rows (feed-latency leak — 07-04's 91°F posted late; live-only rows), or "
-             "relitigating the dead ledger.")
+    n_dead = len(state.get("dead") or [])
+    L.append(f"  X. Spend NOTHING on: day-ahead point/conditioning levers (all dead — the "
+             f"ledger holds {n_dead} dead candidates incl. the 0/17 day-ahead class, D26, "
+             f"D28; σ-ceiling physics), consensus overrides (day-ahead market ties the "
+             f"council 44%=44%), retro-computed lock rows (feed-latency leak — 07-04's 91°F "
+             f"posted late; live-only rows), or relitigating the dead ledger.")
     return L
 
 
@@ -267,7 +279,9 @@ def _selftest() -> int:
     assert "UNINSTRUMENTED certification hours [12, 13, 18]" in d
     assert "verdict-midday.plist" in d and "verdict-evening.plist" in d
     assert "SINGAPORE MODEL: no open defect" in d and "OUT OF SCOPE" in d
-    assert "Spend NOTHING on" in d and "0/14" in d
+    # 2026-07-15: the anti-directive line now derives its dead-count from the
+    # ledger state instead of a hardcoded "0/14" (narration-over-ledgers class).
+    assert "Spend NOTHING on" in d and "dead candidates" in d and "0/17" in d
     full = dict(base); full["lock"] = dict(base["lock"], recent_hours={h: 2 for h in (12,13,14,15,16,18)})
     assert "UNINSTRUMENTED" not in "\n".join(directives(full))
     lv_state = dict(base)

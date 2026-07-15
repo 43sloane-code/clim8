@@ -964,6 +964,13 @@ class Council:
             try:
                 series = self.sources.wunderground_daily_series(
                     wu["icao"], wu_start, wu_end, place.timezone)
+            except RateLimitError:
+                # A THROTTLED oracle is retryable, not absent: falling through to
+                # the nearest-station loop silently re-anchored the verdict on a
+                # different sensor (~91-day-lagged Meteostat) for Manila/Singapore
+                # /SF — the exact "never silently re-anchor" breach the STRICT
+                # comment above promises against. Fail loud; the caller retries.
+                raise
             except Exception:
                 series = {}
             obs = dict(sorted(series.items())[-(window + 1):])   # most-recent window+1 days (canonical
@@ -1132,6 +1139,15 @@ class Council:
 
         analog_obs = self._analog_observed(fp, truth_source, w_start)
         if len(analog_obs) < MIN_SAMPLES:
+            # DISCLOSE the failed attempt: previously this early return left NO
+            # trace, so an out-of-season verdict served with the mis-seasoned
+            # trailing-window bias was indistinguishable from an in-season one.
+            truth_source["seasonal_analog"] = {
+                "applied": False,
+                "reason": (f"analog archive too thin ({len(analog_obs)} days < "
+                           f"{MIN_SAMPLES}) — trailing-window bias retained "
+                           f"despite ~{season_gap}d season gap"),
+            }
             return                                  # archive too thin to re-learn
 
         a_start = SEASON_ANALOG_ARCHIVE_FLOOR
@@ -1275,7 +1291,16 @@ class Council:
         metar = md["daily"]
         common = sorted(set(metar) & set(observed))
         check = None
-        if common:
+        # TAUTOLOGY GUARD (audit 2026-07-15): for WU-truth cities `observed` IS
+        # the Wunderground series and the WU branch above re-fetches the SAME
+        # feed — dh/dl ≡ 0 by construction, and the "source check" reported a
+        # feed agreeing perfectly with itself. Only EGLC-style splits (IEM truth
+        # vs WU settle) yield an independent cross-check; mark the rest.
+        same_feed = (icao.upper() in _WU_SETTLE_C_ICAOS
+                     and "Wunderground" in ((truth_source or {}).get("data_source") or ""))
+        if common and same_feed:
+            check = {"same_feed": True, "n": len(common)}
+        elif common:
             dh = [metar[d][0] - observed[d][0] for d in common]
             dl = [metar[d][1] - observed[d][1] for d in common]
             check = {

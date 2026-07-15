@@ -124,7 +124,9 @@ def _settlement_reference_for(place) -> dict[str, str] | None:
     """The user-declared settlement reference for this city, or None. Matched on
     case-insensitive city-name containment so 'London' / 'London, GB' both hit."""
     name = (getattr(place, "name", "") or "").strip().lower()
-    for key, ref in SETTLEMENT_REFERENCE.items():
+    if not name:
+        return None      # "" is a substring of every key — an unnamed place must not
+    for key, ref in SETTLEMENT_REFERENCE.items():   # silently inherit London's block
         if key in name or name in key:
             return ref
     return None
@@ -205,12 +207,19 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
     wu_dates = list(recent[-4:])
     if target <= today and target.isoformat() not in wu_dates:
         wu_dates.append(target.isoformat())
+    wu_target_failed = False
     for d in wu_dates:
         try:
             w = sources.wunderground_daily_max(icao, dt.date.fromisoformat(d),
                                                getattr(place, "timezone", None))   # WP-2: local-day
         except Exception:
             w = None
+            if d == target.isoformat():
+                # The header claims "settlement HIGH is the Wunderground oracle";
+                # if the ORACLE fetch failed, the headline record silently stays
+                # IEM — at a °F boundary that is the wrong settlement number.
+                # Track it so the render can say so instead of mislabeling.
+                wu_target_failed = True
         if not w:
             continue
         # Bucket in the market's NATIVE grain — SF settles whole-°F, so a °C bucket here
@@ -238,6 +247,7 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
         "name": ref["name"],
         "url": ref["url"],
         "grain": md.get("grain"),
+        "wu_target_failed": wu_target_failed,
         "target_date": target.isoformat(),
         "target_status": v.target_status,
         "target_record": target_record,
@@ -580,6 +590,13 @@ def _settlement_reference_lines(ref: dict) -> list[str]:
         L.append(f"    {ref['target_date']}: no {ref['icao']} record yet (target not "
                  f"finished or not in the archive) — verdict {_nat(vh):.1f}/{_nat(vl):.1f} °{u} "
                  f"stands to be checked against it once the day settles.")
+    if ref.get("wu_target_failed"):
+        # The header above claims the settlement HIGH is the WU oracle; when the
+        # oracle fetch failed the number shown is the IEM cross-ref — at a °F
+        # boundary that can be the WRONG settlement number. Never mislabel it.
+        L.append("    ⚠ WU ORACLE FETCH FAILED for the target day — the high above is the "
+                 "IEM cross-reference, NOT the settlement oracle; re-run before trusting a "
+                 "boundary call")
     off = ref.get("anchor_offset")
     if ref.get("anchor_is_same"):
         L.append(f"    anchor   : the council already backtests on {ref['icao']} — the "
@@ -771,6 +788,10 @@ def _bucket_call(v: Verdict, ceiling=None) -> dict:
                   f"{int(ceiling.hour):02d}:00 + remaining-rise over "
                   f"{getattr(ceiling, 'n_rise', 0)} prior days' intraday records; "
                   f"σ collapsed near the peak")
+        # The intraday pmf is in the ceiling's SETTLEMENT grain — on an °F city
+        # the header's "whole °C" rule text would misdescribe the buckets below it.
+        if str(getattr(ceiling, "grain", "C")).upper().startswith("F"):
+            rule = "whole °F (settlement grain)"
     else:
         pmf = da_pmf
         source = "day-ahead distribution"
@@ -806,6 +827,30 @@ def _bucket_int_from_label(label: str | None) -> int | None:
     return int(m.group()) if m else None
 
 
+def _twc_raw_high(v: Verdict) -> float | None:
+    """The point-in-time TWC forecast high for this (place, target) from
+    tracked_forecasts, or None. ONE source of truth for both consumers (the TWC
+    cross-reference block and the cross-check panel previously duplicated this
+    SQL and had already drifted). Connection closed on every path; a DB error is
+    recorded as a soft failure instead of silently erasing the divergent signal
+    — the exact 'dismissed divergent signal' class the panel exists to prevent."""
+    try:
+        from weather_council import storage as _st
+        conn = _st._connect()
+        try:
+            row = conn.execute(
+                "SELECT fc_high FROM tracked_forecasts WHERE source='twc' AND place=? "
+                "AND target_date=? ORDER BY issued_at LIMIT 1",
+                (v.place.label(), str(v.target))).fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:
+        from weather_council.failures import record_soft_failure
+        record_soft_failure("twc_tracked_read", exc)
+        return None
+    return float(row[0]) if row and row[0] is not None else None
+
+
 def _twc_cross_reference(v: Verdict) -> dict | None:
     """The TWC (Weather Company / weather.com) cross-reference for this (place, target): the raw
     published forecast, the MEASURED signed offset vs the WU oracle (weather_council.twc_offset,
@@ -817,25 +862,17 @@ def _twc_cross_reference(v: Verdict) -> dict | None:
     settles, and NOTHING here touches the council's served numbers. The offset is earned
     prospectively — it reads UNMEASURED (no adjustment) for weeks until n≥20, which is correct."""
     place = v.place.label()
-    try:
-        from weather_council import storage as _st
-        conn = _st._connect()
-        row = conn.execute(
-            "SELECT fc_high FROM tracked_forecasts WHERE source='twc' AND place=? "
-            "AND target_date=? ORDER BY issued_at LIMIT 1",
-            (place, str(v.target))).fetchone()
-        conn.close()
-    except Exception:
+    raw = _twc_raw_high(v)
+    if raw is None:
         return None
-    if not row or row[0] is None:
-        return None
-    raw = float(row[0])
+    read_failed = False
     try:
         from weather_council.twc_offset import estimate_offsets
         est = next((e for e in estimate_offsets("twc")
                     if e.place == place and e.attr == "high"), None)
     except Exception:
         est = None
+        read_failed = True     # measurement may EXIST; the read threw — not "n=0"
 
     sub = "hong kong" in place.lower()
     grain = est.grain if est else "C"
@@ -851,7 +888,9 @@ def _twc_cross_reference(v: Verdict) -> dict | None:
         "sign_test_p": est.sign_test_p if est else None,
         "mae_twc": est.mae_twc if est else None,
         "mae_council": est.mae_council if est else None,
-        "label": est.label() if est else "UNMEASURED (n=0)",
+        "label": (est.label() if est else
+                  ("offset read FAILED this run — measurement state unknown"
+                   if read_failed else "UNMEASURED (n=0)")),
         "adjusted": None, "adjusted_bucket": None, "divergence": None,
         "divergence_threshold": None, "amber": False,
     }
@@ -884,8 +923,12 @@ def _twc_cross_reference_lines(v: Verdict) -> list[str]:
         L.append(f"        offset-adjusted : {ref['adjusted']:.1f}°{g}  "
                  f"(bucket {ref['adjusted_bucket']}°{g}; council {ref['council_high']:.1f}°{g})")
         if ref["amber"]:
+            # mae_council can be None on a certified-direction day with no paired
+            # council errors yet — the threshold (always set on the amber path) is
+            # the number the comparison actually used, so quote it, never crash.
             L.append(f"        divergence      : {ref['divergence']:.1f}°{g} vs council — "
-                     f"⚠ LARGE (> 2× council MAE {ref['mae_council']:.1f}°{g}) — flag for review")
+                     f"⚠ LARGE (> threshold {ref['divergence_threshold']:.1f}°{g}"
+                     f" = 2× council MAE or fallback) — flag for review")
         else:
             L.append(f"        divergence      : {ref['divergence']:.1f}°{g} vs council — consistent")
     else:
@@ -945,20 +988,12 @@ def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
     # A cross-reference ONLY (WU settles, IEM cross-checks the observation) — surfaced at FACE
     # VALUE (recommend-only, un-gated): on 07-02 it was the only point signal that hit while the
     # council-cluster missed — dismissing divergent signals IS the mistake.
-    twc_raw = None
-    try:
-        from weather_council import storage as _st
-        conn = _st._connect()
-        row = conn.execute(
-            "SELECT fc_high FROM tracked_forecasts WHERE source='twc' AND place=? "
-            "AND target_date=? ORDER BY issued_at LIMIT 1",
-            (v.place.label(), str(v.target))).fetchone()
-        conn.close()
-        if row and row[0] is not None:
-            twc_raw = float(row[0])
-            signals.append(("twc-oracle", _native_reading_int(twc_raw, "C", sub)))
-    except Exception:
-        pass
+    twc_raw = _twc_raw_high(v)
+    if twc_raw is not None:
+        # "twc-forecast", not "twc-oracle": TWC never settles anything — the WU
+        # RECORD is the oracle. Calling the forecast an oracle inside a settlement
+        # cross-check panel contradicted the block's own doctrine one line up.
+        signals.append(("twc-forecast", _native_reading_int(twc_raw, "C", sub)))
     try:
         settled = [s for (_d, _srv, s, _h)
                    in live_bucket_scorecard(v.place.label()).get("recent", [])
@@ -1098,20 +1133,33 @@ def _bucket_call_lines(v: Verdict, ceiling=None, comparison=None, grade=None) ->
             st = getattr(ceiling, "day_state", None)
             sr = getattr(ceiling, "state_late_risk", None)
             if not grade.may_say_locked and st is not None and sr is not None:
+                # 1−P(modal) includes mass BELOW the modal on extrapolated-rise
+                # days — calling it "tail" overstated the raise side. Name it
+                # what it is: everything outside the modal bucket.
                 rise_p = max(0.0, 1.0 - (c["prob"] or 0.0))
                 L.append(f"      raise-risk while {st.upper()} at {int(ceiling.hour):02d}:00 "
-                         f"≈{sr*100:.0f}% (state×season backtest; pmf tail {rise_p*100:.0f}%); "
-                         f"settlement-grade only post-sunset or on a stable, closed endpoint")
+                         f"≈{sr*100:.0f}% (state×season backtest; non-modal pmf mass "
+                         f"{rise_p*100:.0f}%); settlement-grade only post-sunset or on a "
+                         f"stable, closed endpoint")
         else:
             # Grade resolver unavailable — serve the floor plainly, without finality words.
-            L.append(f"    ► INTRADAY : {c['bucket']}°C — {c['tier']} {c['prob']*100:.0f}% "
+            # Intraday buckets carry the ceiling's SETTLEMENT grain (°F for SF) — a
+            # hardcoded °C here printed "66°C" for a 66°F bucket.
+            iu = "°F" if str(getattr(ceiling, "grain", "C")).upper().startswith("F") else "°C"
+            L.append(f"    ► INTRADAY : {c['bucket']}{iu} — {c['tier']} {c['prob']*100:.0f}% "
                      f"(backtest; grade resolver unavailable — treat as PROVISIONAL)")
             L.append(f"      grounded in: {c['source']}")
+        iu = "°F" if str(getattr(ceiling, "grain", "C")).upper().startswith("F") else "°C"
         if span and len(span) == 1:
             L.append("      single bucket is confident now — σ collapsed at/after the peak")
         elif span:
-            L.append(f"      actionable range {span[0]}–{span[-1]}°C ({c['span_prob']*100:.0f}%)")
-        if c["day_ahead_bucket"] is not None and c["day_ahead_bucket"] != c["bucket"]:
+            L.append(f"      actionable range {span[0]}–{span[-1]}{iu} ({c['span_prob']*100:.0f}%)")
+        # The day-ahead bucket is ALWAYS °C while the intraday pmf is settlement-
+        # grain: on an °F city the two are different units, so the old inequality
+        # compared 19°C to 66°F, fired every run, and printed cross-unit numbers.
+        # Only compare (and only print the override note) when the grains agree.
+        if (iu == "°C" and c["day_ahead_bucket"] is not None
+                and c["day_ahead_bucket"] != c["bucket"]):
             L.append(f"      (the day-ahead preliminary had {c['day_ahead_bucket']}°C — the live "
                      f"intraday record OVERRIDES it; this is why we lead with the lock)")
     else:
@@ -1260,7 +1308,14 @@ def render(v: Verdict, comparison: VerdictMarketComparison | None = None,
         L.append(f"    settles as   : high {s['high_native']}  low {s['low_native']}  "
                  f"(verdict {v.high:.1f}/{v.low:.1f} °C snapped to the integer record)")
         chk = s.get("source_check")
-        if chk:
+        if chk and chk.get("same_feed"):
+            # No independent cross-check exists for this city: the settlement
+            # source IS the truth source. Say so — the old zero-mean "agreement"
+            # was a feed agreeing with itself, not evidence.
+            L.append(f"    source check : settlement source IS the backtest truth source "
+                     f"(same Wunderground feed, {chk['n']} days) — self-agreement is a "
+                     f"tautology, no independent cross-check")
+        elif chk:
             ts_src = (v.truth_source or {}).get("data_source") or ""
             is_wu = "Wunderground" in ts_src
             truth_name = ("the Wunderground settlement truth we backtest on" if is_wu
@@ -1831,18 +1886,6 @@ def verdict_to_dict(
     return d
 
 
-def to_json(
-    v: Verdict,
-    comparison: VerdictMarketComparison | None = None,
-    market_note: str | None = None,
-    settlement_ref: dict | None = None,
-    cross_reference: dict | None = None,
-) -> str:
-    return json.dumps(
-        verdict_to_dict(v, comparison, market_note, settlement_ref,
-                        cross_reference), indent=2)
-
-
 def _intraday_verdict_bucket(f, v: Verdict) -> int | None:
     """The whole-degree bucket the verdict's own high settles into, under the
     SAME quantizer the intraday floor uses — so the two are directly comparable."""
@@ -2213,22 +2256,43 @@ def main(argv=None) -> int:
         market_note = None
         low_comparison = None
         if args.market:
-            comparison, market_note = _build_comparison(sources, verdict, place, target)
+            # The market comparison is a read-only ADD-ON: a fetch/parse error here
+            # must never destroy a verdict that is already computed (it previously
+            # aborted main after log_verdict — the verdict was logged but never
+            # printed). Fail soft, say so, keep rendering.
+            try:
+                comparison, market_note = _build_comparison(sources, verdict, place, target)
+            except Exception as exc:
+                print(f"market comparison errored (verdict unaffected): {exc}",
+                      file=sys.stderr)
+                from weather_council.failures import record_soft_failure
+                record_soft_failure("market_comparison", exc)
             if comparison is not None:
                 # Persist the comparison so C7 can grade it once the day settles
                 # against the verdict's anchor station (recommend-only ledger).
                 issued_at = log_market_snapshot(verdict, comparison)
                 # Read-only: archive the executable order book at the SAME instant
                 # (focus cities only). Depth-walk P&L (paper_pnl) is measured against
-                # the mid this comparison used. Never breaks the verdict on failure.
+                # the mid this comparison used. Never breaks the verdict on failure —
+                # but never silently: the book archive is paper-P&L's input.
                 try:
                     from tools.book_logger import capture_for_place
                     capture_for_place(sources, place, target, issued_at)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    from weather_council.failures import record_soft_failure
+                    record_soft_failure("book_logger", exc)
             # Read-only LOW market comparison (own event; not yet persisted/settled —
             # low-snapshot logging + daily-min settlement is the registered follow-up).
-            low_comparison = _build_comparison_low(sources, verdict, place, target)
+            # Skipped in --json mode: verdict_to_dict has no low parameter, so the
+            # fetch was network spend whose result was silently discarded.
+            if not args.json:
+                try:
+                    low_comparison = _build_comparison_low(sources, verdict, place, target)
+                except Exception as exc:
+                    print(f"low-market comparison errored (verdict unaffected): {exc}",
+                          file=sys.stderr)
+                    from weather_council.failures import record_soft_failure
+                    record_soft_failure("market_comparison_low", exc)
 
         # User-pinned settlement reference (e.g. London -> Wunderground EGLC):
         # always compare & contrast the verdict against that airport's record.
