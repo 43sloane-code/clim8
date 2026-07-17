@@ -394,6 +394,44 @@ The wider lesson this section pins: when a directive lives only in prose next to
 number it should govern, the number will contradict it on exactly the day it matters —
 grep the render path for the directive's actual mechanism before trusting the line.
 
+## 14g. THE 00Z FINE-GRAIN READ + PATTERN LAYER (2026-07-16 — tools/finegrain_read.py)
+
+**The specimen.** KXHIGHTSFO-26JUL16, a 69-vs-70 °F boundary: obs peaked 69°F, the
+CLI-catch question (does Kalshi's record read above the obs max?) was worth ~50¢ of
+book. The instrument that resolved it FIVE HOURS before settlement, with zero new
+hosts: the NWS CLI settles the sensor's CONTINUOUS max, which lives in two METAR
+fields the whole-°F obs record hides —
+- **T-groups** (`T02060183` → 20.6°C, tenths precision, hourly), and
+- **6-hourly max groups** (`1 0206` at 00/06/12/18Z — the max over the whole prior
+  6h INCLUDING between-obs minutes; the 00Z ob ≈16:56 PDT covers the SF afternoon peak).
+07-16's print: 6h-max == T-group == 20.6°C = 69.1°F → CLI 69 → 68-69 won; Kalshi went
+0.99 within minutes. 07-15's mirror: a 2:18 PM between-obs peak the obs never showed
+printed CLI 74 vs obs 73.
+
+**The tool:** `PYTHONPATH=. python3 tools/finegrain_read.py --station KSFO
+--date <D> --tz America/Los_Angeles --pattern-hour 14` (KAT:
+tests/test_finegrain_read.py). Run it at EVERY °F boundary day; the frozen decision
+form is "≤ X.4°F → CLI X; ≥ X.6°F → CLI X+1" stated BEFORE the 00Z ob lands.
+
+**The driver lesson (this closes the offset-series trap).** The CLI-over-WU
+divergence series read +2,+3,+2,+1 (n=4, "always positive") — then 07-16 printed the
+first 0. The offset is NOT a constant: it is "CLI catches a between-obs spike WHEN
+ONE EXISTS." Spike-existence is the driver condition, and it is regime-dependent
+(heat-event days spike; flat marine days don't). The n=182 archive query measured it
+directly: of days with running max ~69°F at 14:00, only 43% ever touched 69.5°F.
+That instrument outranked the n=4 series, flipped the live favorite correctly, and
+is now standing kit:
+
+**OPERATOR DIRECTIVE (2026-07-16, standing): every full-stack verdict and intraday
+validation ALSO quotes the pattern layer** — (a) the archive pattern: the
+`pattern_rate` conditional (days matching today's running-max-at-hour → fraction
+reaching the next threshold, n quoted); (b) the recent-days specimens (this week's
+settles and how today's shape compares — e.g. 07-14 late re-heat / 07-15 hold /
+07-16 flat-top). Historical pattern + previous days ride alongside the pmf and the
+book in every read; none of the three is served alone. (D18 boundary: the pattern
+layer INFORMS the read, it never moves a served number — SF regime-lean as a lever
+is dead, D18.)
+
 # PART IV — tv_trading_agent (commits b14f423, da0cbbc)
 
 ## 15. Funding carry (grade A−)
