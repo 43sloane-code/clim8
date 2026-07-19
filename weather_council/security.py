@@ -13,6 +13,9 @@ vector even if a downstream string were ever attacker-influenced:
     nothing else.
   * SSRF guard — the host must resolve exclusively to public IPs; any
     private/loopback/link-local/reserved address aborts the request.
+    DNS-rebinding TOCTOU: the check resolves once and the TLS connection
+    resolves again; pinning the IP would close the gap but is accepted risk
+    given the read-only, no-credential, major-public-provider allowlist.
   * Response cap — compressed bodies over MAX_BYTES are rejected before being
     read into memory; gzip payloads are additionally bounded on the
     *decompressed* size (MAX_DECOMPRESSED) so a zip bomb cannot exhaust memory.
@@ -193,7 +196,18 @@ def _build_ssl_context() -> ssl.SSLContext:
 
 
 def _assert_public_host(host: str) -> None:
-    """Resolve the host and refuse if any address is non-public (SSRF guard)."""
+    """Resolve the host and refuse if any address is non-public (SSRF guard).
+
+    NOTE — accepted DNS-rebinding TOCTOU: this check resolves the hostname once;
+    the TLS connection resolves it again at connect time. A hostile allowlisted
+    host (or a compromised resolver) could answer public IPs here and a
+    private/loopback address when the connection is opened. That gap is accepted
+    under this project's threat model: allowlisted hosts are major public
+    providers, the client runs read-only against them, no credentials are stored
+    or sent beyond the public WU/Weatherbit API keys, and the UI binds
+    localhost only. Pinning the IP and connecting with a manual Host/SNI is
+    stdlib-possible but brittle; it is not justified here.
+    """
     try:
         infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
