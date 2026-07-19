@@ -92,9 +92,13 @@ Supporting work so the settlement view is trustworthy.
   integral per unit).
 - [x] Keep the headline verdict as the backtested continuous value; the
   settlement bucket is additive, never a silent relabel.
-- [ ] **B1. Round-trip the bucket through backtest.** Score the *quantized*
-  verdict against the *settlement source's* own integer record (not Meteostat)
-  to report a settlement-accuracy hit rate distinct from the continuous skill.
+- [x] **B1. Round-trip the bucket through backtest.** `storage.live_bucket_scorecard`
+  scores the served, quantized verdict against the contract's own settled bucket
+  (`pm_resolved_label`) over recent days, using the market's native grain. It
+  reports `n`, `hits`, `rate`, and the recent (date, served_bucket, true_bucket,
+  hit) list. The hit rule uses bucket *containment* (not edge equality), so tail
+  ranges and °F cities are scored honestly. It is consumed by eval_harness and
+  watchdog as the realized hit-rate line.
 - [ ] **B2. Tail-day diagnostics.** When tail days exist, list the specific
   dates and the raw METAR vs Meteostat values so the divergence is auditable.
 - [ ] **B3. Grain-detection guardrail.** If the integral-fraction evidence is
