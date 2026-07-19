@@ -35,6 +35,7 @@ __all__ = ['IntradayCeiling', 'remaining_rise_samples', 'sharpen_pmf',
            'intraday_ceiling', 'banked_vs_leading', 'peak_close_hour_from_history']
 
 import datetime as dt
+import re
 from dataclasses import dataclass, field
 
 from .market import _native_reading_int
@@ -297,8 +298,17 @@ _LIVE_REGISTER = {"singapore", "london", "san francisco", "karachi", "jeddah"}
 
 def _city_key(place: Place) -> str | None:
     name = (getattr(place, "name", "") or "").strip().lower()
-    for key in (*_HOURLY_STATION, *_NO_HOURLY):
-        if key in name or name in key:
+    keys = (*_HOURLY_STATION, *_NO_HOURLY)
+    # Exact match first (the common case).
+    for key in keys:
+        if key == name:
+            return key
+    # Phrase-boundary match for decorated forms like "London, GB" or
+    # "San Francisco, US". Substring and prefix-into-longer-phrase matches are
+    # forbidden: "Londonderry", "Manilal", and "San Francisco de Macorís" must
+    # not inherit settlement config from a configured city.
+    for key in keys:
+        if re.search(r"\b" + re.escape(key) + r"\b(?!\s+[a-z])", name):
             return key
     return None
 

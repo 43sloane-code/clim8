@@ -12,8 +12,8 @@ import unittest
 
 from weather_council.sources import Place
 from weather_council.intraday_ceiling import (
-    IntradayCeiling, intraday_ceiling, remaining_rise_samples, sharpen_pmf,
-    MIN_RISE_SAMPLES)
+    IntradayCeiling, _city_key, intraday_ceiling, remaining_rise_samples,
+    sharpen_pmf, MIN_RISE_SAMPLES)
 
 
 LDN = Place(name="London", country="GB", latitude=51.51, longitude=-0.13,
@@ -164,6 +164,29 @@ class TestManila(unittest.TestCase):
         self.assertEqual(c.hour, 15)
         self.assertAlmostEqual(c.running_max_c, 33.4)
         self.assertEqual(sum(p for _, p in c.pmf) > 0, True)
+
+
+class TestCityKey(unittest.TestCase):
+    def test_exact_match(self):
+        self.assertEqual(_city_key(LDN), "london")
+        self.assertEqual(_city_key(MANILA), "manila")
+
+    def test_decorated_form_matches_word_boundary(self):
+        p = Place(name="London, GB", country="GB", latitude=51.5, longitude=-0.1,
+                  timezone="Europe/London")
+        self.assertEqual(_city_key(p), "london")
+
+    def test_substring_collision_returns_none(self):
+        for bad in ["Londonderry", "Manilal", "San Francisco de Macorís",
+                    "Singaporean"]:
+            p = Place(name=bad, country="XX", latitude=0, longitude=0,
+                      timezone="UTC")
+            self.assertIsNone(_city_key(p), f"{bad!r} must not match")
+
+    def test_unknown_city_returns_none(self):
+        p = Place(name="Tokyo", country="JP", latitude=35.68, longitude=139.69,
+                  timezone="Asia/Tokyo")
+        self.assertIsNone(_city_key(p))
 
 
 if __name__ == "__main__":
