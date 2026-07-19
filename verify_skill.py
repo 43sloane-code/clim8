@@ -25,13 +25,15 @@ USAGE
 
 INPUT SCHEMAS
   records.jsonl -- one JSON object per settled city-day:
-    {"date": "2026-07-02", "city": "manila", "lead": "day_ahead"|"post_peak"|...,
+    {"date": "2026-07-02", "city": "manila", "lead": "day_ahead"|"same_day"|"post_peak",
+     "issue_hour": 9.5,
      "probs": {"31": 0.10, "32": 0.45, "33": 0.30, "34": 0.10, "35": 0.05},
      "settled": 35,
      "band_lo": 31, "band_hi": 33, "conviction": 0.80}   # band fields optional
-  season_base_rates.json -- proper climatology reference, per city:
-    {"manila": {"31": 0.05, "32": 0.25, "33": 0.20, "34": 0.15, "35": 0.17,
-                "36": 0.16, "37": 0.02}, "singapore": {...}, ...}
+  season_base_rates.json -- proper climatology reference, per city, plus a
+    `_meta` provenance block (window, source, generated date) that is printed
+    but skipped during scoring:
+    {"manila": {"31": 0.05, ...}, "singapore": {...}, "_meta": {...}}
 
 OUTPUT
   Markdown report to stdout: per-city + pooled Brier, RPS, BSS, RPSS
@@ -156,7 +158,12 @@ def coverage_table(records):
         if r.get("band_lo") is None or r.get("band_hi") is None:
             continue
         hit = int(r["band_lo"]) <= int(r["settled"]) <= int(r["band_hi"])
-        conv = round(float(r.get("conviction", float("nan"))), 2)
+        raw_conv = r.get("conviction")
+        if raw_conv is None:
+            continue
+        conv = round(float(raw_conv), 2)
+        if math.isnan(conv):
+            continue
         by_conv[conv][0] += hit
         by_conv[conv][1] += 1
         by_city[r["city"]][0] += hit
@@ -192,7 +199,7 @@ def run(records, climo, n_boot, seed, lead_filter):
         return 2
 
     cut = lead_filter or "all leads"
-    print(f"# Skill verification -- reference = SEASON BASE RATE (not LOO)")
+    print("# Skill verification -- reference = SEASON BASE RATE (not LOO)")
     print(f"Cut: **{cut}** | records scored: **{len(scored)}** | "
           f"skipped: {len(skipped)} | bootstrap: {n_boot} resamples, seed {seed}\n")
 
@@ -277,6 +284,16 @@ def main():
     except (OSError, json.JSONDecodeError) as e:
         print(f"Input error: {e}", file=sys.stderr)
         return 2
+
+    meta = climo.pop("_meta", None)
+    if meta:
+        print("# Season base rate provenance")
+        print(f"Generated: {meta.get('generated', 'unknown')}")
+        win = meta.get("window") or {}
+        print(f"Window: {win.get('start', '?')} to {win.get('end', '?')} "
+              f"({win.get('days', '?')} days)")
+        print(f"Source: {meta.get('source', 'unknown')}")
+        print(f"Note: {meta.get('note', 'none')}\n")
 
     return run(records, climo, args.boot, args.seed, args.lead)
 
