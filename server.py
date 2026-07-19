@@ -17,6 +17,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -27,7 +28,7 @@ from weather_council.council import Council
 from weather_council.edge import report_lines as edge_report_lines, score_snapshots
 from weather_council.loop import Experiment, gate_deploy
 from weather_council.security import RateLimitError, SecurityError
-from weather_council.sources import Sources
+from weather_council.sources import Sources, place_today
 from weather_council.storage import (fetch_settled_snapshots,
                                      settle_market_snapshots, verify)
 
@@ -40,12 +41,19 @@ STALE_HOURS = 36.0           # > ~1.5 daily cycles ⇒ the scheduled check misse
 MAX_LEAD = 15
 MIN_WINDOW, MAX_WINDOW = 15, 365
 
+# Serialize verdict runs: each one issues dozens of outbound requests and can
+# exhaust the keyless WU request budget if overlapping. Queue rather than fail:
+# a saturated semaphore returns 503 with retryable=true so the UI can poll.
+_VERDICT_LOCK = threading.Semaphore(1)
+
 
 def _run_verdict(city: str, date_s: str, window_s: str, with_market: bool = False) -> dict:
     sources = Sources()
     place = sources.geocode(city)            # also validates the city name
 
-    today = dt.date.today()
+    # City-local "today" — the same anchor run.py uses. Fixes the UTC-1 host bug
+    # where a Singapore-evening request computed tomorrow from the wrong date.
+    today = place_today(place)
     if date_s:
         try:
             target = dt.date.fromisoformat(date_s)
@@ -180,6 +188,14 @@ class Handler(BaseHTTPRequestHandler):
             date_s = qs.get("date", [""])[0].strip()
             window_s = qs.get("window", [""])[0].strip()
             with_market = qs.get("market", [""])[0].strip().lower() in ("1", "true", "yes")
+
+            # Serialize verdict runs: each is network-heavy and hammers the single
+            # keyless WU budget. Saturated requests get a retryable 503.
+            if not _VERDICT_LOCK.acquire(blocking=False):
+                self._send(503, json.dumps(
+                    {"error": "another verdict run is in progress",
+                     "retryable": True}).encode(), "application/json")
+                return
             try:
                 data = _run_verdict(city, date_s, window_s, with_market)
                 self._send(200, json.dumps(data).encode(), "application/json")
@@ -193,6 +209,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, json.dumps({"error": str(exc)}).encode(), "application/json")
             except Exception as exc:
                 self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+            finally:
+                _VERDICT_LOCK.release()
             return
 
         self._send(404, b"not found", "text/plain")
