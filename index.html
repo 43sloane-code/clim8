@@ -164,6 +164,11 @@ const f0 = x => (x===null||x===undefined) ? "–" : Math.round(x);
 const pct = x => (x===null||x===undefined) ? "–" : Math.round(x*100)+"%";
 const pad2 = x => String(x).padStart(2,"0");
 
+const esc = s => {
+  if (s == null) return "";
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+};
+
 function sparkline(curve){
   if(!curve || curve.length<2) return "";
   const W=560, H=90, pad=22;
@@ -227,9 +232,9 @@ function summarySentence(d){
   const agree = ens.agreement_within_2c.high;
   let s = `Across ${d.members.length} independent national weather services`;
   if(ens.member_count) s += ` and a ${ens.member_count}-member ensemble`;
-  s += `, the skill-weighted verdict for ${d.place} on ${d.target} is a high of `;
+  s += `, the skill-weighted verdict for ${esc(d.place)} on ${esc(d.target)} is a high of `;
   s += `<b>${f1(v.high)} °C</b> and a low of <b>${f1(v.low)} °C</b>. `;
-  s += `Confidence is <b>${v.confidence.toUpperCase()}</b>`;
+  s += `Confidence is <b>${esc(v.confidence.toUpperCase())}</b>`;
   const bits=[];
   if(agree!==null&&agree!==undefined) bits.push(`${pct(agree)} of ensemble members agree within ±2 °C`);
   if(val.hit_rate_within_2c!==null&&val.hit_rate_within_2c!==undefined)
@@ -245,7 +250,7 @@ function confidenceWhy(d){
   if(!Object.keys(cd).length) return "";
   const hr=cd.hit_rate_within_2c;
   const base = hr!==null&&hr!==undefined
-    ? `Earned from backtest: this method landed within ±2 °C on <b>${pct(hr)}</b> of held-out days (base tier <b>${(cd.backtest_tier||'').toUpperCase()}</b>).`
+    ? `Earned from backtest: this method landed within ±2 °C on <b>${pct(hr)}</b> of held-out days (base tier <b>${esc((cd.backtest_tier||'').toUpperCase())}</b>).`
     : `No held-out history to test here, so the base tier floors at LOW.`;
   let risk;
   const eff=cd.effective_uncertainty, pen=cd.tiers_downgraded||0;
@@ -280,19 +285,19 @@ function render(d){
 
   // hero
   h += `<div class="hero">
-    <h2>${d.place}</h2>
-    <div class="when">${d.target} &nbsp;·&nbsp; verdict from ${itp.members_used} weather services</div>
+    <h2>${esc(d.place)}</h2>
+    <div class="when">${esc(d.target)} &nbsp;·&nbsp; verdict from ${itp.members_used} weather services</div>
     <div class="temps">
       <div class="temp"><div class="v">${f1(v.high)}°</div><div class="k">High</div></div>
       <div class="temp"><div class="v">${f1(v.low)}°</div><div class="k">Low</div></div>
-      <div class="temp"><span class="badge ${v.confidence}">${v.confidence} confidence</span></div>
+      <div class="temp"><span class="badge ${esc(v.confidence)}">${esc(v.confidence)} confidence</span></div>
     </div>
     <div class="summary">${summarySentence(d)}</div>
     <div class="summary" style="opacity:.8;font-size:13px">${confidenceWhy(d)}</div>
     <div class="summary" style="opacity:.7;font-size:12px;margin-top:6px">
       <b>${d.target_status==="forecast"?"Forecast":"Recorded"}.</b> ${statusLabel}.
-      ${onStation&&ts.label?`<br>Anchored on <b>${ts.label}</b>.`:""}
-      ${d.target_basis?`<br>These numbers describe the ${d.target_basis}`:""}
+      ${onStation&&ts.label?`<br>Anchored on <b>${esc(ts.label)}</b>.`:""}
+      ${d.target_basis?`<br>These numbers describe the ${esc(d.target_basis)}`:""}
     </div>
   </div>`;
 
@@ -313,7 +318,7 @@ function render(d){
       ${tend}
     </div>
     <div class="kv" style="margin-top:8px"><span>Recent observed H/L: <b>${recent||"–"}</b></span></div>
-    <div class="kv" style="margin-top:8px"><span class="pill">Truth backbone: ${obs.backbone}</span></div>
+    <div class="kv" style="margin-top:8px"><span class="pill">Truth backbone: ${esc(obs.backbone)}</span></div>
     <div class="kv" style="margin-top:6px"><span class="pill">Quality control: ${qc.screened} values screened, ${qc.rejected} rejected as out-of-band anomalies</span></div>
   </div>`;
 
@@ -325,11 +330,11 @@ function render(d){
     h += `<div class="card"><h3>Daily peak &amp; trough — when it lands</h3>
       ${sparkline(dn.curve||[])}
       <div class="kv" style="margin-top:10px">
-        <span>Hottest: <b>${f1(dn.peak.temp)} °C</b> around <b>${dn.peak.time||'–'}</b> local
+        <span>Hottest: <b>${f1(dn.peak.temp)} °C</b> around <b>${esc(dn.peak.time||'–')}</b> local
           &nbsp;${band(op)} ${chk(dn.peak_time_consistent)}</span>
       </div>
       <div class="kv" style="margin-top:6px">
-        <span>Coldest: <b>${f1(dn.trough.temp)} °C</b> around <b>${dn.trough.time||'–'}</b> local
+        <span>Coldest: <b>${f1(dn.trough.temp)} °C</b> around <b>${esc(dn.trough.time||'–')}</b> local
           &nbsp;${band(ot)} ${chk(dn.trough_time_consistent)}</span>
       </div>
       <div class="kv" style="margin-top:8px"><span class="pill">Peak/trough times from the multi-model hourly curve; observed bands from the ${dn.history_days}-day ERA5 hourly archive (circular statistics).</span></div>
@@ -404,10 +409,10 @@ function render(d){
     }
     h += `<div class="card"><h3>Settlement alignment — how this resolves against the market's record</h3>
       <div class="kv">
-        <span>Settles as: high <b class="good">${st.high_native}</b>  low <b class="good">${st.low_native}</b></span>
+        <span>Settles as: high <b class="good">${esc(st.high_native)}</b>  low <b class="good">${esc(st.low_native)}</b></span>
         <span>Native grain: <b>${unit}</b>${ev!=null?` (${ev}% of raw METAR obs integral in ${st.grain})`:""}</span>
       </div>
-      <div class="kv" style="margin-top:8px"><span>The continuous verdict <b>${f1(v.high)}/${f1(v.low)} °C</b> snapped onto the airport sensor's integer record — the value a whole-degree contract reads. Source: ${st.source||"raw airport METAR"}.</span></div>
+      <div class="kv" style="margin-top:8px"><span>The continuous verdict <b>${f1(v.high)}/${f1(v.low)} °C</b> snapped onto the airport sensor's integer record — the value a whole-degree contract reads. Source: ${esc(st.source||"raw airport METAR")}.</span></div>
       ${checkHtml}
     </div>`;
   }
@@ -417,12 +422,12 @@ function render(d){
   // anchor shown as a cross-reference.
   const xr = d.anchor_cross_reference;
   if(xr){
-    const anchor = xr.anchor_station || "the settlement station";
-    const anchorDisp = xr.anchor_icao ? `${anchor} (${xr.anchor_icao})` : anchor;
-    const xref = xr.cross_ref_station || "the cross-reference station";
+    const anchor = esc(xr.anchor_station || "the settlement station");
+    const anchorDisp = xr.anchor_icao ? `${anchor} (${esc(xr.anchor_icao)})` : anchor;
+    const xref = esc(xr.cross_ref_station || "the cross-reference station");
     let body;
     if(xr.error){
-      body = `<div class="kv" style="margin-top:8px"><span class="pill bad">Cross-reference unavailable this run (${xr.error}). The verdict still stands on the ${anchor} anchor.</span></div>`;
+      body = `<div class="kv" style="margin-top:8px"><span class="pill bad">Cross-reference unavailable this run (${esc(xr.error)}). The verdict still stands on the ${anchor} anchor.</span></div>`;
     } else {
       const negligible = Math.abs(xr.high_mean) < 0.15;
       const vintage = xr.is_modern ? "live overlap" : "climatological (stale) overlap";
@@ -438,7 +443,7 @@ function render(d){
         <div class="kv" style="margin-top:8px"><span class="pill${negligible?'':' bad'}">${takeaway}</span></div>`;
     }
     h += `<div class="card"><h3>Anchor — ${anchorDisp} <span class="pill">user-pinned</span></h3>
-      <div class="kv"><span>${xr.note}</span></div>
+      <div class="kv"><span>${esc(xr.note)}</span></div>
       ${xr.data_source==="hko_opendata"?`<div class="kv" style="margin-top:6px"><span>Feed: Hong Kong Observatory open-data (data.weather.gov.hk) — the live settlement record</span></div>`:""}
       ${body}
     </div>`;
@@ -463,7 +468,7 @@ function render(d){
       const mW = Math.round(100*mp/maxP/2), kW = (kp==null?0:Math.round(100*kp/maxP/2));
       const dCls = d2==null?"":Math.abs(d2)>=.1?(d2>0?"good":"bad"):"";
       return `<tr>
-        <td>${b.label}</td>
+        <td>${esc(b.label)}</td>
         <td>${pct(mp)}</td>
         <td>${kp==null?'–':pct(kp)}</td>
         <td><div class="dbar"><i class="k" style="left:0;width:${kW}%"></i><i class="m" style="left:0;width:${mW}%;opacity:.85"></i></div></td>
@@ -474,34 +479,34 @@ function render(d){
     const ov = mc.market_overround;
     h += `<div class="card"><h3>Market comparison — model vs Polymarket (read-only)</h3>
       <div class="kv">
-        <span>Market: <b>${mc.market_title}</b></span>
+        <span>Market: <b>${esc(mc.market_title)}</b></span>
       </div>
-      ${(mc.settles_sub_degree && mc.settlement_offset_c!=null)?`<div class="kv" style="margin-top:6px"><span class="pill${mcStale?' bad':''}">Station transfer: this market settles sub-degree on a <b>different station</b> than the council backtests. Rather than withhold, the verdict is moved onto the settlement scale by a <b>measured</b> offset — ${mc.settlement_offset_note}. Settlement-scale high <b>${f2(mc.settlement_high_c)} °C</b> (verdict ${f1(mc.verdict_high_c)} ${mc.settlement_offset_c>0?'+':''}${f2(mc.settlement_offset_c)} offset).${mcStale?` <b>⚠ STALE TRANSFER:</b> this offset is climatological, not live — the stations may have diverged since the overlap ended, so the settlement-scale number is unreliable and <b>no model edge over the market is asserted</b>.`:""}</span></div>`:""}
+      ${(mc.settles_sub_degree && mc.settlement_offset_c!=null)?`<div class="kv" style="margin-top:6px"><span class="pill${mcStale?' bad':''}">Station transfer: this market settles sub-degree on a <b>different station</b> than the council backtests. Rather than withhold, the verdict is moved onto the settlement scale by a <b>measured</b> offset — ${esc(mc.settlement_offset_note)}. Settlement-scale high <b>${f2(mc.settlement_high_c)} °C</b> (verdict ${f1(mc.verdict_high_c)} ${mc.settlement_offset_c>0?'+':''}${f2(mc.settlement_offset_c)} offset).${mcStale?` <b>⚠ STALE TRANSFER:</b> this offset is climatological, not live — the stations may have diverged since the overlap ended, so the settlement-scale number is unreliable and <b>no model edge over the market is asserted</b>.`:""}</span></div>`:""}
       <div class="kv" style="margin-top:6px">
-        <span>Settles: <b>whole °${mc.grain}</b></span>
-        <span>Verdict <b>${f1(mc.verdict_high_c)} °C</b> → ${mcRounded?`<b class="bad">rounds to ${mc.verdict_reading}°</b> <span class="pill">ROUNDED</span>`:`reads <b>${mc.verdict_reading}°</b>`} → bucket <b>${mc.verdict_bucket||'–'}</b></span>
+        <span>Settles: <b>whole °${esc(mc.grain)}</b></span>
+        <span>Verdict <b>${f1(mc.verdict_high_c)} °C</b> → ${mcRounded?`<b class="bad">rounds to ${esc(mc.verdict_reading)}°</b> <span class="pill">ROUNDED</span>`:`reads <b>${esc(mc.verdict_reading)}°</b>`} → bucket <b>${esc(mc.verdict_bucket||'–')}</b></span>
         ${mc.edge_distance_c!=null?`<span>Edge distance: <b class="${mcFragile?'bad':'meh'}">${f1(mc.edge_distance_c)} °C</b>${mcFragile?` <span class="pill">a shift this small flips the bucket</span>`:""}</span>`:""}
       </div>
       <div class="kv" style="margin-top:6px">
-        <span>Modal bucket: model <b>${mc.model_modal||'–'}</b> · market <b>${mc.market_modal||'–'}</b></span>
+        <span>Modal bucket: model <b>${esc(mc.model_modal||'–')}</b> · market <b>${esc(mc.market_modal||'–')}</b></span>
         ${ov!=null?`<span>Overround (vig): <b>${ov>0?'+':''}${Math.round(ov*1000)/10}%</b> — removed in “mkt”</span>`:""}
       </div>
-      ${(mc.model_modal && mc.market_modal && mc.model_modal!==mc.market_modal)?(mcStale?`<div class="kv" style="margin-top:6px"><span class="pill bad"><b>Defer to the market (no model edge).</b> The model favours <b>${mc.model_modal}</b> on the backtest station, but the transfer to the settlement sensor is <b>stale</b> (above), so this is <b>not</b> a model edge. The market favours <b>${mc.market_modal}</b>; with no live settlement-sensor data, treat the market's <b>${mc.market_modal}</b> as the better settlement-scale estimate. The model's value is the backtest-station forecast, not the settlement number.</span></div>`:`<div class="kv" style="margin-top:6px"><span class="pill"><b>Model disagrees with the market.</b> Model ${f1(mc.settlement_high_c!=null?mc.settlement_high_c:mc.verdict_high_c)} °C favours <b>${mc.model_modal}</b>; the market favours <b>${mc.market_modal}</b>. The model is the <b>backtested</b> side — it beat naive, persistence and climatology on <b>${mc.n_residuals}</b> held-out days. This divergence is earned signal, not noise.</span></div>`):""}
+      ${(mc.model_modal && mc.market_modal && mc.model_modal!==mc.market_modal)?(mcStale?`<div class="kv" style="margin-top:6px"><span class="pill bad"><b>Defer to the market (no model edge).</b> The model favours <b>${esc(mc.model_modal)}</b> on the backtest station, but the transfer to the settlement sensor is <b>stale</b> (above), so this is <b>not</b> a model edge. The market favours <b>${esc(mc.market_modal)}</b>; with no live settlement-sensor data, treat the market's <b>${esc(mc.market_modal)}</b> as the better settlement-scale estimate. The model's value is the backtest-station forecast, not the settlement number.</span></div>`:`<div class="kv" style="margin-top:6px"><span class="pill"><b>Model disagrees with the market.</b> Model ${f1(mc.settlement_high_c!=null?mc.settlement_high_c:mc.verdict_high_c)} °C favours <b>${esc(mc.model_modal)}</b>; the market favours <b>${esc(mc.market_modal)}</b>. The model is the <b>backtested</b> side — it beat naive, persistence and climatology on <b>${mc.n_residuals}</b> held-out days. This divergence is earned signal, not noise.</span></div>`):""}
       ${mc.bias_correction_c!=null?(Math.abs(mc.bias_correction_c)>=0.05?`<div class="kv" style="margin-top:6px"><span class="pill">Backtested correction: the verdict bakes in a bias correction of <b>${mc.bias_correction_c>0?'+':''}${f2(mc.bias_correction_c)} °C</b> (raw multi-model blend pulled ${mc.bias_correction_c<0?'down':'up'}), learned over <b>${mc.n_residuals}</b> held-out days — ${mcStale?`this corrects the verdict on the <b>backtest station</b>; it does <b>not</b> justify diverging from the market, which prices the settlement sensor the stale transfer can't reach.`:`an <b>earned</b> reason to diverge from the market, not noise.`}</span></div>`:`<div class="kv" style="margin-top:6px"><span class="pill">Negligible bias correction (${mc.bias_correction_c>0?'+':''}${f2(mc.bias_correction_c)} °C over ${mc.n_residuals} held-out days); any divergence here is the raw multi-model consensus itself.</span></div>`):""}
-      ${(mcRounded && mcFragile && mc.model_modal===mc.verdict_bucket && mc.market_modal!==mc.model_modal)?`<div class="kv" style="margin-top:6px"><span class="pill">The integer label <b>${mc.verdict_reading}°</b> is fragile: ${f1(mc.verdict_high_c)} °C is only ${f1(mc.edge_distance_c)} °C from the ${mc.verdict_bucket}/${mc.market_modal} edge, so don't over-read the bucket. The continuous verdict (<b>${f1(mc.verdict_high_c)} °C</b>) is the real signal — see the backtested-correction note and the model-vs-market column.</span></div>`:""}
+      ${(mcRounded && mcFragile && mc.model_modal===mc.verdict_bucket && mc.market_modal!==mc.model_modal)?`<div class="kv" style="margin-top:6px"><span class="pill">The integer label <b>${esc(mc.verdict_reading)}°</b> is fragile: ${f1(mc.verdict_high_c)} °C is only ${f1(mc.edge_distance_c)} °C from the ${esc(mc.verdict_bucket)}/${esc(mc.market_modal)} edge, so don't over-read the bucket. The continuous verdict (<b>${f1(mc.verdict_high_c)} °C</b>) is the real signal — see the backtested-correction note and the model-vs-market column.</span></div>`:""}
       <table style="margin-top:10px">
         <tr><th>Bucket</th><th>model</th><th>mkt</th><th>distribution</th><th>Δ</th></tr>
         ${brows}
       </table>
       <div class="legend"><span><i class="m"></i>model</span><span><i class="k"></i>market (de-vigged)</span></div>
       ${cal?`<div class="kv" style="margin-top:10px"><span class="pill">Calibration: ${cal.n} held-out errors — bias ${cal.bias>0?'+':''}${f1(cal.bias)} °C, spread ${f1(cal.spread)} °C${Math.abs(cal.skew)>=.3?`, warm-skewed ${cal.skew>0?'+':''}${f1(cal.skew)}`:""}${cal.coverage_80!=null?`, ${pct(cal.coverage_80)} out-of-sample coverage of the 80% band (n=${cal.coverage_n})`:""}.</span></div>`:""}
-      ${mc.settlement_bias_note?`<div class="kv" style="margin-top:6px"><span class="pill">${mc.settlement_bias_note}</span></div>`:""}
+      ${mc.settlement_bias_note?`<div class="kv" style="margin-top:6px"><span class="pill">${esc(mc.settlement_bias_note)}</span></div>`:""}
       <div class="kv" style="margin-top:8px"><span class="bad">⚠ NOT a validated edge.</span> <span class="pill">Model probabilities are resampled from the council's held-out backtest errors and live on the backtest-truth scale; no realized-outcome calibration exists yet. This is a comparison, not a trading signal — the project never places trades.</span></div>
     </div>`;
   } else if(d.market_note){
     h += `<div class="card"><h3>Market comparison — withheld</h3>
       <div class="kv"><span class="bad">⚠ Comparison withheld for this market.</span></div>
-      <div class="kv" style="margin-top:8px"><span class="pill">${d.market_note}</span></div>
+      <div class="kv" style="margin-top:8px"><span class="pill">${esc(d.market_note)}</span></div>
     </div>`;
   }
 
@@ -515,11 +520,11 @@ function render(d){
     const scale = con.scaled_by_effective_sigma ? "σ" : `σ≈${f2(con.sigma_used)}°C`;
     const row = (label, hi, lo) => (hi!=null)
       ? `<span>${label}: <b>${f1(hi)} / ${f1(lo)} °C</b></span>` : "";
-    const trust = rc.trusted_validation.map(t=>`<li>${t}</li>`).join("");
+    const trust = rc.trusted_validation.map(t=>`<li>${esc(t)}</li>`).join("");
     h += `<div class="card"><h3>Regime &amp; consensus — do the mechanisms agree?</h3>
-      <div class="kv"><span>Regime: <b>${reg.label}</b></span></div>
+      <div class="kv"><span>Regime: <b>${esc(reg.label)}</b></span></div>
       <div class="kv" style="margin-top:6px">
-        <span>Consensus: <b class="${cls}">${con.status.toUpperCase()}</b> — estimators agree within <b>${con.worst_ratio}${scale}</b> (worst: ${con.worst_axis})</span>
+        <span>Consensus: <b class="${cls}">${esc(con.status.toUpperCase())}</b> — estimators agree within <b>${con.worst_ratio}${scale}</b> (worst: ${esc(con.worst_axis)})</span>
       </div>
       <div class="kv" style="margin-top:8px">
         ${row("Verdict (deterministic)", e.high.verdict, e.low.verdict)}
@@ -527,7 +532,7 @@ function render(d){
         ${row("Perturbed-ensemble mean", e.high.ensemble_mean, e.low.ensemble_mean)}
       </div>
       <ul style="margin:8px 0 0 0;padding-left:18px">${trust}</ul>
-      <div class="kv" style="margin-top:8px"><span class="pill ${cls}">${rc.takeaway}</span></div>
+      <div class="kv" style="margin-top:8px"><span class="pill ${cls}">${esc(rc.takeaway)}</span></div>
     </div>`;
   }
 
@@ -537,7 +542,7 @@ function render(d){
     const wt = m.weight_high;
     const windy = m.shown_by_windy ? ' <span class="pill" title="A model Windy.com displays — your cross-check; weighted here by backtested skill, not Windy\'s raw value">Windy</span>' : '';
     return `<tr>
-      <td class="${aside?'set-aside':''}">${m.institution}${windy}${aside?' <span class="pill">(set aside)</span>':''}</td>
+      <td class="${aside?'set-aside':''}">${esc(m.institution)}${windy}${aside?' <span class="pill">(set aside)</span>':''}</td>
       <td>${f1(m.raw.high)}/${f1(m.raw.low)}</td>
       <td>${f1(m.bias_corrected.high)}/${f1(m.bias_corrected.low)}</td>
       <td>${m.mae_corrected.high!=null?f1(m.mae_corrected.high):'–'}/${m.mae_corrected.low!=null?f1(m.mae_corrected.low):'–'}</td>
@@ -556,7 +561,7 @@ function render(d){
 
   // computation — ensemble
   if(ens.member_count){
-    const models = Object.entries(ens.models).map(([k,n])=>`${k} (${n})`).join(" + ");
+    const models = Object.entries(ens.models).map(([k,n])=>`${esc(k)} (${n})`).join(" + ");
     const ah = ens.agreement_within_2c.high;
     const cls = ah>=.8?'good':ah>=.5?'meh':'bad';
     h += `<div class="card"><h3>2 · Computation — ${ens.member_count}-member ensemble</h3>
@@ -658,7 +663,7 @@ function render(d){
       eh += `<div class="kv" style="margin:14px 0 2px"><span>Spread–skill <span class="pill">does member disagreement track per-day error?</span></span>
         <span class="${ok?"good":"meh"}"><b>${ok?"TRACKS ERROR":"FLAT"}</b></span></div>
         <div class="kv"><span>consistency r <b>${s2(ssk.consistency)}</b></span><span>relative-reliability gap <b>${Math.round(ssk.reliability_gap*100)}%</b></span><span>n=<b>${ssk.n}</b></span></div>
-        <div class="kv" style="margin-top:4px"><span class="pill">${ssk.label}.</span></div>`;
+        <div class="kv" style="margin-top:4px"><span class="pill">${esc(ssk.label)}.</span></div>`;
     }
     eh += `<div class="kv" style="margin-top:10px"><span class="pill">Recommend-only — these <b>verify</b> the panel spread and the served distribution on the same leak-free walk-forward; they never change the verdict.</span></div></div>`;
     h += eh;
@@ -678,7 +683,7 @@ function renderSys(s){
   if(!s || !s.available){
     sysEl.hidden = false; sysEl.classList.add("off");
     sysEl.innerHTML = `<div class="row"><span class="lbl">System</span>
-      <span class="when">${(s&&s.reason)||"health-check status unavailable"}.</span></div>
+      <span class="when">${esc((s&&s.reason)||"health-check status unavailable")}.</span></div>
       <div class="row"><span class="guard">✓ Recommend-only · ✓ no trades · ✓ no fund moves · ✓ no autonomous code edits</span></div>`;
     return;
   }
@@ -693,7 +698,7 @@ function renderSys(s){
   let html = `<div class="row">
     <span class="lbl">Loop gate</span>
     <span class="gate ${gateCls}"><span class="dot"></span>${gateTxt}</span>
-    <span class="when">${lp.reason||""}</span>
+    <span class="when">${esc(lp.reason||"")}</span>
   </div>
   <div class="row" style="border-top:0;padding-top:0;margin-top:6px">${guard}</div>`;
 
@@ -756,13 +761,13 @@ function renderSys(s){
   const staleTxt = s.stale ? ` <span class="stale">⚠ stale — the scheduled check missed a cycle</span>` : "";
   html += `<div class="row">
     <span class="lbl">Health check</span>
-    <span class="when">${hc.date||"–"} · ${ageTxt}${staleTxt}</span>
+    <span class="when">${esc(hc.date||"–")} · ${ageTxt}${staleTxt}</span>
   </div>
   <div class="row" style="border-top:0;padding-top:0;margin-top:6px">${chips.join("")}</div>`;
 
   if(recs.length){
     html += `<div class="row" style="margin-top:8px"><span class="lbl">Findings</span>
-      <span class="when" style="flex:1">${recs.map(r=>typeof r==="string"?r:(r.text||JSON.stringify(r))).join(" · ")}</span></div>`;
+      <span class="when" style="flex:1">${esc(recs.map(r=>typeof r==="string"?r:(r.text||JSON.stringify(r))).join(" · "))}</span></div>`;
   }
   sysEl.hidden = false;
   sysEl.innerHTML = html;
