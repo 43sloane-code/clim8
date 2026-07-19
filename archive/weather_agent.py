@@ -1,20 +1,35 @@
 #!/usr/bin/env python3
-"""Multi-source weather verdict agent.
+"""ARCHIVED PROTOTYPE — retired 2026-07-19.
 
-Derives daily high/low temperature forecasts for a city from several
-independent weather models, backtests each model against observed (ERA5)
-temperatures to learn how much to trust it, then blends them into a single
-skill-weighted verdict with a confidence read from model agreement.
+This is the pre-council prototype. It is NOT the current verdict system. It
+uses ERA5 grid "truth", raw model spread as confidence, no settlement
+instrument pinning, and no `security.py` sandbox — all of the failure classes
+the `weather_council/` package was built to escape. It also shares the
+`verdicts.db` filename and `verdicts` table name with `weather_council/storage.py`
+but with an incompatible 6-column schema, so running it against the repo's
+database can corrupt or crash the live storage layer.
 
-Data source: Open-Meteo (free, no API key).
-  - Geocoding:           https://geocoding-api.open-meteo.com
-  - Live forecast:       https://api.open-meteo.com
-  - Historical forecast: https://historical-forecast-api.open-meteo.com  (what each model predicted)
-  - Observed archive:    https://archive-api.open-meteo.com               (ERA5 reanalysis = "truth")
-
-Storage: SQLite (verdicts.db) logs every verdict so accuracy can also be
-audited going forward, not just via the historical replay.
+Kept in `archive/` for historical reference only. Do not run it against the
+repo's `verdicts.db` and do not treat its output as a current verdict.
 """
+
+# Original docstring (for archaeology):
+#
+# Multi-source weather verdict agent.
+#
+# Derives daily high/low temperature forecasts for a city from several
+# independent weather models, backtests each model against observed (ERA5)
+# temperatures to learn how much to trust it, then blends them into a single
+# skill-weighted verdict with a confidence read from model agreement.
+#
+# Data source: Open-Meteo (free, no API key).
+#   - Geocoding:           https://geocoding-api.open-meteo.com
+#   - Live forecast:       https://api.open-meteo.com
+#   - Historical forecast: https://historical-forecast-api.open-meteo.com
+#   - Observed archive:    https://archive-api.open-meteo.com (ERA5 reanalysis)
+#
+# Storage: SQLite (verdicts.db) logs every verdict so accuracy can also be
+# audited going forward, not just via the historical replay.
 
 from __future__ import annotations
 
