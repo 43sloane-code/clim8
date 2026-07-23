@@ -3,17 +3,19 @@
   Local C7 accumulation LaunchAgent for the weather-council.
 
   Runs tools/accumulate.py, which logs ONE day-ahead (lead 1) council-vs-market
-  snapshot per city per day for London and Hong Kong, settles whatever is now
+  snapshot per city per day for Manila, Singapore and London, settles whatever is now
   observable against each verdict's anchor station, and refreshes
   reports/c7_status.txt. Read-only / recommend-only: it never edits source,
   never auto-applies a bias, and never trades or moves funds.
 
   This is SEPARATE from com.weatherverdict.healthcheck (06:00) — do not conflate.
 
-  It fires twice a day (12:00 and 20:00 local) only for robustness: if the
-  machine was asleep at one time the other still runs, and accumulate.py's
-  per-day idempotency guard ensures a SECOND fire the same day does not write a
-  duplicate snapshot (which would inflate C7's n with correlated rows).
+  This template lists two fire times (12:00 and 20:00 local) for robustness —
+  if the machine was asleep at one time the other still runs — but the copy
+  actually installed in ~/Library/LaunchAgents fires ONCE a day (20:00 local).
+  Either way, accumulate.py's per-day idempotency guard ensures a SECOND fire
+  the same day does not write a duplicate snapshot (which would inflate C7's n
+  with correlated rows).
 
   INSTALL (runs on YOUR machine, where the code + network egress live):
     cp "tools/com.weatherverdict.accumulate.plist" ~/Library/LaunchAgents/

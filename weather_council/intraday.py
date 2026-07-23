@@ -72,6 +72,8 @@ _CITY_CONFIG: tuple[_CityCfg, ...] = (
              label="Karachi / Jinnah OPKC (round-half-up)"),
     _CityCfg("jeddah", sub_degree=False, fetch="metar", icao="OEJN",
              label="Jeddah / King Abdulaziz OEJN (round-half-up)"),
+    _CityCfg("seattle", sub_degree=False, fetch="nws", icao="KSEA",
+             grain="F", label="Seattle-Tacoma Intl KSEA (whole °F, round-half-up, NWS current)"),
 )
 
 
@@ -146,6 +148,24 @@ def _running_max_metar(sources: Sources, icao: str, target: dt.date,
     return (c_max, record_time, len(todays))
 
 
+def _running_max_nws(sources: Sources, icao: str, target: dt.date,
+                     timezone: str) -> tuple[float | None, str | None, int]:
+    """Max air temperature observed so far on the target LOCAL day at `icao`,
+    blending the IEM ASOS archive with the real-time NWS API current observation.
+    The NWS endpoint updates faster than the IEM historical archive, so taking the
+    max of the two closes the ~30 min lag gap for NWS-oracle cities like KSEA.
+    Returns (running_max_c, record_time_of_max, n_obs)."""
+    rmax, rtime, n = _running_max_metar(sources, icao, target, timezone)
+    live = sources.nws_current(icao)
+    if live and live.get("temperature_2m") is not None:
+        live_c = float(live["temperature_2m"])
+        live_rt = live.get("record_time")
+        if rmax is None or live_c > rmax:
+            rmax, rtime = live_c, live_rt
+        n += 1
+    return (rmax, rtime, n)
+
+
 def _running_max_hko(sources: Sources) -> tuple[float | None, str | None, int]:
     """Hong Kong's running floor from the HKO real-time feed. The feed exposes
     only the CURRENT reading, not an intraday series — but a current observation
@@ -196,6 +216,10 @@ def intraday_floor(place: Place, target: dt.date, *,
             rmax, rtime, n = _running_max_metar(
                 sources, cfg.icao, target, place.timezone)
             source = f"{cfg.label} (live IEM ASOS METAR)"
+        elif cfg.fetch == "nws":
+            rmax, rtime, n = _running_max_nws(
+                sources, cfg.icao, target, place.timezone)
+            source = f"{cfg.label} (NWS current + IEM ASOS METAR)"
         else:
             rmax, rtime, n = _running_max_hko(sources)
             source = "Hong Kong Observatory (live HKO real-time feed)"

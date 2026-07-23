@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 
 from weather_council.sources import (
     Sources, WU_LOCATION, WU_HISTORY_URL, WU_API_KEY, WU_MIN_DAY_OBS,
+    _round_half_up,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -42,12 +43,11 @@ _TZ = {"Singapore": "Asia/Singapore", "Manila": "Asia/Manila", "Hong Kong": "Asi
        "London": "Europe/London", "Chicago": "America/Chicago", "Tokyo": "Asia/Tokyo"}
 
 
-def _b(f_c):
-    return math.floor(f_c + 0.5)
+_b = _round_half_up                     # canonical settlement rounding (whole °C)
 
 
 def _bucket_f(f):
-    return math.floor((f - 32.0) * 5.0 / 9.0 + 0.5)      # whole-°F -> round-half-up °C bucket
+    return _round_half_up((f - 32.0) * 5.0 / 9.0)      # whole-°F -> round-half-up °C bucket
 
 
 def _int(label):

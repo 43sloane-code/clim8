@@ -18,21 +18,18 @@ import argparse
 import json
 import os
 
+try:
+    from tools.watchdog_core import _wilson     # the single Wilson-interval helper
+except ImportError:                             # direct-script execution path
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from watchdog_core import _wilson
+
 CITIES = {"Manila, Philippines": "Manila", "Singapore, Singapore": "Singapore",
           "London, United Kingdom": "London"}   # the tracked basket (London added 2026-07-15;
                                                 # its omission blinded the live gate counts)
 LIVE_N_TARGET = 20          # settled days/city before a live rate can gate anything
 BACKTEST_DAYAHEAD = 0.54    # the backtested day-ahead bucket-hit (the optimistic ref)
-
-
-def _wilson(hits: int, n: int, z: float = 1.96):
-    if n == 0:
-        return (0.0, 0.0, 0.0)
-    p = hits / n
-    d = 1 + z * z / n
-    c = (p + z * z / (2 * n)) / d
-    h = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / d
-    return (p, max(0.0, c - h), min(1.0, c + h))
 
 
 def analyze_misses(recent: list) -> dict:

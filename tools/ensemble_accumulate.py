@@ -49,6 +49,11 @@ import statistics
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from weather_council.sources import _round_half_up  # noqa: E402 — canonical settlement rounding
+
 # Basket cities (must match the verdict basket). Each settles round-half-up at
 # whole °C on its airport (Manila → RPLL, Singapore → WSSS).
 CITIES = ("Manila", "Singapore")
@@ -79,14 +84,6 @@ FIELDS = (
     "pmf_json",       # {bucket:int -> prob:float} over settlement buckets
     "members_json",   # raw member highs (so any correction can be re-derived later)
 )
-
-
-def _round_half_up(x: float) -> int:
-    """Whole-°C settlement rounding for London/Manila (mirrors
-    weather_council.sources._round_half_up; inlined to keep the tool importable
-    without side effects). round-half-up == floor(x + 0.5) for the positive
-    summer maxima these markets settle on."""
-    return math.floor(x + 0.5)
 
 
 def _summarize(highs: list[float]) -> dict | None:

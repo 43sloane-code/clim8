@@ -69,16 +69,15 @@ import random
 import statistics
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from weather_council.sources import _round_half_up as round_half_up  # noqa: E402
+
 
 # --------------------------------------------------------------------- primitives
 def Phi(z: float) -> float:
     """Standard-normal CDF via the stdlib error function (no scipy)."""
     return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
-
-
-def round_half_up(x: float) -> int:
-    """Settlement-style rounding (half toward +inf), matching sources._round_half_up."""
-    return math.floor(x + 0.5)
 
 
 def bucket_prob(p: float, sigma: float, b: int) -> float:

@@ -7,6 +7,7 @@ from __future__ import annotations
 import datetime as dt
 import http.client
 import json
+import socket
 import threading
 import time
 import unittest
@@ -136,3 +137,62 @@ class TestConcurrencySerialization(unittest.TestCase):
             finally:
                 httpd.shutdown()
                 t.join(timeout=2)
+
+
+class TestContentLengthGuard(unittest.TestCase):
+    """do_POST must not trust Content-Length: a non-numeric value gets a 400 (the
+    old int() call raised OUTSIDE any handler and killed the request thread), an
+    oversized declared body gets a 413 without an unbounded drain, and an ordinary
+    small POST still routes. Raw sockets — http.client won't emit a bad header."""
+
+    def _serve(self):
+        httpd = server.ThreadingHTTPServer((server.HOST, 0), server.Handler)
+        t = threading.Thread(target=httpd.serve_forever, daemon=True)
+        t.start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        self.addCleanup(t.join, 2)
+        return httpd.server_address[1]
+
+    @staticmethod
+    def _raw_post(port: int, head: bytes, body: bytes = b"") -> bytes:
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(head + body)
+            chunks = []
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        return b"".join(chunks)
+
+    def test_non_numeric_content_length_gets_400(self):
+        port = self._serve()
+        resp = self._raw_post(port, b"POST /api/verify HTTP/1.1\r\nHost: x\r\n"
+                                    b"Content-Length: notanumber\r\n\r\n")
+        self.assertTrue(resp.startswith(b"HTTP/1.0 400"), resp[:120])
+
+    def test_oversized_content_length_gets_413_without_draining(self):
+        port = self._serve()
+        # Declare a body far over the cap but send none of it: the server must
+        # answer 413 and close, not block reading MAX_BODY+1 bytes.
+        resp = self._raw_post(port, b"POST /api/edge HTTP/1.1\r\nHost: x\r\n"
+                                    b"Content-Length: 999999999\r\n\r\n")
+        self.assertTrue(resp.startswith(b"HTTP/1.0 413"), resp[:120])
+
+    def test_small_body_is_drained_and_routed(self):
+        port = self._serve()
+        with mock.patch.object(server, "_run_verify",
+                               return_value={"lines": [], "count": 0}) as m:
+            resp = self._raw_post(port, b"POST /api/verify HTTP/1.1\r\nHost: x\r\n"
+                                        b"Content-Length: 4\r\n\r\n", b"abcd")
+        self.assertTrue(resp.startswith(b"HTTP/1.0 200"), resp[:120])
+        m.assert_called_once_with()
+
+    def test_missing_content_length_still_routes(self):
+        port = self._serve()
+        with mock.patch.object(server, "_run_edge",
+                               return_value={"settled": [], "report": []}) as m:
+            resp = self._raw_post(port, b"POST /api/edge HTTP/1.1\r\nHost: x\r\n\r\n")
+        self.assertTrue(resp.startswith(b"HTTP/1.0 200"), resp[:120])
+        m.assert_called_once_with()

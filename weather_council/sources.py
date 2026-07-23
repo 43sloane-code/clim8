@@ -27,7 +27,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .security import SafeHTTPClient, SecurityError, validate_city
+from .security import SafeHTTPClient, RateLimitError, SecurityError, validate_city
+from . import failures
 
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 LIVE_URL = "https://api.open-meteo.com/v1/forecast"
@@ -58,15 +59,22 @@ WU_API_KEY = os.environ.get("WU_API_KEY", "e1f10a1e78da46f5b10a1e78da96f525")
 # Settlement-station geocodes for the v3 current-conditions feed (same host + key).
 WU_GEO = {"WSSS": (1.3502, 103.994), "RPLL": (14.5086, 121.0198), "EGLC": (51.5053, 0.0553),
           "KSFO": (37.6189, -122.375), "OPKC": (24.9008, 67.1681),
-          "OEJN": (21.6796, 39.1565)}
+          "OEJN": (21.6796, 39.1565), "KAUS": (30.1945, -97.6699),
+          "KSEA": (47.4502, -122.3088)}
 # Airports whose stale/distant Meteostat bulk file is overlaid with the live IEM ASOS METAR
 # record (icao -> tz for local-day extremes). EGLC's Abbey Wood file is ~17km and weeks stale.
 # fetch_station_daily gates on this; one-line extensible per city instead of an is_<city> method.
 # (KSFO is NOT here — SF anchors on its live Wunderground oracle feed, like RPLL/WSSS.)
 # OPKC (Karachi/Jinnah) IS here: its Meteostat bulk file lags ~110 days (stale to March in July),
 # so without the live IEM overlay the backtest scores on the wrong season entirely.
+# KAUS (Austin Bergstrom) IS here: Kalshi KXHIGHAUS settles on the NWS CLI, which is built from
+# the same ASOS/METAR feed the IEM archive ingests; overlaying it keeps the council's Austin
+# backtest on the settlement instrument instead of stale KATT Meteostat data.
+# KSEA (Seattle-Tacoma Intl) IS here: Kalshi Seattle high-temperature market settles on the
+# NWS CLI for KSEA; the IEM overlay keeps the backtest on the same ASOS/METAR source.
 _IEM_OVERLAY_TZ = {"EGLC": "Europe/London", "OPKC": "Asia/Karachi",
-                   "OEJN": "Asia/Riyadh"}
+                   "OEJN": "Asia/Riyadh", "KAUS": "America/Chicago",
+                   "KSEA": "America/Los_Angeles"}
 V3_CURRENT_URL = "https://api.weather.com/v3/wx/observations/current"
 # The Weather Company's own daily FORECAST product — same host + same public web key as the WU
 # observation feeds above. Used ONLY as a cross-reference (Sources.twc_forecast_daily); TWC never
@@ -76,7 +84,9 @@ WU_LOCATION = {"EGLC": "EGLC:9:GB", "RPLL": "RPLL:9:PH",
                "WSSS": "WSSS:9:SG",
                "KSFO": "KSFO:9:US",
                "OPKC": "OPKC:9:PK",
-               "OEJN": "OEJN:9:SA"}  # ICAO -> Weather Company location id
+               "OEJN": "OEJN:9:SA",
+               "KAUS": "KAUS:9:US",
+               "KSEA": "KSEA:9:US"}  # ICAO -> Weather Company location id
 # Minimum hourly obs in a WU local day before its max/min are trustworthy as a
 # settlement-truth extreme — a partial final day would understate the peak. A
 # complete RPLL/EGLC day reports ~24 hourly observations.
@@ -998,14 +1008,6 @@ class Sources:
                 "Hong Kong Observatory (live 1-minute mean, 0.1°C)")
         return parsed
 
-    def is_london_eglc(self, station: Station) -> bool:
-        """True iff this station is London City Airport (EGLC) — the airport the
-        London temperature market settles on. Recognised by ICAO alone (the
-        Meteostat 'EGLC0' Abbey Wood file carries this code), never a hardcoded
-        city/station table. This is the gate for overlaying the modern IEM ASOS
-        METAR record in place of that stale, distant bulk file."""
-        return (station.icao or "").upper() == "EGLC"
-
     def iem_overlay_truth_series(self, icao: str, timezone: str, target: dt.date,
                                  back_years: int = 2) -> DailySeries:
         """Modern daily (high, low) at an IEM-overlay airport (_IEM_OVERLAY_TZ:
@@ -1017,23 +1019,6 @@ class Sources:
         start = dt.date(target.year - back_years, 1, 1)
         try:
             res = self.fetch_metar_daily(icao, start, target, timezone)
-        except Exception:
-            return {}
-        return dict(res.get("daily", {}))
-
-    def london_eglc_truth_series(self, target: dt.date,
-                                 back_years: int = 2) -> DailySeries:
-        """Modern daily (high, low) at London City Airport (EGLC) reconstructed
-        from raw IEM ASOS METAR over the local calendar day — the same
-        settlement-grade airport sensor the London market resolves on, and the
-        identical record run.py uses for its settlement reference. Spans the last
-        `back_years` calendar years up to `target`; days with too few obs are
-        dropped by fetch_metar_daily and simply fall back to the Meteostat value.
-        One cached request. Returns {} on any failure so truth resolution never
-        aborts — the council then keeps the Meteostat base."""
-        start = dt.date(target.year - back_years, 1, 1)
-        try:
-            res = self.fetch_metar_daily("EGLC", start, target, "Europe/London")
         except Exception:
             return {}
         return dict(res.get("daily", {}))
@@ -1061,7 +1046,7 @@ class Sources:
                          timezone: str) -> list[tuple[str, float]]:
         # The IEM archive treats day2 as EXCLUSIVE. Compensate HERE, once, so
         # every caller's (start, end) is end-INCLUSIVE — previously only
-        # eglc_current compensated, which left a structural one-day hole at the
+        # eglc compensated, which left a structural one-day hole at the
         # obs-cache cutoff (past segment ended at cutoff−1, fresh tail started
         # at cutoff+1) and truncated every other caller's final day.
         tz = timezone if "/" in (timezone or "") else "Etc/UTC"
@@ -1189,16 +1174,14 @@ class Sources:
                 {"geocode": f"{lat},{lon}", "format": "json", "units": "e",
                  "language": "en-US", "apiKey": WU_API_KEY})
         except Exception as exc:
-            from .failures import record_soft_failure
-            record_soft_failure("twc_forecast", exc)
+            failures.record_soft_failure("twc_forecast", exc)
             return None
         valid = d.get("validTimeLocal") if isinstance(d, dict) else None
         highs = d.get("calendarDayTemperatureMax") if isinstance(d, dict) else None
         lows = d.get("calendarDayTemperatureMin") if isinstance(d, dict) else None
         if not (isinstance(valid, list) and isinstance(highs, list) and isinstance(lows, list)):
-            from .failures import record_soft_failure
-            record_soft_failure("twc_forecast",
-                                ValueError("TWC response missing calendar-day arrays"))
+            failures.record_soft_failure(
+                "twc_forecast", ValueError("TWC response missing calendar-day arrays"))
             return None
         # Convert once at the edge: °F stays °F where the market settles °F; else whole-°F → °C.
         to_native = ((lambda f: f) if str(grain).upper().startswith("F")
@@ -1239,16 +1222,22 @@ class Sources:
             lambda a, b: self._wu_daily_raw(icao, a, b, timezone))
         return {d: (mx, mn) for d, mx, mn in rows}
 
-    def _wu_daily_raw(self, icao: str, start: dt.date, end: dt.date,
-                      timezone: str) -> list[tuple[str, float, float]]:
+    def _wu_chunked_obs(self, icao: str, start: dt.date, end: dt.date,
+                        timezone: str):
+        """Shared WU station-history core behind _wu_daily_raw/_wu_hourly_raw:
+        chunked-fetch (one 30-day API window per call), local-zone regroup, and
+        the _wu_temp_f plausibility screen with qc accounting. Yields
+        (local datetime, screened temp °F) in feed order. Unknown zone degrades
+        to UTC; a dead chunk is a recorded soft failure and yields nothing;
+        a throttled key (RateLimitError) fails LOUD so the council never
+        silently re-anchors on a lagged fallback feed."""
         loc = WU_LOCATION.get((icao or "").upper())
         if loc is None:
-            return []
+            return
         try:
             zone = ZoneInfo(timezone)
         except Exception:
             zone = ZoneInfo("UTC")
-        by_date: dict[str, list[float]] = {}
         cur = start
         while cur <= end:
             chunk_end = min(cur + dt.timedelta(days=30), end)
@@ -1258,7 +1247,10 @@ class Sources:
                     {"apiKey": WU_API_KEY, "units": "e",
                      "startDate": cur.strftime("%Y%m%d"),
                      "endDate": chunk_end.strftime("%Y%m%d")})
-            except Exception:
+            except RateLimitError:
+                raise                       # retryable throttle — never swallow
+            except Exception as exc:
+                failures.record_soft_failure("wu_history_chunk", exc)
                 data = {}
             for o in (data.get("observations") or []):
                 raw_t = o.get("temp")
@@ -1270,8 +1262,14 @@ class Sources:
                     continue
                 self.qc["screened"] += 1
                 local = dt.datetime.fromtimestamp(vt, tz=dt.timezone.utc).astimezone(zone)
-                by_date.setdefault(local.date().isoformat(), []).append(t)
+                yield local, t
             cur = chunk_end + dt.timedelta(days=1)
+
+    def _wu_daily_raw(self, icao: str, start: dt.date, end: dt.date,
+                      timezone: str) -> list[tuple[str, float, float]]:
+        by_date: dict[str, list[float]] = {}
+        for local, t in self._wu_chunked_obs(icao, start, end, timezone):
+            by_date.setdefault(local.date().isoformat(), []).append(t)
         rows: list[tuple[str, float, float]] = []
         for d, temps in by_date.items():
             if len(temps) < WU_MIN_DAY_OBS:       # incomplete day — untrustworthy extreme
@@ -1313,6 +1311,29 @@ class Sources:
         return {"temperature_2m": (float(latest["temp"]) - 32.0) * 5.0 / 9.0,
                 "record_time": rt.isoformat()}
 
+    def nws_current(self, icao: str) -> dict | None:
+        """Latest ASOS/METAR observation directly from the National Weather Service
+        API. This is the same sensor the IEM archive ingests, but the NWS endpoint
+        updates faster (~minutes) than the IEM historical archive. Returns
+        {temperature_2m, record_time} or None on any failure."""
+        if not icao:
+            return None
+        url = f"https://api.weather.gov/stations/{icao.upper()}/observations/latest"
+        try:
+            data = self.http.get_json(url, {})
+        except Exception:
+            return None
+        props = data.get("properties", {})
+        ts = props.get("timestamp")
+        temp = props.get("temperature", {})
+        if not isinstance(ts, str) or temp.get("value") is None:
+            return None
+        try:
+            c = float(temp["value"])
+        except (TypeError, ValueError):
+            return None
+        return {"temperature_2m": c, "record_time": ts}
+
     def wunderground_hourly_observations(self, icao: str, start: dt.date,
                                          end: dt.date, timezone: str) -> list[tuple[str, float]]:
         """Sub-daily air-temperature obs (°C) from the Wunderground / Weather
@@ -1336,55 +1357,25 @@ class Sources:
 
     def _wu_hourly_raw(self, icao: str, start: dt.date, end: dt.date,
                        timezone: str) -> list[tuple[str, float]]:
-        loc = WU_LOCATION.get((icao or "").upper())
-        if loc is None:
-            return []
-        try:
-            zone = ZoneInfo(timezone)
-        except Exception:
-            zone = ZoneInfo("UTC")
-        out: list[tuple[str, float]] = []
-        cur = start
-        while cur <= end:
-            chunk_end = min(cur + dt.timedelta(days=30), end)
-            try:
-                data = self.http.get_json(
-                    WU_HISTORY_URL.format(loc=loc),
-                    {"apiKey": WU_API_KEY, "units": "e",
-                     "startDate": cur.strftime("%Y%m%d"),
-                     "endDate": chunk_end.strftime("%Y%m%d")})
-            except Exception:
-                data = {}
-            for o in (data.get("observations") or []):
-                raw_t = o.get("temp")
-                vt = o.get("valid_time_gmt")
-                t = _wu_temp_f(raw_t)
-                if t is None or isinstance(vt, bool) or not isinstance(vt, (int, float)):
-                    if isinstance(raw_t, (int, float)) and not isinstance(raw_t, bool):
-                        self.qc["rejected"] += 1     # numeric but implausible
-                    continue
-                self.qc["screened"] += 1
-                local = dt.datetime.fromtimestamp(vt, tz=dt.timezone.utc).astimezone(zone)
-                out.append((local.strftime("%Y-%m-%d %H:%M"), (t - 32.0) * 5.0 / 9.0))
-            cur = chunk_end + dt.timedelta(days=1)
+        out: list[tuple[str, float]] = [
+            (local.strftime("%Y-%m-%d %H:%M"), (t - 32.0) * 5.0 / 9.0)
+            for local, t in self._wu_chunked_obs(icao, start, end, timezone)]
         out.sort()
         return out
 
-    def eglc_current(self) -> dict | None:
-        """Live current air temperature at London City Airport (EGLC) — the most
+    def iem_metar_current(self, icao: str, timezone: str) -> dict | None:
+        """Live current air temperature at any IEM-overlay airport — the most
         recent raw IEM ASOS METAR, i.e. the settlement sensor's own latest
-        reading, so a London verdict's 'now' is the airport gauge the market
-        resolves on rather than an Open-Meteo grid-cell proxy. Returns
-        {temperature_2m, record_time} or None on any failure (caller then keeps
-        the grid 'current'). METAR air temperature is whole-degree °C and the
-        routine cadence is ~30 min (plus SPECIs), so this updates each time EGLC
-        reports. End dates are inclusive (the raw fetcher compensates for the
+        reading, so a verdict's 'now' is the airport gauge the market resolves on
+        rather than an Open-Meteo grid-cell proxy. Returns {temperature_2m,
+        record_time} or None on any failure (caller then keeps the grid
+        'current'). End dates are inclusive (the raw fetcher compensates for the
         IEM archive's exclusive day2 — no per-caller +1 anymore)."""
         today = dt.date.today()
         try:
             obs = self.fetch_metar_observations(
-                "EGLC", today - dt.timedelta(days=1),
-                today, "Europe/London")
+                icao, today - dt.timedelta(days=1),
+                today, timezone)
         except Exception:
             return None
         if not obs:
@@ -1424,6 +1415,14 @@ class Sources:
             "missing": "empty", "trace": "empty",
             "report_type": [3, 4],
         })
+        # tmpf is Fahrenheit; tmpc is Celsius. Parse each through its own
+        # plausibility band so a hot US day (tmpf > 60 as a raw number) is
+        # not dropped and can vote for the whole-°F native grain.
+        def _parse_f(cell: str) -> float | None:
+            try:
+                return _wu_temp_f(float(cell.strip()))
+            except (ValueError, TypeError):
+                return None
         by_day: dict[str, list[tuple[float, float]]] = {}
         n_f = n_c = total = 0
         for line in txt.splitlines()[1:]:           # skip header
@@ -1433,12 +1432,18 @@ class Sources:
             day = p[1][:10]
             if len(day) != 10 or day[4] != "-" or day[7] != "-":
                 continue
-            f, c = _clean_temp_cell(p[2]), _clean_temp_cell(p[3])
-            if c is None:
+            f = _parse_f(p[2])
+            c = _clean_temp_cell(p[3])
+            if c is None and f is None:
                 continue
-            by_day.setdefault(day, []).append(c)      # °F is used only for grain counting
+            # Prefer the Celsius column for daily extremes; fall back to a
+            # Fahrenheit-derived value only when tmpc is missing.
+            if c is not None:
+                by_day.setdefault(day, []).append(c)
+            elif f is not None:
+                by_day.setdefault(day, []).append((f - 32.0) * 5.0 / 9.0)
             total += 1
-            if abs(c - round(c)) < 0.05:
+            if c is not None and abs(c - round(c)) < 0.05:
                 n_c += 1
             if f is not None and abs(f - round(f)) < 0.05:
                 n_f += 1

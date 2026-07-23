@@ -49,6 +49,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from weather_council import edge                      # reuse _logloss/_brier/_bootstrap_ci verbatim
+from weather_council.sources import _round_half_up as _rhu   # canonical settlement rounding
 from tools import lessons                             # queue load/save + K denominator
 
 # Promotion needs the same evidence bar as an edge certification (edge.MIN_SETTLED); the autonomous
@@ -91,11 +92,6 @@ def apply_transform(transform: dict, prov: dict) -> float | None:
 
 
 # ─────────────────────────────────────── proxy bucket pmf ─────────────────────────────────────────
-
-def _rhu(x: float) -> int:
-    """Settlement round-half-up to the whole-°C bucket the contract pays on."""
-    return math.floor(x + 0.5)
-
 
 def _phi(z: float) -> float:
     """Standard-normal CDF via erf (stdlib, no scipy)."""
@@ -157,7 +153,7 @@ def run_shadow(db_path=None, queue_path=None) -> dict:
     from weather_council.storage import utc_now_iso
     queue = lessons._load_queue(queue_path or lessons.QUEUE_PATH)
     active = [c for c in queue if c.get("status") == "ACTIVE"]
-    conn = storage._connect() if db_path is None else lessons._connect_at(db_path)
+    conn = storage._connect() if db_path is None else storage._connect_at(db_path)
     written: dict[str, int] = {}
     try:
         for cand in active:
@@ -272,7 +268,7 @@ def run_gate(db_path=None, queue_path=None, today: dt.date | None = None) -> dic
     queue_path = queue_path or lessons.QUEUE_PATH
     queue = lessons._load_queue(queue_path)
     K = len(queue)                                      # running Bonferroni denominator
-    conn = storage._connect() if db_path is None else lessons._connect_at(db_path)
+    conn = storage._connect() if db_path is None else storage._connect_at(db_path)
     try:
         if today is None:
             r = conn.execute("SELECT MAX(target_date) FROM verdicts "
@@ -370,7 +366,7 @@ def _selftest() -> int:
     #    served verdicts row. Prove the served high is byte-for-byte unchanged.
     tmp = Path(tempfile.mkdtemp())
     dbp, q = tmp / "t.db", tmp / "candidates.json"
-    conn = lessons._connect_at(dbp)
+    conn = storage._connect_at(dbp)
     served_high = 31.5
     with conn:
         for i in range(22):
@@ -392,7 +388,7 @@ def _selftest() -> int:
     # scale_bias moves 31.5 -> 31.1, closer to the 30 bucket every day -> PROMOTE, human-gated.
     assert g["verdicts"][0]["outcome"] == "PROMOTE", g["verdicts"]
     assert any("HUMAN REVIEW REQUIRED" in b for b in g["briefs"])
-    conn = lessons._connect_at(dbp)
+    conn = storage._connect_at(dbp)
     highs = {r[0] for r in conn.execute("SELECT high FROM verdicts").fetchall()}
     conn.close()
     assert highs == {served_high}, f"served high mutated: {highs}"   # zero served-path bytes changed

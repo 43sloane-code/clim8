@@ -22,7 +22,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools import lessons, shadow_score
+from tools import shadow_score
+from weather_council import storage
 
 # A provenance blob: raw votes 30.0/31.0 (naive 30.5), weighted-raw 30.7, bias +0.8 -> final 31.5.
 _PROV = {"blend": {"high": 31.5, "high_pre_bias": 30.7, "bias_high": 0.8},
@@ -43,7 +44,7 @@ class TestShadow(unittest.TestCase):
         self._q = self._dir / "candidates.json"
 
     def _seed_verdicts(self, n=22, actual=30.0, high=31.5, place="Testville"):
-        conn = lessons._connect_at(self._db)
+        conn = storage._connect_at(self._db)
         with conn:
             for i in range(n):
                 conn.execute(
@@ -132,7 +133,7 @@ class TestShadow(unittest.TestCase):
         self.assertEqual(g["verdicts"][0]["outcome"], "PROMOTE")
         self.assertTrue(any("HUMAN REVIEW REQUIRED" in b for b in g["briefs"]))
         # the served high is byte-for-byte identical (zero served-path bytes changed)
-        conn = lessons._connect_at(self._db)
+        conn = storage._connect_at(self._db)
         highs = {r[0] for r in conn.execute("SELECT high FROM verdicts").fetchall()}
         shadow_rows = conn.execute("SELECT COUNT(*) FROM shadow_forecasts").fetchone()[0]
         conn.close()
@@ -156,7 +157,7 @@ class TestShadow(unittest.TestCase):
         self._write_queue([_CAND])
         shadow_score.run_shadow(db_path=self._db, queue_path=self._q)
         shadow_score.run_shadow(db_path=self._db, queue_path=self._q)   # second pass
-        conn = lessons._connect_at(self._db)
+        conn = storage._connect_at(self._db)
         rows = conn.execute("SELECT COUNT(*) FROM shadow_forecasts").fetchone()[0]
         conn.close()
         self.assertEqual(rows, 12)                            # INSERT OR REPLACE — no duplicates

@@ -23,6 +23,7 @@ Self-test: PYTHONPATH=. python3 tools/eval_harness.py --selftest
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import json
 import math
@@ -37,8 +38,12 @@ POP_GATE_DRY = 15            # dry-day rows before the pre-registered regime spl
 
 try:
     from tools.lock_logger import load_rows, coverage, certify, N_FLOOR, TOL
+    from weather_council.sources import _round_half_up
 except ImportError:                                   # direct-script execution path
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT))
     from lock_logger import load_rows, coverage, certify, N_FLOOR, TOL
+    from weather_council.sources import _round_half_up
 
 
 # ---------------------------------------------------------------- gather ----
@@ -72,26 +77,33 @@ def gather(now_sgt: _dt.datetime | None = None) -> dict:
         state["scorecard"] = {}
 
     try:
-        con = sqlite3.connect(ROOT / "verdicts.db")
-        twc = con.execute(
-            "SELECT fc_high, actual_high FROM tracked_forecasts "
-            "WHERE source='twc' AND actual_high IS NOT NULL").fetchall()
-        con.close()
+        with contextlib.closing(sqlite3.connect(ROOT / "verdicts.db")) as con:
+            twc = con.execute(
+                "SELECT fc_high, actual_high FROM tracked_forecasts "
+                "WHERE source='twc' AND actual_high IS NOT NULL").fetchall()
         hits = sum(1 for f, a in twc                     # settlement rule: round-half-up whole C
-                   if math.floor(f + 0.5) == math.floor(a + 0.5))
+                   if _round_half_up(f) == _round_half_up(a))
         state["twc"] = {"n": len(twc), "hits": hits}
     except Exception:
         state["twc"] = {"n": 0, "hits": 0}
 
     dry = conv = 0
+    pop_last = None
     try:
-        for line in (ROOT / "ledger" / "singapore_pop.jsonl").read_text().splitlines():
+        pop_text = (ROOT / "ledger" / "singapore_pop.jsonl").read_text()   # read once, used twice
+        for line in pop_text.splitlines():
             try:
                 r = json.loads(line)
             except ValueError:
                 continue          # one corrupt line must not kill the whole gather()
             dry += r.get("regime") == "dry"
             conv += r.get("regime") == "convective"
+        tail = pop_text.strip().splitlines()
+        if tail:
+            try:
+                pop_last = json.loads(tail[-1])["issued_ts"][:16]
+            except ValueError:
+                pop_last = None
     except OSError:
         pass
     state["pop"] = {"dry": dry, "convective": conv}
@@ -108,19 +120,24 @@ def gather(now_sgt: _dt.datetime | None = None) -> dict:
     except Exception:
         live["lock_ledger"] = None
     try:
-        pop_lines = (ROOT / "ledger" / "singapore_pop.jsonl").read_text().strip().splitlines()
-        live["pop_ledger"] = json.loads(pop_lines[-1])["issued_ts"][:16] if pop_lines else None
-    except (OSError, ValueError):
-        live["pop_ledger"] = None
-    try:
         p2b_lines = (ROOT / "ledger" / "p2b_1200.jsonl").read_text().strip().splitlines()
         live["p2b_ledger"] = json.loads(p2b_lines[-1])["issued_ts"][:16] if p2b_lines else None
     except (OSError, ValueError, IndexError):
         live["p2b_ledger"] = None
+    live["pop_ledger"] = pop_last
+    # daily_healthcheck's OWN heartbeat — its LaunchAgent sat dormant 07-16→07-22
+    # with every other monitor green (a guard that never runs guards nothing).
+    # Freshness = newest reports/healthcheck_*.txt mtime (its dated report files).
     try:
-        con = sqlite3.connect(ROOT / "verdicts.db")
-        r = con.execute("SELECT max(issued_at) FROM tracked_forecasts WHERE source='twc'").fetchone()
-        con.close()
+        hc_files = list((ROOT / "reports").glob("healthcheck_*.txt"))
+        live["healthcheck"] = (_dt.datetime.fromtimestamp(
+            max(p.stat().st_mtime for p in hc_files), _dt.timezone.utc)
+            .isoformat(timespec="minutes")[:16] if hc_files else None)
+    except OSError:
+        live["healthcheck"] = None
+    try:
+        with contextlib.closing(sqlite3.connect(ROOT / "verdicts.db")) as con:
+            r = con.execute("SELECT max(issued_at) FROM tracked_forecasts WHERE source='twc'").fetchone()
         live["twc_ledger"] = r[0][:16] if r and r[0] else None
     except Exception:
         live["twc_ledger"] = None
@@ -190,7 +207,7 @@ def brief(state: dict) -> list[str]:
     stale = [k for k, v in lv.items() if v is None]
     L.append("  AUTONOMY LIVENESS (a guard that never runs guards nothing — 07-04 lesson: the "
              "watchdog sat unscheduled for 6 days):")
-    for k in ("accumulate", "watchdog", "lock_ledger", "twc_ledger", "pop_ledger", "p2b_ledger"):
+    for k in ("accumulate", "watchdog", "healthcheck", "lock_ledger", "twc_ledger", "pop_ledger", "p2b_ledger"):
         L.append(f"    {k:12} last activity: {lv.get(k) or 'NEVER / NOT FOUND'}"
                  + ("   <- DORMANT — rewire or explain TODAY" if lv.get(k) is None else ""))
     if stale:
@@ -242,7 +259,9 @@ def directives(state: dict) -> list[str]:
     L.append(f"  X. Spend NOTHING on: day-ahead point/conditioning levers (all dead — the "
              f"ledger holds {n_dead} dead candidates incl. the 0/17 day-ahead class, D26, "
              f"D28; σ-ceiling physics), consensus overrides (day-ahead market ties the "
-             f"council 44%=44%), retro-computed lock rows (feed-latency leak — 07-04's 91°F "
+             f"council 44%=44%, measured 2026-07-12 in docs/DRIVER_AUDIT.md — not in any "
+             f"machine ledger, re-derive before re-citing), retro-computed lock rows "
+             f"(feed-latency leak — 07-04's 91°F "
              f"posted late; live-only rows), or relitigating the dead ledger.")
     return L
 
@@ -286,6 +305,7 @@ def _selftest() -> int:
     assert "UNINSTRUMENTED" not in "\n".join(directives(full))
     lv_state = dict(base)
     lv_state["liveness"] = {"accumulate": "2026-07-04T10:15", "watchdog": None,
+                            "healthcheck": "2026-07-04T06:05",
                             "lock_ledger": "2026-07-04T15:0", "twc_ledger": None,
                             "pop_ledger": "2026-07-03T00:44", "p2b_ledger": None}
     lout = "\n".join(brief(lv_state))

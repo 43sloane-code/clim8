@@ -89,7 +89,8 @@ def main() -> None:
     today = dt.date.today()
 
     raw_eglc, gap = _raw_points_eglc(120)
-    ldn_daily = _daily_mean_points(s.london_eglc_truth_series(today, back_years=2))
+    ldn_daily = _daily_mean_points(
+        s.iem_overlay_truth_series("EGLC", "Europe/London", today, back_years=2))
     hk_daily = _daily_mean_points(s.hko_truth_series(today, back_years=4))
 
     _sweep("London (EGLC City Airport)", raw_eglc, gap, ldn_daily)

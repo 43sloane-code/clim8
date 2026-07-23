@@ -18,20 +18,21 @@ import datetime as dt
 import json
 import math
 import os
+import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from weather_council.sources import _round_half_up as bucket  # noqa: E402 — canonical settlement rounding
+
 LEDGER = ROOT / "ledger" / "p2b_1200.jsonl"
 ARCHIVE = ROOT / "data" / "wsss_hourly_iem.jsonl"
 T1, T2 = 84.3, 97.7                 # FROZEN cloud terciles (D15 warmup block, 2016-17)
 MIN_CELL = 30
 HOUR = 12
 HOLD_DELTA = 0.3                    # same day-state rule as the shipped lever
-
-
-def bucket(c: float) -> int:
-    return math.floor(c + 0.5)
 
 
 def tercile(cloud: float | None) -> int | None:

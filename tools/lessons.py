@@ -44,6 +44,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from weather_council import storage
+
 QUEUE_PATH = ROOT / "ledger" / "candidates.json"
 
 # THE BUDGET — raising either is a certification-bar change requiring a ledger entry (the same
@@ -79,8 +81,7 @@ def detect_patterns(db_path=None) -> dict:
     """Scan postmortems, group by (place, dominant cause), and for causes with a transform test
     whether that component systematically HURT (increased |error|). Returns
     {patterns: [...], cells_scanned: N}. cells_scanned is the multiple-comparisons denominator."""
-    from weather_council import storage
-    conn = storage._connect() if db_path is None else _connect_at(db_path)
+    conn = storage._connect() if db_path is None else storage._connect_at(db_path)
     try:
         rows = conn.execute(
             "SELECT place, attributed_cause, total_error, components_json FROM postmortems "
@@ -139,8 +140,7 @@ def _load_queue(path) -> list:
 def _month_from_postmortems(db_path=None) -> str:
     """Data-derived 'current month' (YYYY-MM) = the latest scored_at — deterministic, no wall
     clock. Falls back to '0000-00' when the table is empty."""
-    from weather_council import storage
-    conn = storage._connect() if db_path is None else _connect_at(db_path)
+    conn = storage._connect() if db_path is None else storage._connect_at(db_path)
     try:
         r = conn.execute("SELECT MAX(scored_at) FROM postmortems").fetchone()
     finally:
@@ -209,11 +209,6 @@ def emit_candidates(detection: dict, queue_path=None, month=None, db_path=None) 
             "K_candidates_ever": len(queue)}
 
 
-def _connect_at(db_path):
-    from weather_council import storage
-    return storage._connect_at(db_path)      # single shared impl (was duplicated 4x)
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description="Detect recurring error causes -> budgeted candidates.")
     ap.add_argument("--selftest", action="store_true")
@@ -238,10 +233,9 @@ def _selftest() -> int:
     # binomial: 9/10 one-sided-ish -> significant; 6/10 -> not
     assert _binom_p(10, 10) < 0.05 and _binom_p(6, 10) > 0.05
     # detection on a synthetic postmortems table: BIAS hurts 9/10 for HK, INPUT ignored
-    from weather_council import storage
     tmp = Path(tempfile.mkdtemp())
     dbp = tmp / "t.db"
-    conn = _connect_at(dbp)
+    conn = storage._connect_at(dbp)
     with conn:
         for i in range(10):
             hurt = i < 9                      # 9 of 10 days the bias made it worse

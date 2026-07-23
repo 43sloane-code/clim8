@@ -40,6 +40,10 @@ STATUS = HERE / "reports" / "healthcheck_status.json"
 STALE_HOURS = 36.0           # > ~1.5 daily cycles ⇒ the scheduled check missed a run
 MAX_LEAD = 15
 MIN_WINDOW, MAX_WINDOW = 15, 365
+# POST bodies are only drained, never read — so they carry no meaning beyond a
+# size. Cap the drain: ThreadingHTTPServer is thread-per-connection, and an
+# unbounded read of a declared length is a trivial thread-exhaustion vector.
+MAX_BODY = 65536
 
 # Serialize verdict runs: each one issues dozens of outbound requests and can
 # exhaust the keyless WU request budget if overlapping. Queue rather than fail:
@@ -223,7 +227,19 @@ class Handler(BaseHTTPRequestHandler):
         if op is None:
             self._send(404, b"not found", "text/plain")
             return
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            # A non-numeric Content-Length used to raise OUTSIDE any handler and
+            # kill the request thread with a traceback.
+            self._send(400, b"bad Content-Length", "text/plain")
+            return
+        if length > MAX_BODY:
+            # Don't drain an oversized body (unbounded read on a thread-per-server);
+            # close the connection so the undrained bytes can't poison a keep-alive.
+            self.close_connection = True
+            self._send(413, b"body too large", "text/plain")
+            return
         if length:
             self.rfile.read(length)                # drain any body, keep socket clean
         try:

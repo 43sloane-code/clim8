@@ -6,3 +6,16 @@
 {"target_date": "2026-07-09", "issued_ts": "2026-07-08T09:01:19+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 66.0, "qpf": 0.39, "regime": "convective"}
 {"target_date": "2026-07-10", "issued_ts": "2026-07-09T09:00:32+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 34.0, "qpf": 0.04, "regime": "dry"}
 {"target_date": "2026-07-11", "issued_ts": "2026-07-10T08:46:04+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 55.0, "qpf": 0.09, "regime": "convective"}
+{"target_date": "2026-07-12", "issued_ts": "2026-07-11T09:06:36+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 20.0, "qpf": 0.0, "regime": "dry"}
+{"target_date": "2026-07-13", "issued_ts": "2026-07-12T09:00:29+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 24.0, "qpf": 0.0, "regime": "dry"}
+{"target_date": "2026-07-14", "issued_ts": "2026-07-13T09:00:53+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 24.0, "qpf": 0.0, "regime": "dry"}
+{"target_date": "2026-07-15", "issued_ts": "2026-07-14T09:00:51+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 23.0, "qpf": 0.0, "regime": "dry"}
+{"target_date": "2026-07-16", "issued_ts": "2026-07-15T09:00:57+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 24.0, "qpf": 0.0, "regime": "dry"}
+{"target_date": "2026-07-17", "issued_ts": "2026-07-16T09:00:49+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 47.0, "qpf": 0.27, "regime": "convective"}
+{"target_date": "2026-07-18", "issued_ts": "2026-07-17T09:00:49+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 53.0, "qpf": 0.15, "regime": "convective"}
+{"target_date": "2026-07-19", "issued_ts": "2026-07-18T09:00:58+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 23.0, "qpf": 0.0, "regime": "dry"}
+{"target_date": "2026-07-20", "issued_ts": "2026-07-19T09:00:54+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 22.0, "qpf": 0.0, "regime": "dry"}
+{"target_date": "2026-07-21", "issued_ts": "2026-07-20T09:01:02+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 18.0, "qpf": 0.0, "regime": "dry"}
+{"target_date": "2026-07-22", "issued_ts": "2026-07-21T09:00:56+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 58.0, "qpf": 0.13, "regime": "convective"}
+{"target_date": "2026-07-23", "issued_ts": "2026-07-22T14:31:28+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 50.0, "qpf": 0.11, "regime": "convective"}
+{"target_date": "2026-07-24", "issued_ts": "2026-07-23T09:08:39+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 18.0, "qpf": 0.0, "regime": "dry"}

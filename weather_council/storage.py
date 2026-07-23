@@ -27,6 +27,7 @@ import datetime as dt
 import json
 import sqlite3
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .council import Verdict
 from .failures import record_soft_failure
@@ -77,8 +78,25 @@ def _connect_at(db_path) -> sqlite3.Connection:
         DB_PATH = _orig
 
 
+def _ensure_columns(conn: sqlite3.Connection, table: str, added: dict) -> set:
+    """Add any columns of `added` (name -> SQL type) missing from `table`; returns the
+    set of column names that existed BEFORE the migration (callers key one-time
+    backfills off it). `added` is always a fixed literal dict at the call sites in
+    `_connect` — no user input ever reaches these statements."""
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    for col, typ in added.items():
+        if col not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+    return existing
+
+
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
+    # verdicts.db is written by >=4 concurrent launchd jobs plus run.py; sqlite's
+    # default busy timeout is 0, so an overlapping writer got an immediate
+    # "database is locked". Wait up to 5s for a concurrent writer to finish.
+    # Deliberately NOT WAL — that changes the on-disk file semantics.
+    conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute(
         """CREATE TABLE IF NOT EXISTS verdicts (
                issued_at    TEXT NOT NULL,
@@ -94,7 +112,6 @@ def _connect() -> sqlite3.Connection:
                PRIMARY KEY (place, target_date, issued_at))"""
     )
     # Migrate older tables that predate later columns.
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(verdicts)")}
     added = {
         "actual_high": "REAL", "actual_low": "REAL",
         "err_high": "REAL", "err_low": "REAL",
@@ -123,9 +140,7 @@ def _connect() -> sqlite3.Connection:
         # passes_integrity(). NULL == unflagged == included (inert until a WP writes flags).
         "integrity_flags": "TEXT",
     }
-    for col, typ in added.items():
-        if col not in existing:
-            conn.execute(f"ALTER TABLE verdicts ADD COLUMN {col} {typ}")
+    _ensure_columns(conn, "verdicts", added)
     # C7 ledger: one row per logged council-vs-market comparison. `buckets_json`
     # carries the full ladder (label, lo, hi, model_prob, market_prob); the
     # realized_* columns stay NULL until the day settles against the anchor
@@ -173,7 +188,6 @@ def _connect() -> sqlite3.Connection:
     # (b) ALARM when proxy and contract diverge — the alignment gap that no amount
     # of internal CRPS can catch. Additive/nullable: never alters a model prob or
     # an existing score; the served distribution is untouched.
-    ms_existing = {row[1] for row in conn.execute("PRAGMA table_info(market_snapshots)")}
     ms_added = {"market_volume": "REAL", "market_liquidity": "REAL",
                 "station_icao": "TEXT", "station_name": "TEXT",
                 "sub_degree": "INTEGER",
@@ -183,9 +197,7 @@ def _connect() -> sqlite3.Connection:
                 # pm_resolved_label_v2 field (added in WP-1); the original stays. passes_integrity()
                 # gates every measurement. NULL == included (inert until a WP flags).
                 "integrity_flags": "TEXT"}
-    for col, typ in ms_added.items():
-        if col not in ms_existing:
-            conn.execute(f"ALTER TABLE market_snapshots ADD COLUMN {col} {typ}")
+    ms_existing = _ensure_columns(conn, "market_snapshots", ms_added)
     if "sub_degree" not in ms_existing:
         # One-time backfill for rows logged before this column existed: the HK
         # Observatory (id 45005 / name carrying "Observatory") is the only basket
@@ -229,11 +241,8 @@ def _connect() -> sqlite3.Connection:
     # geography). Without them settlement saw only the stale bulk Meteostat file
     # and never graded recent days. Additive/nullable: never alters a score. Same
     # latent bug, same fix, as market_snapshots above.
-    tf_existing = {row[1] for row in conn.execute("PRAGMA table_info(tracked_forecasts)")}
     tf_added = {"station_icao": "TEXT", "station_name": "TEXT"}
-    for col, typ in tf_added.items():
-        if col not in tf_existing:
-            conn.execute(f"ALTER TABLE tracked_forecasts ADD COLUMN {col} {typ}")
+    _ensure_columns(conn, "tracked_forecasts", tf_added)
     # Order-book archive (Phase 3): one row per (place, target_date, issued_at,
     # token_id) capturing the LIVE CLOB order book at the SAME instant as the price
     # snapshot in market_snapshots (join on place+target_date+issued_at). This is
@@ -334,8 +343,7 @@ def log_verdict(v: Verdict) -> None:
             record_soft_failure("provenance_quarantine", ValueError("; ".join(problems)[:180]))
     except Exception as exc:
         record_soft_failure("provenance_build", exc)      # swallow: still log the verdict
-    conn = _connect()
-    with conn:
+    with contextlib.closing(_connect()) as conn, conn:
         conn.execute(
             "INSERT OR REPLACE INTO verdicts "
             "(issued_at, place, target_date, high, low, confidence, "
@@ -349,7 +357,6 @@ def log_verdict(v: Verdict) -> None:
              v.place.latitude, v.place.longitude,
              prov_json, prov_ok),
         )
-    conn.close()
 
 
 def verify(sources: Sources | None = None) -> list[str]:
@@ -360,17 +367,25 @@ def verify(sources: Sources | None = None) -> list[str]:
     weeks on the free bulk feed, so a recent target simply stays unscored until
     the station data catches up. ERA5-grid verdicts are scored against ERA5 at
     the exact coordinates they were forecast for. Either way the comparison is
-    truth-matched, never a city-centroid stand-in."""
+    truth-matched, never a city-centroid stand-in.
+
+    Same shared-budget repair as `settle_market_snapshots` (see its docstring):
+    on the production path (no injected `Sources`) each station/WU fetch gets a
+    FRESH `Sources` — its own request budget — so a heavy early fetch (the HKO
+    overlay) can no longer exhaust the one shared budget and leave every later
+    city's rows silently unsettled. An injected `Sources` (tests / explicit
+    callers) is used as-is."""
+    injected = sources is not None
     sources = sources or Sources()
     cutoff = (dt.date.today() - dt.timedelta(days=2)).isoformat()
     conn = _connect()
     try:
-        return _verify_rows(conn, sources, cutoff)
+        return _verify_rows(conn, sources, cutoff, injected=injected)
     finally:
         conn.close()
 
 
-def _verify_rows(conn, sources: Sources, cutoff: str) -> list[str]:
+def _verify_rows(conn, sources: Sources, cutoff: str, *, injected: bool) -> list[str]:
     rows = conn.execute(
         "SELECT issued_at, place, target_date, high, low, "
         "       truth_kind, station_id, station_icao, station_name, "
@@ -389,42 +404,23 @@ def _verify_rows(conn, sources: Sources, cutoff: str) -> list[str]:
         if truth_kind == "station" and icao_up in _WU_SETTLE_TZ:
             # WU-truth city: score against the Wunderground oracle (fetch_station_daily
             # has no overlay for RPLL/WSSS). Same repair as settle_market_snapshots.
-            day = dt.date.fromisoformat(target)
-            try:
-                actual = sources.wunderground_daily_series(
-                    icao_up, day, day, _WU_SETTLE_TZ[icao_up]).get(target)
-            except Exception as exc:
-                # No longer silent: a dead WU key looks exactly like "not settled
-                # yet" here — the failure class the soft-failure ALARM exists for.
-                record_soft_failure("verify_wu_fetch", exc)
-                actual = None
+            actual = _anchored_actual(sources, truth_kind, station_id, station_icao,
+                                      station_name, fc_lat, fc_lon, place_label,
+                                      target, station_cache,
+                                      soft_fail_prefix="verify",
+                                      fresh_sources=not injected,
+                                      recover_identity=True)
             truth_note = " vs Wunderground"
         elif truth_kind == "station" and station_id:
-            series = station_cache.get(station_id)
-            if series is None:
-                # Rebuild the verdict's EXACT anchor so fetch_station_daily's modern
-                # settlement overlays fire (EGLC by icao, the HKO Observatory by
-                # name + geography). Prefer the identity persisted at log time;
-                # for rows logged before that was stored, recover it from the
-                # station inventory by id. A blank id-only Station skipped the
-                # overlays entirely — the bug that left every station-anchored
-                # basket-city verdict unsettled.
-                station = None
-                if not (station_icao or station_name):
-                    station = sources.station_by_id(station_id)
-                if station is None:
-                    station = Station(
-                        id=station_id, name=station_name or "", wmo=None,
-                        icao=station_icao or None,
-                        latitude=fc_lat or 0.0, longitude=fc_lon or 0.0,
-                        elevation=None, distance_km=0.0)
-                try:
-                    series = sources.fetch_station_daily(station)
-                except Exception as exc:
-                    record_soft_failure("verify_station_fetch", exc)
-                    series = {}
-                station_cache[station_id] = series
-            actual = series.get(target)
+            # Rebuild the verdict's EXACT anchor so fetch_station_daily's modern
+            # settlement overlays fire; rows logged before identity was persisted
+            # recover it from the station inventory by id (recover_identity).
+            actual = _anchored_actual(sources, truth_kind, station_id, station_icao,
+                                      station_name, fc_lat, fc_lon, place_label,
+                                      target, station_cache,
+                                      soft_fail_prefix="verify",
+                                      fresh_sources=not injected,
+                                      recover_identity=True)
             truth_note = " vs station"
         else:
             place = _coord_place(place_label, fc_lat, fc_lon, sources)
@@ -503,8 +499,7 @@ def log_market_snapshot(v: Verdict, comparison, issued_at: str | None = None) ->
          "two_sided": getattr(b, "two_sided", None)}
         for b in comparison.buckets
     ]
-    conn = _connect()
-    with conn:
+    with contextlib.closing(_connect()) as conn, conn:
         conn.execute(
             "INSERT OR REPLACE INTO market_snapshots "
             "(issued_at, place, target_date, market_title, grain, buckets_json, "
@@ -520,7 +515,6 @@ def log_market_snapshot(v: Verdict, comparison, issued_at: str | None = None) ->
              getattr(comparison, "market_liquidity", None),
              int(bool(getattr(comparison, "settles_sub_degree", False)))),
         )
-    conn.close()
     return issued_at
 
 
@@ -536,8 +530,7 @@ def log_book_snapshots(place_label: str, target: str, issued_at: str,
     A `rows` entry must carry: token_id, and either fetch_ok=True with a `stats` dict
     (from clob_book.book_stats) + `book_json`, or fetch_ok=False with an `error`
     string. Missing keys default to NULL. Returns the number of rows written."""
-    conn = _connect()
-    with conn:
+    with contextlib.closing(_connect()) as conn, conn:
         for r in rows:
             stats = r.get("stats") or {}
             conn.execute(
@@ -554,7 +547,6 @@ def log_book_snapshots(place_label: str, target: str, issued_at: str,
                  stats.get("n_ask_levels"), stats.get("timestamp"),
                  r.get("book_json"), r.get("error")),
             )
-    conn.close()
     return len(rows)
 
 
@@ -651,112 +643,97 @@ def settle_market_snapshots(sources: Sources | None = None) -> list[str]:
     today = dt.date.today()
     bulk_cutoff = (today - dt.timedelta(days=2)).isoformat()
     conn = _connect()
-    rows = conn.execute(
-        "SELECT issued_at, place, target_date, grain, buckets_json, "
-        "       truth_kind, station_id, station_icao, station_name, "
-        "       fc_lat, fc_lon, sub_degree FROM market_snapshots "
-        "WHERE realized_label IS NULL AND target_date <= ?",
-        (today.isoformat(),),
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            "SELECT issued_at, place, target_date, grain, buckets_json, "
+            "       truth_kind, station_id, station_icao, station_name, "
+            "       fc_lat, fc_lon, sub_degree FROM market_snapshots "
+            "WHERE realized_label IS NULL AND target_date <= ?",
+            (today.isoformat(),),
+        ).fetchall()
 
-    from zoneinfo import ZoneInfo
-    station_cache: dict[str, dict] = {}
-    wu_cache: dict[tuple[str, str], tuple | None] = {}
-    report: list[str] = []
-    for (issued_at, place_label, target, grain, buckets_json,
-         truth_kind, station_id, station_icao, station_name,
-         fc_lat, fc_lon, sub_degree) in rows:
-        actual = None
-        icao_up = (station_icao or "").upper()
-        is_wu = truth_kind == "station" and icao_up in _WU_SETTLE_TZ
-        # Per-row readiness: a WU-oracle day settles once the CITY-LOCAL day is over
-        # (settling earlier — or on a naive host today-1 — could read a still-forming
-        # max, e.g. a US-west day is mid-afternoon locally after the host ticks over);
-        # lagged-truth stations keep the 2-day bulk-file buffer.
-        if is_wu:
-            if target >= dt.datetime.now(
-                    ZoneInfo(_WU_SETTLE_TZ[icao_up])).date().isoformat():
-                continue                   # city-local day not finished — would leak
-        elif target > bulk_cutoff:
-            continue                       # lagged-truth stations: conservative cutoff
-        if is_wu:
-            # WU-truth city (Manila RPLL / Singapore WSSS): settle on the SAME
-            # Wunderground oracle the verdict + contract pay out on. fetch_station_daily
-            # has no WU overlay for these airports (only EGLC/HKO), so it would leave
-            # realized_label NULL — the bug this branch repairs. daily_series returns
-            # the local-day (max_c, min_c) tuple settle/verify both expect.
-            # One WU fetch per (station, day), not per ROW — the accumulator
-            # writes ≥2 rows/day/city, so uncached this did duplicate network
-            # fetches (and burned duplicate request budget) every settle run.
-            wu_key = (icao_up, target)
-            if wu_key in wu_cache:
-                actual = wu_cache[wu_key]
-            else:
-                fetcher = sources if injected else Sources()
-                try:
-                    day = dt.date.fromisoformat(target)
-                    actual = fetcher.wunderground_daily_series(
-                        icao_up, day, day, _WU_SETTLE_TZ[icao_up]).get(target)
-                except Exception as exc:
-                    record_soft_failure("settle_wu_fetch", exc)   # swallow stays; no longer silent
-                    actual = None
-                wu_cache[wu_key] = actual
-        elif truth_kind == "station" and station_id:
-            series = station_cache.get(station_id)
-            if series is None:
+        station_cache: dict[str, dict] = {}
+        wu_cache: dict[tuple[str, str], tuple | None] = {}
+        report: list[str] = []
+        for (issued_at, place_label, target, grain, buckets_json,
+             truth_kind, station_id, station_icao, station_name,
+             fc_lat, fc_lon, sub_degree) in rows:
+            actual = None
+            icao_up = (station_icao or "").upper()
+            is_wu = truth_kind == "station" and icao_up in _WU_SETTLE_TZ
+            # Per-row readiness: a WU-oracle day settles once the CITY-LOCAL day is over
+            # (settling earlier — or on a naive host today-1 — could read a still-forming
+            # max, e.g. a US-west day is mid-afternoon locally after the host ticks over);
+            # lagged-truth stations keep the 2-day bulk-file buffer.
+            if is_wu:
+                if target >= dt.datetime.now(
+                        ZoneInfo(_WU_SETTLE_TZ[icao_up])).date().isoformat():
+                    continue               # city-local day not finished — would leak
+            elif target > bulk_cutoff:
+                continue                   # lagged-truth stations: conservative cutoff
+            if is_wu:
+                # WU-truth city (Manila RPLL / Singapore WSSS): settle on the SAME
+                # Wunderground oracle the verdict + contract pay out on. fetch_station_daily
+                # has no WU overlay for these airports (only EGLC/HKO), so it would leave
+                # realized_label NULL — the bug this branch repairs. daily_series returns
+                # the local-day (max_c, min_c) tuple settle/verify both expect.
+                # One WU fetch per (station, day), not per ROW — the accumulator
+                # writes ≥2 rows/day/city, so uncached this did duplicate network
+                # fetches (and burned duplicate request budget) every settle run.
+                wu_key = (icao_up, target)
+                if wu_key in wu_cache:
+                    actual = wu_cache[wu_key]
+                else:
+                    actual = _anchored_actual(sources, truth_kind, station_id,
+                                              station_icao, station_name, fc_lat, fc_lon,
+                                              place_label, target, station_cache,
+                                              soft_fail_prefix="settle",
+                                              fresh_sources=not injected)
+                    wu_cache[wu_key] = actual
+            elif truth_kind == "station" and station_id:
                 # Fresh Sources per unique station on the production path so each
                 # station fetch gets its own request budget (see docstring); an
                 # injected Sources is honored as-is for tests/explicit callers.
-                fetcher = sources if injected else Sources()
-                try:
-                    # Reconstruct the verdict's EXACT anchor — carrying icao+name so
-                    # fetch_station_daily's modern overlays fire (EGLC by icao, the
-                    # HKO Observatory by name+geography). A blank station here was the
-                    # bug that left every snapshot reading only the stale bulk file.
-                    series = fetcher.fetch_station_daily(
-                        Station(id=station_id, name=station_name or "", wmo=None,
-                                icao=station_icao or None,
-                                latitude=fc_lat or 0.0, longitude=fc_lon or 0.0,
-                                elevation=None, distance_km=0.0))
-                except Exception as exc:
-                    record_soft_failure("settle_station_fetch", exc)   # swallow stays; not silent
-                    series = {}
-                station_cache[station_id] = series
-            actual = series.get(target)
-        else:
-            place = _coord_place(place_label, fc_lat, fc_lon, sources)
-            if place is None:
+                actual = _anchored_actual(sources, truth_kind, station_id,
+                                          station_icao, station_name, fc_lat, fc_lon,
+                                          place_label, target, station_cache,
+                                          soft_fail_prefix="settle",
+                                          fresh_sources=not injected)
+            else:
+                place = _coord_place(place_label, fc_lat, fc_lon, sources)
+                if place is None:
+                    continue
+                day = dt.date.fromisoformat(target)
+                actual = sources.fetch_archive_series(place, day, day).get(target)
+            if not actual:
+                continue                   # anchor truth not yet available — retry later
+            realized_high = actual[0]
+            try:
+                buckets = json.loads(buckets_json)
+            except ValueError as exc:
+                # One corrupt row must not abort the whole settle batch (and leak conn).
+                record_soft_failure("settle_corrupt_buckets_json", exc)
                 continue
-            day = dt.date.fromisoformat(target)
-            actual = sources.fetch_archive_series(place, day, day).get(target)
-        if not actual:
-            continue                       # anchor truth not yet available — retry later
-        realized_high = actual[0]
-        try:
-            buckets = json.loads(buckets_json)
-        except ValueError as exc:
-            # One corrupt row must not abort the whole settle batch (and leak conn).
-            record_soft_failure("settle_corrupt_buckets_json", exc)
-            continue
-        # Sub-degree markets (HK Observatory, 0.1°C) settle by range-containment
-        # (floor: 28.6°C -> 28°C bucket), not round-half-up. _native_reading_int
-        # applies the right rule given the persisted sub_degree flag.
-        reading = _native_reading_int(realized_high, grain, bool(sub_degree))
-        label = _bucket_for_reading(buckets, reading)
-        if label is None:
-            continue                       # realized high outside the ladder — leave open
-        with conn:
-            conn.execute(
-                "UPDATE market_snapshots SET realized_high=?, realized_label=?, "
-                "settled_at=? WHERE issued_at=? AND place=? AND target_date=?",
-                (realized_high, label, utc_now_iso(),
-                 issued_at, place_label, target),
+            # Sub-degree markets (HK Observatory, 0.1°C) settle by range-containment
+            # (floor: 28.6°C -> 28°C bucket), not round-half-up. _native_reading_int
+            # applies the right rule given the persisted sub_degree flag.
+            reading = _native_reading_int(realized_high, grain, bool(sub_degree))
+            label = _bucket_for_reading(buckets, reading)
+            if label is None:
+                continue                   # realized high outside the ladder — leave open
+            with conn:
+                conn.execute(
+                    "UPDATE market_snapshots SET realized_high=?, realized_label=?, "
+                    "settled_at=? WHERE issued_at=? AND place=? AND target_date=?",
+                    (realized_high, label, utc_now_iso(),
+                     issued_at, place_label, target),
+                )
+            report.append(
+                f"{place_label} {target}: realized high {realized_high:.1f}°C "
+                f"settled in bucket \"{label}\""
             )
-        report.append(
-            f"{place_label} {target}: realized high {realized_high:.1f}°C "
-            f"settled in bucket \"{label}\""
-        )
-    conn.close()
+    finally:
+        conn.close()
     return report
 
 
@@ -774,40 +751,42 @@ def backfill_pm_resolutions(market_data: "MarketData | None" = None,
     md = market_data or MarketData()
     cutoff = (dt.date.today() - dt.timedelta(days=cutoff_days)).isoformat()
     conn = _connect()
-    pairs = conn.execute(
-        "SELECT DISTINCT place, target_date FROM market_snapshots "
-        "WHERE pm_resolved_label IS NULL AND target_date <= ? "
-        "ORDER BY target_date, place",
-        (cutoff,),
-    ).fetchall()
+    try:
+        pairs = conn.execute(
+            "SELECT DISTINCT place, target_date FROM market_snapshots "
+            "WHERE pm_resolved_label IS NULL AND target_date <= ? "
+            "ORDER BY target_date, place",
+            (cutoff,),
+        ).fetchall()
 
-    report: list[str] = []
-    for place_label, target in pairs:
-        try:
-            day = dt.date.fromisoformat(target)
-        except ValueError:
-            continue
-        res = md.fetch_resolution(resolved_event_slug(place_label, day))
-        if res is not None and getattr(res, "no_match", False):
-            # WP-1 fail-closed: the feed had events but none matched this slug exactly. Do NOT settle
-            # (leave pm_resolved_label NULL); surface the near-miss for human repair (slug drift).
-            report.append(f"{place_label} {target}: NO MATCH for the settlement slug — "
-                          f"candidates: {list(res.near_miss_slugs)} (left unsettled, not poisoned)")
-            continue
-        if res is None or not res.resolved or not res.winning_label:
-            continue                       # not finalized / not found — retry later
-        now = utc_now_iso()
-        with conn:
-            conn.execute(
-                "UPDATE market_snapshots SET pm_resolved_label=?, pm_resolved_at=? "
-                "WHERE place=? AND target_date=? AND pm_resolved_label IS NULL",
-                (res.winning_label, now, place_label, target),
+        report: list[str] = []
+        for place_label, target in pairs:
+            try:
+                day = dt.date.fromisoformat(target)
+            except ValueError:
+                continue
+            res = md.fetch_resolution(resolved_event_slug(place_label, day))
+            if res is not None and getattr(res, "no_match", False):
+                # WP-1 fail-closed: the feed had events but none matched this slug exactly. Do NOT settle
+                # (leave pm_resolved_label NULL); surface the near-miss for human repair (slug drift).
+                report.append(f"{place_label} {target}: NO MATCH for the settlement slug — "
+                              f"candidates: {list(res.near_miss_slugs)} (left unsettled, not poisoned)")
+                continue
+            if res is None or not res.resolved or not res.winning_label:
+                continue                   # not finalized / not found — retry later
+            now = utc_now_iso()
+            with conn:
+                conn.execute(
+                    "UPDATE market_snapshots SET pm_resolved_label=?, pm_resolved_at=? "
+                    "WHERE place=? AND target_date=? AND pm_resolved_label IS NULL",
+                    (res.winning_label, now, place_label, target),
+                )
+            report.append(
+                f"{place_label} {target}: contract settled \"{res.winning_label}\" "
+                f"(source: {res.source or 'n/a'})"
             )
-        report.append(
-            f"{place_label} {target}: contract settled \"{res.winning_label}\" "
-            f"(source: {res.source or 'n/a'})"
-        )
-    conn.close()
+    finally:
+        conn.close()
     return report
 
 
@@ -880,25 +859,32 @@ def fetch_settled_snapshots() -> list[dict]:
     laid down. So we collapse here to the FIRST-issued snapshot per
     (place, target_date) — the most genuinely day-ahead, least settlement-leaking
     row — chosen deterministically by ascending issued_at."""
-    conn = _connect()
-    rows = conn.execute(
-        "SELECT place, target_date, realized_label, buckets_json, issued_at "
-        "FROM market_snapshots WHERE realized_label IS NOT NULL "
-        "ORDER BY place, target_date, issued_at",
-    ).fetchall()
-    conn.close()
+    with contextlib.closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT place, target_date, realized_label, buckets_json, issued_at "
+            "FROM market_snapshots WHERE realized_label IS NOT NULL "
+            "ORDER BY place, target_date, issued_at",
+        ).fetchall()
     out: list[dict] = []
     seen: set[tuple[str, str]] = set()
     for place_label, target, realized_label, buckets_json, _issued in rows:
         key = (place_label, target)
         if key in seen:
             continue                       # earlier issued_at already kept for this day
+        try:
+            buckets = json.loads(buckets_json)
+        except ValueError as exc:
+            # One corrupt row must not abort the whole C7 scoring read (the same
+            # guard the settle path applies). Skip WITHOUT claiming the day, so an
+            # intact later snapshot for the same day can still be scored.
+            record_soft_failure("fetch_settled_corrupt_buckets_json", exc)
+            continue
         seen.add(key)
         out.append({
             "place": place_label,
             "target_date": target,
             "realized_label": realized_label,
-            "buckets": json.loads(buckets_json),
+            "buckets": buckets,
         })
     return out
 
@@ -910,11 +896,25 @@ def fetch_settled_snapshots() -> list[dict]:
 def _anchored_actual(sources: Sources, truth_kind, station_id,
                      station_icao, station_name, fc_lat, fc_lon,
                      place_label: str, target: str,
-                     station_cache: dict[str, dict]):
+                     station_cache: dict[str, dict],
+                     *, soft_fail_prefix: str | None = None,
+                     fresh_sources: bool = False,
+                     recover_identity: bool = False):
     """Realized (high, low) for `target` from the SAME anchored truth a verdict
     uses: the station's own daily record where the verdict was station-anchored,
     else ERA5 at the exact forecast coordinates. None until the truth is in.
-    Mirrors the resolution `verify`/`settle_market_snapshots` already use."""
+    The single implementation of the resolution `verify`/`settle_market_snapshots`/
+    `settle_tracked_forecasts` all share.
+
+    `fresh_sources` (the production path) builds a NEW `Sources` per station/WU
+    fetch so each gets its own request budget — one heavy fetch (the HKO overlay
+    alone costs many requests) must not exhaust the shared per-run budget and
+    starve every later station (the settle_market_snapshots repair, applied to
+    every settlement path). `soft_fail_prefix` names the soft-failure ALARM class
+    (`<prefix>_wu_fetch` / `<prefix>_station_fetch`); None keeps the swallow silent
+    (the tracked-forecaster convention). `recover_identity` enables verify's
+    legacy-row fallback: a row logged before station identity was persisted
+    recovers the anchor from the station inventory by id."""
     # WU-anchored basket stations settle on the Wunderground record itself — the same
     # branch verify/settle_market_snapshots already use. Without this, a tracked row
     # whose station_id is None (e.g. the TWC forward-log rows) fell through to the
@@ -923,26 +923,38 @@ def _anchored_actual(sources: Sources, truth_kind, station_id,
     if truth_kind == "station":
         icao_up = (station_icao or "").upper()
         if icao_up in _WU_SETTLE_TZ:
+            fetcher = Sources() if fresh_sources else sources
             try:
                 day = dt.date.fromisoformat(target)
-                return sources.wunderground_daily_series(
+                return fetcher.wunderground_daily_series(
                     icao_up, day, day, _WU_SETTLE_TZ[icao_up]).get(target)
-            except Exception:
+            except Exception as exc:
+                # Not silent where a prefix is set: a dead WU key looks exactly like
+                # "not settled yet" — the failure class the soft-failure ALARM exists for.
+                if soft_fail_prefix:
+                    record_soft_failure(f"{soft_fail_prefix}_wu_fetch", exc)
                 return None
     if truth_kind == "station" and station_id:
         series = station_cache.get(station_id)
         if series is None:
+            fetcher = Sources() if fresh_sources else sources
+            # Rebuild the verdict's EXACT anchor — carrying icao+name so
+            # fetch_station_daily's modern overlays fire (EGLC by icao, the
+            # HKO Observatory by name+geography). A blank station here was the
+            # bug that left every row reading only the stale bulk file.
+            station = None
+            if recover_identity and not (station_icao or station_name):
+                station = fetcher.station_by_id(station_id)
+            if station is None:
+                station = Station(id=station_id, name=station_name or "", wmo=None,
+                                  icao=station_icao or None,
+                                  latitude=fc_lat or 0.0, longitude=fc_lon or 0.0,
+                                  elevation=None, distance_km=0.0)
             try:
-                # Rebuild the verdict's EXACT anchor — carrying icao+name so
-                # fetch_station_daily's modern overlays fire (EGLC by icao, the
-                # HKO Observatory by name+geography). A blank station here was the
-                # bug that left every tracked row reading only the stale bulk file.
-                series = sources.fetch_station_daily(
-                    Station(id=station_id, name=station_name or "", wmo=None,
-                            icao=station_icao or None,
-                            latitude=fc_lat or 0.0, longitude=fc_lon or 0.0,
-                            elevation=None, distance_km=0.0))
-            except Exception:
+                series = fetcher.fetch_station_daily(station)
+            except Exception as exc:
+                if soft_fail_prefix:
+                    record_soft_failure(f"{soft_fail_prefix}_station_fetch", exc)
                 series = {}
             station_cache[station_id] = series
         return series.get(target)
@@ -968,8 +980,7 @@ def log_tracked_forecast(source: str, place: Place, target: str,
     earn a measured record before a human ever considers promoting it."""
     ts = truth_source or {}
     station = ts.get("station") or {}
-    conn = _connect()
-    with conn:
+    with contextlib.closing(_connect()) as conn, conn:
         conn.execute(
             "INSERT OR IGNORE INTO tracked_forecasts "
             "(source, issued_at, place, target_date, fc_high, fc_low, "
@@ -983,7 +994,6 @@ def log_tracked_forecast(source: str, place: Place, target: str,
              station.get("icao") or None, station.get("name") or None,
              place.latitude, place.longitude),
         )
-    conn.close()
 
 
 def settle_tracked_forecasts(sources: Sources | None = None) -> list[str]:
@@ -991,7 +1001,14 @@ def settle_tracked_forecasts(sources: Sources | None = None) -> list[str]:
     matching the station-lag cutoff used elsewhere), scored against the SAME
     anchored truth the council verdict uses. Leak-free and truth-matched: a row
     is only graded once its anchored record is available. Returns a settlement
-    note per newly graded row."""
+    note per newly graded row.
+
+    Same shared-budget repair as `settle_market_snapshots` (see its docstring):
+    on the production path (no injected `Sources`) each station/WU fetch gets a
+    FRESH `Sources` — its own request budget — so a heavy early fetch can no
+    longer exhaust the one shared budget and leave later cities unsettled. An
+    injected `Sources` (tests / explicit callers) is used as-is."""
+    injected = sources is not None
     sources = sources or Sources()
     # Broad prefilter only (host clock); the REAL readiness test is per-row below, because
     # "the day is over" is a CITY-LOCAL question — the host runs a day behind SGT, so a
@@ -999,40 +1016,42 @@ def settle_tracked_forecasts(sources: Sources | None = None) -> list[str]:
     # (2026-07-03 audit). WU-anchored stations are gradable the moment their city-local
     # day ends (current feed, no lag); lagged-truth stations keep the 2-day cutoff.
     conn = _connect()
-    rows = conn.execute(
-        "SELECT source, place, target_date, truth_kind, station_id, "
-        "       station_icao, station_name, fc_lat, fc_lon "
-        "FROM tracked_forecasts WHERE actual_high IS NULL AND target_date <= ?",
-        (dt.date.today().isoformat(),),
-    ).fetchall()
-    from zoneinfo import ZoneInfo
-    station_cache: dict[str, dict] = {}
-    report: list[str] = []
-    for (source, place_label, target, truth_kind, station_id,
-         station_icao, station_name, fc_lat, fc_lon) in rows:
-        icao_up = (station_icao or "").upper()
-        if truth_kind == "station" and icao_up in _WU_SETTLE_TZ:
-            local_today = dt.datetime.now(ZoneInfo(_WU_SETTLE_TZ[icao_up])).date()
-            if target >= local_today.isoformat():
-                continue                   # city-local day not finished — grading would leak
-        elif target > (dt.date.today() - dt.timedelta(days=2)).isoformat():
-            continue                       # lagged-truth stations: conservative 2-day cutoff
-        actual = _anchored_actual(sources, truth_kind, station_id,
-                                  station_icao, station_name, fc_lat, fc_lon,
-                                  place_label, target, station_cache)
-        if not actual:
-            continue                       # anchored truth not yet available
-        a_high, a_low = actual
-        with conn:
-            conn.execute(
-                "UPDATE tracked_forecasts SET actual_high=?, actual_low=?, settled_at=? "
-                "WHERE source=? AND place=? AND target_date=?",
-                (a_high, a_low, utc_now_iso(),
-                 source, place_label, target),
-            )
-        report.append(f"{source}/{place_label} {target}: "
-                      f"actual {a_high:.1f}/{a_low:.1f}")
-    conn.close()
+    try:
+        rows = conn.execute(
+            "SELECT source, place, target_date, truth_kind, station_id, "
+            "       station_icao, station_name, fc_lat, fc_lon "
+            "FROM tracked_forecasts WHERE actual_high IS NULL AND target_date <= ?",
+            (dt.date.today().isoformat(),),
+        ).fetchall()
+        station_cache: dict[str, dict] = {}
+        report: list[str] = []
+        for (source, place_label, target, truth_kind, station_id,
+             station_icao, station_name, fc_lat, fc_lon) in rows:
+            icao_up = (station_icao or "").upper()
+            if truth_kind == "station" and icao_up in _WU_SETTLE_TZ:
+                local_today = dt.datetime.now(ZoneInfo(_WU_SETTLE_TZ[icao_up])).date()
+                if target >= local_today.isoformat():
+                    continue               # city-local day not finished — grading would leak
+            elif target > (dt.date.today() - dt.timedelta(days=2)).isoformat():
+                continue                   # lagged-truth stations: conservative 2-day cutoff
+            actual = _anchored_actual(sources, truth_kind, station_id,
+                                      station_icao, station_name, fc_lat, fc_lon,
+                                      place_label, target, station_cache,
+                                      fresh_sources=not injected)
+            if not actual:
+                continue                   # anchored truth not yet available
+            a_high, a_low = actual
+            with conn:
+                conn.execute(
+                    "UPDATE tracked_forecasts SET actual_high=?, actual_low=?, settled_at=? "
+                    "WHERE source=? AND place=? AND target_date=?",
+                    (a_high, a_low, utc_now_iso(),
+                     source, place_label, target),
+                )
+            report.append(f"{source}/{place_label} {target}: "
+                          f"actual {a_high:.1f}/{a_low:.1f}")
+    finally:
+        conn.close()
     return report
 
 
@@ -1042,14 +1061,13 @@ def tracked_forecast_scores(source: str) -> dict:
     the comparison is apples-to-apples. Each settled day contributes its high and
     low error. Returns {'n', 'source_mae', 'council_mae'}; n is settled days, and
     the MAEs are None until at least one day settles. Read-only."""
-    conn = _connect()
-    rows = conn.execute(
-        "SELECT fc_high, fc_low, council_high, council_low, actual_high, actual_low "
-        "FROM tracked_forecasts "
-        "WHERE source=? AND actual_high IS NOT NULL AND council_high IS NOT NULL",
-        (source,),
-    ).fetchall()
-    conn.close()
+    with contextlib.closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT fc_high, fc_low, council_high, council_low, actual_high, actual_low "
+            "FROM tracked_forecasts "
+            "WHERE source=? AND actual_high IS NOT NULL AND council_high IS NOT NULL",
+            (source,),
+        ).fetchall()
     src_errs: list[float] = []
     cou_errs: list[float] = []
     for fc_h, fc_l, co_h, co_l, a_h, a_l in rows:

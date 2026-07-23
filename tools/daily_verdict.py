@@ -27,7 +27,9 @@ def _run(args: list[str]) -> str:
                            capture_output=True, text=True, timeout=600)
         return (r.stdout or "") + (("\n[stderr]\n" + r.stderr) if r.returncode else "")
     except Exception as exc:
-        return f"(command failed: {exc})\n"
+        # A timeout/crash must read as a hard FAILURE in the report — plain
+        # parenthesized text blended into the sections and a dead step went unnoticed.
+        return f"!!!! FAIL — command {args!r} raised {type(exc).__name__}: {exc} !!!!\n"
 
 
 def main() -> int:

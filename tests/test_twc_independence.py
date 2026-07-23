@@ -46,7 +46,7 @@ class TestAudit(unittest.TestCase):
     def test_audit_does_not_mutate_db(self):
         tmp = Path(tempfile.mkdtemp())
         dbp = tmp / "t.db"
-        conn = ti._connect_at(dbp)
+        conn = storage._connect_at(dbp)
         with conn:
             prov = {"blend": {"high": 30.0}, "included_high": ["a"],
                     "votes": [{"member_id": "a", "corrected_high": 30.0}]}
@@ -58,7 +58,7 @@ class TestAudit(unittest.TestCase):
         conn.close()
 
         def _counts():
-            c = ti._connect_at(dbp)
+            c = storage._connect_at(dbp)
             try:
                 return (c.execute("SELECT COUNT(*) FROM verdicts").fetchone()[0],
                         c.execute("SELECT COUNT(*) FROM tracked_forecasts").fetchone()[0])
@@ -71,7 +71,7 @@ class TestAudit(unittest.TestCase):
 
     def test_empty_when_no_paired_days(self):
         tmp = Path(tempfile.mkdtemp())
-        ti._connect_at(tmp / "t.db").close()
+        storage._connect_at(tmp / "t.db").close()
         res = ti.audit("twc", db_path=tmp / "t.db")
         self.assertEqual(res["cities"], {})
         self.assertIn("accruing", "\n".join(ti.report_lines(res)))
@@ -79,7 +79,7 @@ class TestAudit(unittest.TestCase):
     def test_collinear_member_flagged_independent_not(self):
         tmp = Path(tempfile.mkdtemp())
         dbp = tmp / "t.db"
-        conn = ti._connect_at(dbp)
+        conn = storage._connect_at(dbp)
         with conn:
             for i in range(31):                            # ≥ THRESHOLD_N paired days
                 actual = 30.0

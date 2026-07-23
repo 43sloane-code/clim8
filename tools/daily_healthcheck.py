@@ -59,7 +59,8 @@ from weather_council.council import (Council, WEIGHT_POWER,  # noqa: E402
                                      _weighted_std)
 from weather_council.edge import report_lines as edge_report_lines  # noqa: E402
 from weather_council.edge import score_snapshots  # noqa: E402
-from weather_council.failures import soft_failure_counts, recent_soft_failures  # noqa: E402
+from weather_council.failures import (soft_failure_counts, recent_soft_failures,  # noqa: E402
+                                      record_soft_failure)
 from weather_council.scoring import crps_sample, interval_coverage, pit  # noqa: E402
 from weather_council.spread_skill import spread_skill_eval  # noqa: E402
 from weather_council.ensemble_verification import (rank_histogram_eval,  # noqa: E402
@@ -124,15 +125,13 @@ BASELINE = REPORTS / "baseline.json"
 STATUS = REPORTS / "healthcheck_status.json"
 
 
-def _blend_on_date(votes, attr, day, train, bias_method, power):
-    """One held-out day's blend under a chosen (bias_method, power), using only
-    `train` dates to learn each member's bias and weight. Returns
-    (prediction, corrected_members) where `corrected_members` is the raw
-    bias-corrected member panel for this day — surfaced (recommend-only) so the
-    walk-forward can build the rank histogram, exactly as council._blend_on_date
-    does for the live verdict. Returns (None, []) if too sparse."""
-    num = den = 0.0
-    corrected = []          # raw bias-corrected member forecasts for this day
+def _member_panel(votes, attr, day, train, bias_method, power):
+    """The raw bias-corrected member panel for one held-out day: for every member
+    with a forecast on `day` and ≥5 training pairs, learn its bias and skill-weight
+    from `train` ONLY and return [(corrected_value, weight), ...]. Shared by
+    _blend_on_date and _screened_blend_on_date so the bias/weight learning exists
+    in exactly one place (the live council's own learning rule)."""
+    panel: list[tuple[float, float]] = []
     for v in votes:
         series = v.hist_high if attr == "high" else v.hist_low
         if day not in series:
@@ -145,10 +144,21 @@ def _blend_on_date(votes, attr, day, train, bias_method, power):
                 else statistics.median(diffs))
         mae_c = statistics.mean(abs(f - o - bias) for f, o in pairs)
         w = 1.0 / max(mae_c, 0.1) ** power
-        num += w * (series[day][0] - bias)
-        den += w
-        corrected.append(series[day][0] - bias)
-    return ((num / den) if den > 0 else None), corrected
+        panel.append((series[day][0] - bias, w))
+    return panel
+
+
+def _blend_on_date(votes, attr, day, train, bias_method, power):
+    """One held-out day's blend under a chosen (bias_method, power), using only
+    `train` dates to learn each member's bias and weight. Returns
+    (prediction, corrected_members) where `corrected_members` is the raw
+    bias-corrected member panel for this day — surfaced (recommend-only) so the
+    walk-forward can build the rank histogram, exactly as council._blend_on_date
+    does for the live verdict. Returns (None, []) if too sparse."""
+    panel = _member_panel(votes, attr, day, train, bias_method, power)
+    num = sum(w * c for c, w in panel)
+    den = sum(w for _, w in panel)
+    return ((num / den) if den > 0 else None), [c for c, _ in panel]
 
 
 def _walk_forward(votes, observed, bias_method, power):
@@ -247,20 +257,7 @@ def _screened_blend_on_date(votes, attr, day, train, bias_method, power, floor):
     Unlike `_blend_on_date`, this one applies the outlier floor, so it is the
     faithful engine for re-justifying OUTLIER_FLOOR_C and for relating dispersion
     to held-out error."""
-    cands: list[tuple[float, float]] = []          # (corrected_value, weight)
-    for v in votes:
-        series = v.hist_high if attr == "high" else v.hist_low
-        if day not in series:
-            continue
-        pairs = [series[d] for d in series if d in train]
-        if len(pairs) < 5:
-            continue
-        diffs = [f - o for f, o in pairs]
-        bias = (statistics.mean(diffs) if bias_method == "mean"
-                else statistics.median(diffs))
-        mae_c = statistics.mean(abs(f - o - bias) for f, o in pairs)
-        w = 1.0 / max(mae_c, 0.1) ** power
-        cands.append((series[day][0] - bias, w))
+    cands = _member_panel(votes, attr, day, train, bias_method, power)
     if not cands:
         return None, None, 0
     vals = [c for c, _ in cands]
@@ -313,8 +310,8 @@ def _city_convergence(council, fp, target, votes, observed, c7_validated):
     only the council's blend/naive/validate (pure) and one climatology fetch for
     the seasonal normal. Returns {"high": Convergence, "low": Convergence} (either
     may be None) or None when the blend has no usable members."""
-    high, _ih, _sh, _wh = council._blend(votes, "high")
-    low, _il, _sl, _wl = council._blend(votes, "low")
+    high, _ih, _sh, _wh, _oh = council._blend(votes, "high")
+    low, _il, _sl, _wl, _ol = council._blend(votes, "low")
     naive_h = council._naive(votes, "high")
     naive_l = council._naive(votes, "low")
     validation = council._validate(votes, observed)
@@ -353,8 +350,8 @@ def _city_market_snapshot(council, place, fp, target, votes, observed, truth):
     grain is supported (and the snapshot was logged), else `note` explains why it
     was withheld — e.g. HK's sub-degree Observatory settlement — or None when no
     market matched. NEVER sizes a position, prices an order, or moves funds."""
-    high, inc_h, _sh, wts_h = council._blend(votes, "high")
-    low, inc_l, _sl, wts_l = council._blend(votes, "low")
+    high, inc_h, _sh, wts_h, _oh = council._blend(votes, "high")
+    low, inc_l, _sl, wts_l, _ol = council._blend(votes, "low")
     validation = council._validate(votes, observed)
     shim = SimpleNamespace(
         high=round(high, 1), low=round(low, 1),
@@ -372,8 +369,10 @@ def _city_market_snapshot(council, place, fp, target, votes, observed, truth):
         # measured against the mid. Never lets a book fetch abort the health check.
         try:
             capture_for_place(council.sources, place, target, issued_at)  # target: dt.date
-        except Exception:
-            pass
+        except Exception as exc:
+            # swallowed on purpose (a book fetch must never abort the health check)
+            # but RECORDED — a silent daily failure here starves the depth archive.
+            record_soft_failure("healthcheck.book_capture", exc)
     return comparison, note
 
 
@@ -526,6 +525,32 @@ def _paired_bootstrap_ci(deltas, iters=BOOT_ITERS, ci=BOOT_CI, seed=BOOT_SEED):
     return point, lo, hi, n
 
 
+def _challenger_verdict(deltas, *, consider_name, lead_name, low_name, keep,
+                        no_pairs, consider_tail, reco_tag):
+    """The shared CONSIDER/HOLD verdict for a challenger that leads current on basket
+    MAE — the variant sweep and the OUTLIER_FLOOR_C sweep run the SAME logic and
+    differ only in the labels passed here. A challenger must clear BOTH the practical
+    floor (≥ MIN_IMPROVEMENT °C) AND the statistical bar (seeded paired bootstrap,
+    90% CI above 0), else the lead is noise. Returns (report_line, status_reco|None)."""
+    point, lo, hi, npair = _paired_bootstrap_ci(deltas)
+    if point is None:
+        return f"  HOLD. {no_pairs}", None
+    ci_s = (f"90% CI [{lo:+.4f}, {hi:+.4f}]" if lo is not None
+            else "CI n/a (single paired city)")
+    significant = lo is not None and lo > 0
+    if point >= MIN_IMPROVEMENT and significant:
+        return (f"  CONSIDER: {consider_name} beats current by {point:.4f} °C basket MAE "
+                f"over {npair} paired cities ({ci_s}, excludes 0) — exceeds the "
+                f"{MIN_IMPROVEMENT} °C floor AND is significant. Worth a human "
+                f"re-evaluation{consider_tail}; do NOT auto-apply.",
+                f"{reco_tag} ({point:+.3f} °C, significant)")
+    if point >= MIN_IMPROVEMENT:
+        return (f"  HOLD. {lead_name} leads by {point:.4f} °C but {ci_s} includes 0 "
+                f"over {npair} paired cities — not distinguishable from noise. {keep}"), None
+    return (f"  HOLD. {low_name} leads by only {point:.4f} °C (< {MIN_IMPROVEMENT} "
+            f"floor) — noise, not signal. {keep}"), None
+
+
 def main() -> int:
     run_t0 = time.monotonic()              # wall-clock of the whole run (metrics)
     today = dt.date.today()
@@ -607,8 +632,10 @@ def main() -> int:
                                      c7_validated)
             if conv:
                 convergence_by_city[city] = conv
-        except Exception:
-            pass                                        # never let it abort the run
+        except Exception as exc:
+            # never lets it abort the run — but the swallow is RECORDED (Phase 6b
+            # doctrine: a settlement-path swallow must be visible, not vanish).
+            record_soft_failure("healthcheck.convergence", exc)
 
         # Recommend-only model-vs-market: log today's council-vs-Polymarket
         # snapshot (so C7's settled set grows) and capture the live divergence.
@@ -620,8 +647,10 @@ def main() -> int:
                 snapshots_logged += 1
             elif note:
                 market_withheld[city] = note
-        except Exception:
-            pass                                        # never let it abort the run
+        except Exception as exc:
+            # never lets it abort the run — but RECORDED: a daily raise here means
+            # C7's settled set silently stops growing, invisible without the ledger.
+            record_soft_failure("healthcheck.market_snapshot", exc)
 
         # Recommend-only TRACKED FORECASTER (Weatherbit): log its forecast for
         # today's target ALONGSIDE the council's own, so a forecaster with no
@@ -637,8 +666,9 @@ def main() -> int:
                 log_tracked_forecast("weatherbit", place, target.isoformat(),
                                      wb[0], wb[1], ch, cl, truth)
                 tracked_logged += 1
-        except Exception:
-            pass                                        # never let it abort the run
+        except Exception as exc:
+            # never lets it abort the run — but RECORDED, same doctrine as above.
+            record_soft_failure("healthcheck.tracked_forecast", exc)
 
         # Per-city request total AFTER both recommend-only layers, so the budget
         # line reflects the real sandbox usage (must stay < MAX_REQUESTS_PER_RUN).
@@ -777,30 +807,19 @@ def main() -> int:
                      f"the basket (MAE {cur_mae:.4f}). No change recommended.")
     else:
         deltas = _paired_city_deltas(variant_mae_by_city[cur], variant_mae_by_city[best])
-        point, lo, hi, npair = _paired_bootstrap_ci(deltas)
-        if point is None:
-            lines.append("  HOLD. No city is comparable on both current and the best "
-                         "challenger today; cannot test. Keep current.")
-        else:
-            ci_s = (f"90% CI [{lo:+.4f}, {hi:+.4f}]" if lo is not None
-                    else "CI n/a (single paired city)")
-            significant = lo is not None and lo > 0
-            if point >= MIN_IMPROVEMENT and significant:
-                status_reco.append(f"variant→ bias {best[0]} 1/MAE^{best[1]} "
-                                   f"({point:+.3f} °C, significant)")
-                lines.append(f"  CONSIDER: bias {best[0]}, 1/MAE^{best[1]} beats current by "
-                             f"{point:.4f} °C basket MAE over {npair} paired cities "
-                             f"({ci_s}, excludes 0) — exceeds the {MIN_IMPROVEMENT} °C floor "
-                             f"AND is significant. Worth a human re-evaluation; do NOT "
-                             f"auto-apply.")
-            elif point >= MIN_IMPROVEMENT:
-                lines.append(f"  HOLD. Best challenger (bias {best[0]}, 1/MAE^{best[1]}) "
-                             f"leads by {point:.4f} °C but {ci_s} includes 0 over {npair} "
-                             f"paired cities — not distinguishable from noise. Keep current.")
-            else:
-                lines.append(f"  HOLD. Best challenger (bias {best[0]}, 1/MAE^{best[1]}) "
-                             f"leads by only {point:.4f} °C (< {MIN_IMPROVEMENT} floor) — "
-                             f"noise, not signal. Keep current.")
+        line, reco = _challenger_verdict(
+            deltas,
+            consider_name=f"bias {best[0]}, 1/MAE^{best[1]}",
+            lead_name=f"Best challenger (bias {best[0]}, 1/MAE^{best[1]})",
+            low_name=f"Best challenger (bias {best[0]}, 1/MAE^{best[1]})",
+            keep="Keep current.",
+            no_pairs="No city is comparable on both current and the best challenger "
+                     "today; cannot test. Keep current.",
+            consider_tail="",
+            reco_tag=f"variant→ bias {best[0]} 1/MAE^{best[1]}")
+        lines.append(line)
+        if reco:
+            status_reco.append(reco)
     lines.append("")
 
     # OUTLIER_FLOOR_C sweep — re-justify the member-rejection floor on fresh data.
@@ -823,32 +842,20 @@ def main() -> int:
                      f"basket (MAE {cur_floor_mae:.4f}). No change recommended.")
     else:
         fdeltas = _paired_city_deltas(basket_floor[CURRENT_FLOOR], basket_floor[best_floor])
-        fpoint, flo, fhi, fnp = _paired_bootstrap_ci(fdeltas)
-        if fpoint is None:
-            lines.append(f"  HOLD. No city is comparable on both the current floor and "
-                         f"floor {best_floor:.1f} °C today; cannot test. Keep "
-                         f"OUTLIER_FLOOR_C at {CURRENT_FLOOR:.1f} °C.")
-        else:
-            fci_s = (f"90% CI [{flo:+.4f}, {fhi:+.4f}]" if flo is not None
-                     else "CI n/a (single paired city)")
-            fsig = flo is not None and flo > 0
-            if fpoint >= MIN_IMPROVEMENT and fsig:
-                status_reco.append(f"outlier_floor→ {best_floor:.1f} °C "
-                                   f"({fpoint:+.3f} °C, significant)")
-                lines.append(f"  CONSIDER: floor {best_floor:.1f} °C beats current by "
-                             f"{fpoint:.4f} °C basket MAE over {fnp} paired cities "
-                             f"({fci_s}, excludes 0) — exceeds the {MIN_IMPROVEMENT} °C floor "
-                             f"AND is significant. Worth a human re-evaluation of "
-                             f"OUTLIER_FLOOR_C; do NOT auto-apply.")
-            elif fpoint >= MIN_IMPROVEMENT:
-                lines.append(f"  HOLD. Floor {best_floor:.1f} °C leads by {fpoint:.4f} °C but "
-                             f"{fci_s} includes 0 over {fnp} paired cities — not "
-                             f"distinguishable from noise. Keep OUTLIER_FLOOR_C at "
-                             f"{CURRENT_FLOOR:.1f} °C.")
-            else:
-                lines.append(f"  HOLD. Best floor {best_floor:.1f} °C leads by only "
-                             f"{fpoint:.4f} °C (< {MIN_IMPROVEMENT} floor) — noise, not "
-                             f"signal. Keep OUTLIER_FLOOR_C at {CURRENT_FLOOR:.1f} °C.")
+        line, reco = _challenger_verdict(
+            fdeltas,
+            consider_name=f"floor {best_floor:.1f} °C",
+            lead_name=f"Floor {best_floor:.1f} °C",
+            low_name=f"Best floor {best_floor:.1f} °C",
+            keep=f"Keep OUTLIER_FLOOR_C at {CURRENT_FLOOR:.1f} °C.",
+            no_pairs=f"No city is comparable on both the current floor and floor "
+                     f"{best_floor:.1f} °C today; cannot test. Keep OUTLIER_FLOOR_C "
+                     f"at {CURRENT_FLOOR:.1f} °C.",
+            consider_tail=" of OUTLIER_FLOOR_C",
+            reco_tag=f"outlier_floor→ {best_floor:.1f} °C")
+        lines.append(line)
+        if reco:
+            status_reco.append(reco)
     lines.append("")
 
     # DISP-threshold validation — do the confidence tiers still discriminate?
@@ -1171,7 +1178,7 @@ def main() -> int:
         lines.append("  none recorded in the last 24h.")
     else:
         alarms = {t: n for t, n in counts.items()
-                  if any(t.startswith(p) or p in t for p in _SETTLE_TAGS)}
+                  if any(p in t for p in _SETTLE_TAGS)}
         for tag, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
             flag = "  ⚠ ALARM (settlement path)" if tag in alarms else ""
             lines.append(f"  {tag:26} {n:4}{flag}")

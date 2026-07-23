@@ -39,7 +39,7 @@ from pathlib import Path
 from weather_council import agents
 from weather_council.agents import MemberSpec
 from weather_council.council import Council
-from weather_council.sources import Sources, place_today
+from weather_council.sources import Sources, place_today, _round_half_up
 
 # The candidate change under test: a 9th council member. Defaults to the data-driven
 # ECMWF AIFS (AI) model; override with --member <open_meteo_model_id> to A/B any
@@ -114,10 +114,6 @@ def _validation(sources: Sources, place, target: dt.date, window: int, arm: str)
 # (This is what closed candidate 47: AIFS-for-HK helped in aggregate but a w60
 # disjoint fold FLIPPED sign.) Uses Validation.wf_crps (per-day CRPS) and
 # Validation.wf_high (per-day point/realized).
-
-
-def _round_half_up(x: float) -> int:
-    return math.floor(x + 0.5)
 
 
 def _fold_dates(dates: list[str], n_folds: int) -> list[set]:

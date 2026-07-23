@@ -20,6 +20,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from weather_council.agents import WINDY_MEMBERS
 from weather_council.compare import (
@@ -34,6 +35,7 @@ from weather_council.council import (Council, Verdict, applied_bias_correction,
                                      regime_consensus)
 from weather_council.edge import report_lines as edge_report_lines, score_snapshots
 from weather_council.convergence import report_lines as convergence_report_lines
+from weather_council.failures import record_soft_failure
 from weather_council.market import MarketData, _native_reading_int, event_slug
 from weather_council.security import RateLimitError, SecurityError
 from weather_council.sources import Sources, place_today, _round_half_up
@@ -120,16 +122,23 @@ ANCHOR_CROSS_REFERENCE: dict[str, dict[str, str]] = {
 }
 
 
-def _settlement_reference_for(place) -> dict[str, str] | None:
-    """The user-declared settlement reference for this city, or None. Matched on
-    case-insensitive city-name containment so 'London' / 'London, GB' both hit."""
+def _pinned_city_for(table: dict[str, dict[str, str]], place) -> dict[str, str] | None:
+    """The user-declared directive for this city from `table`, or None. Matched on
+    case-insensitive city-name containment so 'London' / 'London, GB' both hit.
+    An empty name is a substring of EVERY key, so an unnamed place must return
+    None rather than silently inherit another city's block."""
     name = (getattr(place, "name", "") or "").strip().lower()
     if not name:
-        return None      # "" is a substring of every key — an unnamed place must not
-    for key, ref in SETTLEMENT_REFERENCE.items():   # silently inherit London's block
+        return None
+    for key, ref in table.items():
         if key in name or name in key:
             return ref
     return None
+
+
+def _settlement_reference_for(place) -> dict[str, str] | None:
+    """The user-declared settlement reference for this city, or None."""
+    return _pinned_city_for(SETTLEMENT_REFERENCE, place)
 
 
 def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict | None:
@@ -149,14 +158,17 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
         return None
     icao = ref["icao"]
     ts = v.truth_source or {}
+    # ONE read of the place-local clock for the whole block: separate calls could
+    # disagree if the run straddles local midnight.
+    today = place_today(place)
     try:
         w_start = dt.date.fromisoformat(ts.get("window_start"))
         w_end = dt.date.fromisoformat(ts.get("window_end"))
     except (TypeError, ValueError):
-        w_end = place_today(place) - dt.timedelta(days=1)
+        w_end = today - dt.timedelta(days=1)
         w_start = w_end - dt.timedelta(days=60)
     # Extend the fetch through the target day so a finished target is captured.
-    fetch_end = max(w_end, min(target, place_today(place) - dt.timedelta(days=1)))
+    fetch_end = max(w_end, min(target, today - dt.timedelta(days=1)))
     base = {"icao": icao, "name": ref["name"], "url": ref["url"],
             "target_date": target.isoformat(),
             "verdict_high": v.high, "verdict_low": v.low}
@@ -203,7 +215,6 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
     wu_agree = wu_total = 0
     wu_target_high = None                     # the WU settlement high for the target day
     grain = md.get("grain") or "C"            # the market's native settlement grain (°F for KSFO)
-    today = place_today(place)
     wu_dates = list(recent[-4:])
     if target <= today and target.isoformat() not in wu_dates:
         wu_dates.append(target.isoformat())
@@ -262,13 +273,8 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
 
 
 def _anchor_cross_reference_for(place) -> dict[str, str] | None:
-    """The user-declared anchor/cross-reference directive for this city, or None.
-    Matched on case-insensitive city-name containment, like SETTLEMENT_REFERENCE."""
-    name = (getattr(place, "name", "") or "").strip().lower()
-    for key, ref in ANCHOR_CROSS_REFERENCE.items():
-        if key in name or name in key:
-            return ref
-    return None
+    """The user-declared anchor/cross-reference directive for this city, or None."""
+    return _pinned_city_for(ANCHOR_CROSS_REFERENCE, place)
 
 
 def _anchor_cross_reference(sources: Sources, place, target, v: Verdict) -> dict | None:
@@ -324,6 +330,13 @@ def _anchor_cross_reference(sources: Sources, place, target, v: Verdict) -> dict
 
 def _num(x, width=6, prec=1):
     return f"{x:{width}.{prec}f}" if isinstance(x, (int, float)) else " " * (width - 1) + "-"
+
+
+def _grain_unit(obj) -> str:
+    """The object's settlement grain, normalized to 'F'/'C' ('C' when unset or
+    the object is None). Single home for the grain sniff that used to be spelled
+    out at every °F/°C boundary."""
+    return "F" if str(getattr(obj, "grain", "C")).upper().startswith("F") else "C"
 
 
 def _pillars(v: Verdict) -> list[str]:
@@ -790,7 +803,7 @@ def _bucket_call(v: Verdict, ceiling=None) -> dict:
                   f"σ collapsed near the peak")
         # The intraday pmf is in the ceiling's SETTLEMENT grain — on an °F city
         # the header's "whole °C" rule text would misdescribe the buckets below it.
-        if str(getattr(ceiling, "grain", "C")).upper().startswith("F"):
+        if _grain_unit(ceiling) == "F":
             rule = "whole °F (settlement grain)"
     else:
         pmf = da_pmf
@@ -845,7 +858,6 @@ def _twc_raw_high(v: Verdict) -> float | None:
         finally:
             conn.close()
     except Exception as exc:
-        from weather_council.failures import record_soft_failure
         record_soft_failure("twc_tracked_read", exc)
         return None
     return float(row[0]) if row and row[0] is not None else None
@@ -948,7 +960,7 @@ def _market_modal_c(comparison=None):
     mk = _bucket_int_from_label(comparison.market_modal)
     if mk is None:
         return None
-    if str(getattr(comparison, "grain", "C")).upper().startswith("F"):
+    if _grain_unit(comparison) == "F":
         mk = _round_half_up((mk - 32) * 5 / 9)
     return mk
 
@@ -998,12 +1010,20 @@ def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
         settled = [s for (_d, _srv, s, _h)
                    in live_bucket_scorecard(v.place.label()).get("recent", [])
                    if isinstance(s, int)]
-    except Exception:
+    except Exception as exc:
+        record_soft_failure("crosscheck_scorecard", exc)
         settled = []
     # M3 guard: a THIN scorecard's mode is noise, not a regime (Manila n=4 printed "36").
     # Require n>=8 settled days before quoting a recent-regime signal at all.
     if len(settled) >= 8:
-        signals.append(("recent-regime", max(set(settled), key=settled.count)))  # mode
+        mode = max(set(settled), key=settled.count)  # mode
+        # The scorecard buckets are in the market's SETTLEMENT grain (°F for SF)
+        # while every other panel signal is °C — convert so a 66°F regime is not
+        # compared against a 19°C council bucket (the same unit artifact the
+        # market-modal conversion above was added to fix).
+        if _grain_unit(comparison) == "F":
+            mode = _round_half_up((mode - 32) * 5 / 9)
+        signals.append(("recent-regime", mode))
     if len(signals) < 2:
         return []                                  # nothing independent to check against
     others = [b for name, b in signals if name != "council"]
@@ -1022,8 +1042,8 @@ def _cross_check_lines(v: Verdict, c: dict, comparison=None) -> list[str]:
                              + ("; cold squall tail is LIVE" if _r["regime"] == "convective" else "")
                              + ")")
                     break
-    except Exception:
-        pass
+    except Exception as exc:
+        record_soft_failure("pop_regime_tag", exc)
     if all(b == others[0] for b in others) and others[0] != council:
         lo, hi = min(council, others[0]), max(council, others[0])
         L.append(f"        → the independent signals agree on {others[0]}°C; the COUNCIL "
@@ -1145,11 +1165,11 @@ def _bucket_call_lines(v: Verdict, ceiling=None, comparison=None, grade=None) ->
             # Grade resolver unavailable — serve the floor plainly, without finality words.
             # Intraday buckets carry the ceiling's SETTLEMENT grain (°F for SF) — a
             # hardcoded °C here printed "66°C" for a 66°F bucket.
-            iu = "°F" if str(getattr(ceiling, "grain", "C")).upper().startswith("F") else "°C"
+            iu = "°F" if _grain_unit(ceiling) == "F" else "°C"
             L.append(f"    ► INTRADAY : {c['bucket']}{iu} — {c['tier']} {c['prob']*100:.0f}% "
                      f"(backtest; grade resolver unavailable — treat as PROVISIONAL)")
             L.append(f"      grounded in: {c['source']}")
-        iu = "°F" if str(getattr(ceiling, "grain", "C")).upper().startswith("F") else "°C"
+        iu = "°F" if _grain_unit(ceiling) == "F" else "°C"
         if span and len(span) == 1:
             L.append("      single bucket is confident now — σ collapsed at/after the peak")
         elif span:
@@ -1197,7 +1217,8 @@ def _bucket_call_lines(v: Verdict, ceiling=None, comparison=None, grade=None) ->
     # is revised toward truth). This is the number that has actually been happening.
     try:
         sc = live_bucket_scorecard(v.place.label())
-    except Exception:
+    except Exception as exc:
+        record_soft_failure("live_scorecard_read", exc)
         sc = {"n": 0}
     if sc["n"] >= 3:
         L.append(f"    REALITY CHECK — live served-vs-settlement {sc['hits']}/{sc['n']} "
@@ -1649,6 +1670,85 @@ def _recency_eval_json(ev) -> dict | None:
     }
 
 
+def _diag_json(ev) -> dict | None:
+    """Serialize one ensemble-diagnostic eval (rank histogram / PIT calibration) —
+    the two blocks are identical modulo the object. None passes through."""
+    if ev is None:
+        return None
+    d = ev.diag
+    return {
+        "verdict": ev.verdict,
+        "shape": d.shape,
+        "edge_ratio": d.edge_ratio,
+        "reduced_chi2": d.reduced_chi2,
+        "z": d.z,
+        "uniform": d.uniform,
+        "bins": list(d.bins),
+        "n": ev.n,
+        "applied": False,
+    }
+
+
+def _self_improvement_json(ev) -> dict | None:
+    """Serialize the conditional-spread self-improvement check. None passes through."""
+    if ev is None:
+        return None
+    return {
+        "method": "conditional predictive spread scaled by per-day member "
+                  "dispersion (heteroscedastic distribution)",
+        "recommend": ev.recommend,
+        "crps_conditional": ev.crps_conditional,
+        "crps_incumbent": ev.crps_incumbent,
+        "improvement_pct": ev.improvement_pct,
+        "sigma_past_noise": ev.z,
+        "dispersion_error_corr": ev.disp_corr,
+        "scored_days": ev.n_scored,
+        "applied": False,
+    }
+
+
+def _spread_skill_json(ev) -> dict | None:
+    """Serialize the spread–skill eval. None passes through."""
+    if ev is None:
+        return None
+    return {
+        "label": ev.label,
+        "reliable": ev.reliable,
+        "tracks_error": ev.tracks_error,
+        "consistency": ev.consistency,
+        "reliability_gap": ev.reliability_gap,
+        "averaging_factor": ev.avg_members_factor,
+        "rmse": ev.rmse,
+        "mean_spread": ev.mean_spread,
+        "n": ev.n,
+        "applied": False,
+    }
+
+
+def _coverage_calibration_json(ev) -> dict | None:
+    """Serialize the split-conformal coverage-calibration eval. None passes through."""
+    if ev is None:
+        return None
+    return {
+        "method": "constant inflation factor on the served residual cloud, "
+                  "scored per attribute (high and low clouds separately, the "
+                  "same objects compare_high/compare_low resample), learned "
+                  "online from realized out-of-sample coverage (split conformal)",
+        "recommend": ev.recommend,
+        "candidate_factor": ev.final_factor,
+        "coverage_incumbent": ev.coverage_incumbent,
+        "coverage_calibrated": ev.coverage_calibrated,
+        "target": ev.target,
+        "under_sigma": ev.under_sigma,
+        "crps_calibrated": ev.crps_calibrated,
+        "crps_incumbent": ev.crps_incumbent,
+        "improvement_pct": ev.improvement_pct,
+        "sigma_past_noise": ev.z,
+        "scored_days": ev.n_scored,
+        "applied": False,
+    }
+
+
 def verdict_to_dict(
     v: Verdict,
     comparison: VerdictMarketComparison | None = None,
@@ -1720,70 +1820,11 @@ def verdict_to_dict(
                 "sharpness_80": val.sharpness_80,
                 "scored_days": val.crps_n,
             },
-            "self_improvement_check": ({
-                "method": "conditional predictive spread scaled by per-day member "
-                          "dispersion (heteroscedastic distribution)",
-                "recommend": val.calibration.recommend,
-                "crps_conditional": val.calibration.crps_conditional,
-                "crps_incumbent": val.calibration.crps_incumbent,
-                "improvement_pct": val.calibration.improvement_pct,
-                "sigma_past_noise": val.calibration.z,
-                "dispersion_error_corr": val.calibration.disp_corr,
-                "scored_days": val.calibration.n_scored,
-                "applied": False,
-            } if val.calibration is not None else None),
-            "spread_skill": ({
-                "label": val.spread_skill.label,
-                "reliable": val.spread_skill.reliable,
-                "tracks_error": val.spread_skill.tracks_error,
-                "consistency": val.spread_skill.consistency,
-                "reliability_gap": val.spread_skill.reliability_gap,
-                "averaging_factor": val.spread_skill.avg_members_factor,
-                "rmse": val.spread_skill.rmse,
-                "mean_spread": val.spread_skill.mean_spread,
-                "n": val.spread_skill.n,
-                "applied": False,
-            } if val.spread_skill is not None else None),
-            "rank_histogram": ({
-                "verdict": val.rank_histogram.verdict,
-                "shape": val.rank_histogram.diag.shape,
-                "edge_ratio": val.rank_histogram.diag.edge_ratio,
-                "reduced_chi2": val.rank_histogram.diag.reduced_chi2,
-                "z": val.rank_histogram.diag.z,
-                "uniform": val.rank_histogram.diag.uniform,
-                "bins": list(val.rank_histogram.diag.bins),
-                "n": val.rank_histogram.n,
-                "applied": False,
-            } if val.rank_histogram is not None else None),
-            "pit_calibration": ({
-                "verdict": val.pit_calibration.verdict,
-                "shape": val.pit_calibration.diag.shape,
-                "edge_ratio": val.pit_calibration.diag.edge_ratio,
-                "reduced_chi2": val.pit_calibration.diag.reduced_chi2,
-                "z": val.pit_calibration.diag.z,
-                "uniform": val.pit_calibration.diag.uniform,
-                "bins": list(val.pit_calibration.diag.bins),
-                "n": val.pit_calibration.n,
-                "applied": False,
-            } if val.pit_calibration is not None else None),
-            "coverage_calibration": ({
-                "method": "constant inflation factor on the served residual cloud, "
-                          "scored per attribute (high and low clouds separately, the "
-                          "same objects compare_high/compare_low resample), learned "
-                          "online from realized out-of-sample coverage (split conformal)",
-                "recommend": val.coverage_calibration.recommend,
-                "candidate_factor": val.coverage_calibration.final_factor,
-                "coverage_incumbent": val.coverage_calibration.coverage_incumbent,
-                "coverage_calibrated": val.coverage_calibration.coverage_calibrated,
-                "target": val.coverage_calibration.target,
-                "under_sigma": val.coverage_calibration.under_sigma,
-                "crps_calibrated": val.coverage_calibration.crps_calibrated,
-                "crps_incumbent": val.coverage_calibration.crps_incumbent,
-                "improvement_pct": val.coverage_calibration.improvement_pct,
-                "sigma_past_noise": val.coverage_calibration.z,
-                "scored_days": val.coverage_calibration.n_scored,
-                "applied": False,
-            } if val.coverage_calibration is not None else None),
+            "self_improvement_check": _self_improvement_json(val.calibration),
+            "spread_skill": _spread_skill_json(val.spread_skill),
+            "rank_histogram": _diag_json(val.rank_histogram),
+            "pit_calibration": _diag_json(val.pit_calibration),
+            "coverage_calibration": _coverage_calibration_json(val.coverage_calibration),
             "bucket_verdict": {
                 "method": "modal whole-degree settlement bucket (point verdict dressed "
                           "with the strictly-earlier residual cloud, rounded half-up) vs "
@@ -1894,15 +1935,31 @@ def _intraday_verdict_bucket(f, v: Verdict) -> int | None:
     return _native_reading_int(v.high, getattr(f, "grain", "C"), f.sub_degree)
 
 
+def _skip_lines(x) -> list[str] | None:
+    """The shared skip prologue of the two read-only intraday blocks (dead-bucket
+    floor / ceiling sharpening): the city is outside the settlement basket, or the
+    target isn't today. None when the object carries a real (or failed) reading."""
+    if x.kind == "not_basket":
+        return [f"    {x.city} is not a configured settlement city — skipped."]
+    if x.kind == "not_today":
+        return [f"    {x.note}."]
+    return None
+
+
+def _rmax_display(x) -> str:
+    """The running max in the object's settlement grain — one spelling for both
+    read-only intraday blocks."""
+    u = getattr(x, "grain", "C")
+    return (f"{x.running_max_c * 9 / 5 + 32:.0f}°F" if u == "F"
+            else f"{x.running_max_c:.1f}°C")
+
+
 def _intraday_lines(f, v: Verdict) -> list[str]:
     """Human-readable read-only block for the intraday dead-bucket annotation."""
     L = ["", "  INTRADAY DEAD-BUCKET ELIMINATION (read-only; today only)"]
-    if f.kind == "not_basket":
-        L.append(f"    {f.city} is not a configured settlement city — skipped.")
-        return L
-    if f.kind == "not_today":
-        L.append(f"    {f.note}.")
-        return L
+    skip = _skip_lines(f)
+    if skip is not None:
+        return L + skip
     if f.kind == "unverified":
         L.append("    UNVERIFIED — live settlement feed gave no usable reading; "
                  "NO buckets eliminated.")
@@ -1911,8 +1968,7 @@ def _intraday_lines(f, v: Verdict) -> list[str]:
         return L
     # kind == "floor"
     u = getattr(f, "grain", "C")
-    rmax_disp = (f"{f.running_max_c * 9 / 5 + 32:.0f}°F" if u == "F"
-                 else f"{f.running_max_c:.1f}°C")
+    rmax_disp = _rmax_display(f)
     L.append(f"    running max so far: {rmax_disp} "
              f"({f.n_obs} obs, {f.source}"
              + (f", {f.record_time}" if f.record_time else "") + ")")
@@ -1950,19 +2006,15 @@ def _intraday_to_dict(f, v: Verdict) -> dict:
 def _ceiling_lines(c) -> list[str]:
     """Read-only block for the intraday-ceiling sharpening (lead-0 conviction)."""
     L = ["", "  INTRADAY-CEILING SHARPENING (read-only; today only — the conviction lever)"]
-    if c.kind == "not_basket":
-        L.append(f"    {c.city} is not a configured settlement city — skipped.")
-        return L
-    if c.kind == "not_today":
-        L.append(f"    {c.note}.")
-        return L
+    skip = _skip_lines(c)
+    if skip is not None:
+        return L + skip
     if c.kind == "unavailable":
         L.append(f"    UNAVAILABLE — {c.note}.")
         return L
     # kind == "sharpened"
     u = getattr(c, "grain", "C")
-    rmax_disp = (f"{c.running_max_c * 9 / 5 + 32:.0f}°F" if u == "F"
-                 else f"{c.running_max_c:.1f}°C")
+    rmax_disp = _rmax_display(c)
     L.append(f"    running max by {int(c.hour):02d}:00 local: {rmax_disp} "
              f"({c.source})")
     # If a live cur_f pushed the running max a bucket above the settlement record, say so here too:
@@ -2032,7 +2084,6 @@ def _grade_for(place, target, ceiling):
     if ceiling is None or not getattr(ceiling, "is_sharpened", False):
         return None
     try:
-        from zoneinfo import ZoneInfo
         now_l = dt.datetime.now(ZoneInfo(place.timezone))
         intraday_tape.append_read(
             place.name, ceiling.target,
@@ -2053,7 +2104,6 @@ def _grade_for(place, target, ceiling):
                               post_sunset=(sunset is not None and hour > sunset),
                               lead_bank_stat=(stat if stat[1] > 0 else None))
     except Exception as exc:
-        from weather_council.failures import record_soft_failure
         record_soft_failure("intraday_grade", exc)
         return None
 
@@ -2249,7 +2299,8 @@ def main(argv=None) -> int:
         # annotation only. Never True until ≥20 settled days beat the market.
         try:
             c7_validated = score_snapshots(fetch_settled_snapshots()).is_edge_validated
-        except Exception:
+        except Exception as exc:
+            record_soft_failure("c7_edge_read", exc)
             c7_validated = False
 
         comparison = None
@@ -2265,7 +2316,6 @@ def main(argv=None) -> int:
             except Exception as exc:
                 print(f"market comparison errored (verdict unaffected): {exc}",
                       file=sys.stderr)
-                from weather_council.failures import record_soft_failure
                 record_soft_failure("market_comparison", exc)
             if comparison is not None:
                 # Persist the comparison so C7 can grade it once the day settles
@@ -2279,7 +2329,6 @@ def main(argv=None) -> int:
                     from tools.book_logger import capture_for_place
                     capture_for_place(sources, place, target, issued_at)
                 except Exception as exc:
-                    from weather_council.failures import record_soft_failure
                     record_soft_failure("book_logger", exc)
             # Read-only LOW market comparison (own event; not yet persisted/settled —
             # low-snapshot logging + daily-min settlement is the registered follow-up).
@@ -2291,7 +2340,6 @@ def main(argv=None) -> int:
                 except Exception as exc:
                     print(f"low-market comparison errored (verdict unaffected): {exc}",
                           file=sys.stderr)
-                    from weather_council.failures import record_soft_failure
                     record_soft_failure("market_comparison_low", exc)
 
         # User-pinned settlement reference (e.g. London -> Wunderground EGLC):

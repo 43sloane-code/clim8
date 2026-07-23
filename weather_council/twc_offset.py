@@ -161,7 +161,7 @@ def estimate_offsets(source: str = "twc", db_path=None) -> list[OffsetEstimate]:
     (place, attr). Only rows whose anchored actual is present are used (leak-free by construction —
     settlement already gated on truth availability). Read-only."""
     from . import storage
-    conn = storage._connect() if db_path is None else _connect_at(db_path)
+    conn = storage._connect() if db_path is None else storage._connect_at(db_path)
     try:
         rows = conn.execute(
             "SELECT place, fc_high, fc_low, council_high, council_low, actual_high, actual_low "
@@ -191,11 +191,6 @@ def estimate_offsets(source: str = "twc", db_path=None) -> list[OffsetEstimate]:
             if offsets:
                 out.append(build_estimate(place, attr, offsets, council_errs, grain))
     return out
-
-
-def _connect_at(db_path):
-    from . import storage
-    return storage._connect_at(db_path)      # single shared impl (was duplicated 4x)
 
 
 def report_lines(estimates: list[OffsetEstimate]) -> list[str]:

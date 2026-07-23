@@ -25,17 +25,19 @@ import argparse
 import math
 import sqlite3
 import statistics
+import sys
 from collections import defaultdict
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from weather_council.sources import _round_half_up as _b  # noqa: E402 — canonical settlement rounding
 
 DB = Path(__file__).resolve().parent.parent / "verdicts.db"
 GATE3_TOL = 0.30
 GATE1_TARGET = 0.75
 GATE1_FLOOR = 0.60
-
-
-def _b(x):
-    return math.floor(x + 0.5)                    # round-half-up whole °C
 
 
 def _quantile(xs, q):

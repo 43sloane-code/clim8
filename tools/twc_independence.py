@@ -36,6 +36,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from weather_council import storage
+
 THRESHOLD_N = 30           # paired settled days before a correlation is reported (else UNMEASURED)
 COLLINEAR_R = 0.9          # |r| at/above this ⇒ TWC's error ≈ that signal ⇒ marginal info ~0
 MIN_MEMBER_N = THRESHOLD_N  # a member correlation also needs THRESHOLD_N aligned days to be quoted
@@ -55,15 +57,9 @@ def _pearson(xs: list[float], ys: list[float]) -> float | None:
     return sxy / math.sqrt(sxx * syy)
 
 
-def _connect_at(db_path):
-    from weather_council import storage
-    return storage._connect_at(db_path)      # single shared impl (was duplicated 4x)
-
-
 def audit(source: str = "twc", db_path=None) -> dict:
     """Per-city error-correlation audit of `source` vs the council + its members. Read-only."""
-    from weather_council import storage
-    conn = storage._connect() if db_path is None else _connect_at(db_path)
+    conn = storage._connect() if db_path is None else storage._connect_at(db_path)
     try:
         rows = conn.execute(
             "SELECT v.place, v.target_date, v.actual_high, v.provenance_json, t.fc_high "
@@ -154,10 +150,9 @@ def report_lines(result: dict) -> list[str]:
 
 def _selftest() -> int:
     import tempfile
-    from weather_council import storage
     tmp = Path(tempfile.mkdtemp())
     dbp = tmp / "t.db"
-    conn = _connect_at(dbp)
+    conn = storage._connect_at(dbp)
     # 32 paired days: member 'collin' error == TWC error exactly (r=1); 'indep' alternates
     # independently; council blend is the mean of the two members.
     with conn:
@@ -189,7 +184,7 @@ def _selftest() -> int:
     assert "collin" in city["flagged_collinear"] and "indep" not in city["flagged_collinear"]
 
     # below-threshold city reads UNMEASURED
-    conn = _connect_at(dbp)
+    conn = storage._connect_at(dbp)
     with conn:
         for i in range(5):
             prov = {"blend": {"high": 20.0}, "included_high": ["a"],

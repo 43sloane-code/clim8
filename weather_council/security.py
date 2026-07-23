@@ -58,6 +58,11 @@ ALLOWED_HOSTS = frozenset({
     # in their native reporting unit — the feed Weather Underground (and thus
     # prediction-market settlement) ultimately reads. Keyless, HTTPS, CSV.
     "mesonet.agron.iastate.edu",
+    # National Weather Service API (api.weather.gov): the official source of
+    # latest ASOS/METAR observations per station. Keyless, HTTPS, JSON. Used as
+    # a real-time cross-check against the IEM archive for NWS-oracle cities like
+    # Seattle/KSEA; read-only, no order/trading surface.
+    "api.weather.gov",
     # Polymarket Gamma Markets API: public, keyless market metadata and prices.
     # READ-ONLY use only — ingested to compare the model verdict against the
     # market's implied probability. No order placement or funds ever touch this.

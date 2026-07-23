@@ -1,3 +1,119 @@
 {"city": "singapore", "date": "2026-07-12", "ts": "2026-07-12T12:44:25+00:00", "endpoint_f": 86.0, "endpoint_n": 44, "cur_f": 84.0, "cur_ts": "2026-07-12T20:40:54+0800"}
 {"city": "singapore", "date": "2026-07-12", "ts": "2026-07-12T13:03:27+00:00", "endpoint_f": 86.0, "endpoint_n": 44, "cur_f": 84.0, "cur_ts": "2026-07-12T21:00:56+0800"}
 {"city": "london", "date": "2026-07-12", "ts": "2026-07-12T13:03:31+00:00", "endpoint_f": 81.0, "endpoint_n": 28, "cur_f": 83.0, "cur_ts": "2026-07-12T13:58:02+0100"}
+{"city": "singapore", "date": "2026-07-12", "ts": "2026-07-12T14:30:06+00:00", "endpoint_f": 86.0, "endpoint_n": 46, "cur_f": 84.0, "cur_ts": "2026-07-12T22:21:05+0800"}
+{"city": "london", "date": "2026-07-12", "ts": "2026-07-12T14:30:08+00:00", "endpoint_f": 82.0, "endpoint_n": 31, "cur_f": 84.0, "cur_ts": "2026-07-12T15:28:11+0100"}
+{"city": "london", "date": "2026-07-12", "ts": "2026-07-12T15:25:40+00:00", "endpoint_f": 82.0, "endpoint_n": 31, "cur_f": 84.0, "cur_ts": "2026-07-12T16:18:16+0100"}
+{"city": "san francisco", "date": "2026-07-12", "ts": "2026-07-12T15:38:17+00:00", "endpoint_f": 60.0, "endpoint_n": 8, "cur_f": 62.0, "cur_ts": "2026-07-12T08:37:33-0700"}
+{"city": "singapore", "date": "2026-07-13", "ts": "2026-07-12T20:45:16+00:00", "endpoint_f": 82.0, "endpoint_n": 10, "cur_f": 82.0, "cur_ts": "2026-07-13T04:41:47+0800"}
+{"city": "london", "date": "2026-07-12", "ts": "2026-07-12T20:45:18+00:00", "endpoint_f": 82.0, "endpoint_n": 43, "cur_f": 72.0, "cur_ts": "2026-07-12T21:38:50+0100"}
+{"city": "singapore", "date": "2026-07-13", "ts": "2026-07-12T22:21:29+00:00", "endpoint_f": null, "endpoint_n": null, "cur_f": 81.0, "cur_ts": "2026-07-13T06:11:58+0800"}
+{"city": "singapore", "date": "2026-07-13", "ts": "2026-07-13T01:00:36+00:00", "endpoint_f": 84.0, "endpoint_n": 18, "cur_f": 85.0, "cur_ts": "2026-07-13T08:52:15+0800"}
+{"city": "singapore", "date": "2026-07-13", "ts": "2026-07-13T05:30:08+00:00", "endpoint_f": 90.0, "endpoint_n": 27, "cur_f": 88.0, "cur_ts": "2026-07-13T13:22:43+0800"}
+{"city": "singapore", "date": "2026-07-13", "ts": "2026-07-13T07:00:36+00:00", "endpoint_f": 90.0, "endpoint_n": 32, "cur_f": 87.0, "cur_ts": "2026-07-13T14:52:53+0800"}
+{"city": "karachi", "date": "2026-07-13", "ts": "2026-07-13T08:58:20+00:00", "endpoint_f": 91.0, "endpoint_n": 27, "cur_f": 91.0, "cur_ts": "2026-07-13T13:50:53+0500"}
+{"city": "singapore", "date": "2026-07-13", "ts": "2026-07-13T10:15:24+00:00", "endpoint_f": 90.0, "endpoint_n": 39, "cur_f": 86.0, "cur_ts": "2026-07-13T18:13:19+0800"}
+{"city": "jeddah", "date": "2026-07-13", "ts": "2026-07-13T10:24:50+00:00", "endpoint_f": 95.0, "endpoint_n": 14, "cur_f": 96.0, "cur_ts": "2026-07-13T13:21:16+0300"}
+{"city": "london", "date": "2026-07-13", "ts": "2026-07-13T13:45:38+00:00", "endpoint_f": 75.0, "endpoint_n": 29, "cur_f": 77.0, "cur_ts": "2026-07-13T14:40:36+0100"}
+{"city": "singapore", "date": "2026-07-13", "ts": "2026-07-13T14:32:27+00:00", "endpoint_f": 90.0, "endpoint_n": 48, "cur_f": 84.0, "cur_ts": "2026-07-13T22:23:45+0800"}
+{"city": "london", "date": "2026-07-13", "ts": "2026-07-13T14:32:30+00:00", "endpoint_f": 75.0, "endpoint_n": 29, "cur_f": 80.0, "cur_ts": "2026-07-13T15:30:27+0100"}
+{"city": "singapore", "date": "2026-07-13", "ts": "2026-07-13T14:33:58+00:00", "endpoint_f": 90.0, "endpoint_n": 48, "cur_f": 84.0, "cur_ts": "2026-07-13T22:33:46+0800"}
+{"city": "london", "date": "2026-07-13", "ts": "2026-07-13T14:34:00+00:00", "endpoint_f": 75.0, "endpoint_n": 29, "cur_f": 80.0, "cur_ts": "2026-07-13T15:30:27+0100"}
+{"city": "singapore", "date": "2026-07-13", "ts": "2026-07-13T14:41:36+00:00", "endpoint_f": 90.0, "endpoint_n": 48, "cur_f": 84.0, "cur_ts": "2026-07-13T22:33:46+0800"}
+{"city": "london", "date": "2026-07-13", "ts": "2026-07-13T14:41:38+00:00", "endpoint_f": 75.0, "endpoint_n": 29, "cur_f": 80.0, "cur_ts": "2026-07-13T15:40:42+0100"}
+{"city": "san francisco", "date": "2026-07-13", "ts": "2026-07-13T15:34:12+00:00", "endpoint_f": 64.0, "endpoint_n": 8, "cur_f": 65.0, "cur_ts": "2026-07-13T08:30:09-0700"}
+{"city": "singapore", "date": "2026-07-14", "ts": "2026-07-13T20:45:18+00:00", "endpoint_f": 84.0, "endpoint_n": 10, "cur_f": 83.0, "cur_ts": "2026-07-14T04:44:25+0800"}
+{"city": "london", "date": "2026-07-13", "ts": "2026-07-13T20:45:20+00:00", "endpoint_f": 79.0, "endpoint_n": 43, "cur_f": 69.0, "cur_ts": "2026-07-13T21:41:21+0100"}
+{"city": "singapore", "date": "2026-07-14", "ts": "2026-07-14T05:15:19+00:00", "endpoint_f": 90.0, "endpoint_n": 27, "cur_f": 89.0, "cur_ts": "2026-07-14T13:05:20+0800"}
+{"city": "singapore", "date": "2026-07-14", "ts": "2026-07-14T07:02:28+00:00", "endpoint_f": 90.0, "endpoint_n": 31, "cur_f": 88.0, "cur_ts": "2026-07-14T14:55:31+0800"}
+{"city": "singapore", "date": "2026-07-14", "ts": "2026-07-14T10:18:04+00:00", "endpoint_f": 90.0, "endpoint_n": 37, "cur_f": 86.0, "cur_ts": "2026-07-14T18:15:54+0800"}
+{"city": "london", "date": "2026-07-14", "ts": "2026-07-14T14:28:42+00:00", "endpoint_f": 82.0, "endpoint_n": 31, "cur_f": 82.0, "cur_ts": "2026-07-14T15:23:12+0100"}
+{"city": "singapore", "date": "2026-07-14", "ts": "2026-07-14T14:30:05+00:00", "endpoint_f": 90.0, "endpoint_n": 45, "cur_f": 85.0, "cur_ts": "2026-07-14T22:26:19+0800"}
+{"city": "london", "date": "2026-07-14", "ts": "2026-07-14T14:30:08+00:00", "endpoint_f": 82.0, "endpoint_n": 31, "cur_f": 82.0, "cur_ts": "2026-07-14T15:23:12+0100"}
+{"city": "singapore", "date": "2026-07-14", "ts": "2026-07-14T14:32:50+00:00", "endpoint_f": 90.0, "endpoint_n": 45, "cur_f": 85.0, "cur_ts": "2026-07-14T22:26:19+0800"}
+{"city": "london", "date": "2026-07-14", "ts": "2026-07-14T14:32:52+00:00", "endpoint_f": 82.0, "endpoint_n": 31, "cur_f": 82.0, "cur_ts": "2026-07-14T15:23:12+0100"}
+{"city": "singapore", "date": "2026-07-15", "ts": "2026-07-14T16:37:49+00:00", "endpoint_f": 84.0, "endpoint_n": 2, "cur_f": 84.0, "cur_ts": "2026-07-15T00:36:32+0800"}
+{"city": "london", "date": "2026-07-14", "ts": "2026-07-14T16:37:51+00:00", "endpoint_f": 84.0, "endpoint_n": 35, "cur_f": 84.0, "cur_ts": "2026-07-14T17:33:25+0100"}
+{"city": "san francisco", "date": "2026-07-14", "ts": "2026-07-14T17:45:53+00:00", "endpoint_f": 68.0, "endpoint_n": 9, "cur_f": 75.0, "cur_ts": "2026-07-14T10:43:09-0700"}
+{"city": "san francisco", "date": "2026-07-14", "ts": "2026-07-14T17:51:22+00:00", "endpoint_f": 68.0, "endpoint_n": 9, "cur_f": 75.0, "cur_ts": "2026-07-14T10:43:09-0700"}
+{"city": "singapore", "date": "2026-07-15", "ts": "2026-07-14T20:45:06+00:00", "endpoint_f": 84.0, "endpoint_n": 10, "cur_f": 83.0, "cur_ts": "2026-07-15T04:37:02+0800"}
+{"city": "london", "date": "2026-07-14", "ts": "2026-07-14T20:45:09+00:00", "endpoint_f": 84.0, "endpoint_n": 43, "cur_f": 77.0, "cur_ts": "2026-07-14T21:43:50+0100"}
+{"city": "san francisco", "date": "2026-07-14", "ts": "2026-07-14T21:23:56+00:00", "endpoint_f": 79.0, "endpoint_n": 13, "cur_f": 81.0, "cur_ts": "2026-07-14T14:23:31-0700"}
+{"city": "san francisco", "date": "2026-07-14", "ts": "2026-07-14T22:34:32+00:00", "endpoint_f": 79.0, "endpoint_n": 15, "cur_f": 79.0, "cur_ts": "2026-07-14T15:33:38-0700"}
+{"city": "singapore", "date": "2026-07-15", "ts": "2026-07-15T05:15:18+00:00", "endpoint_f": 90.0, "endpoint_n": 27, "cur_f": 90.0, "cur_ts": "2026-07-15T13:08:00+0800"}
+{"city": "singapore", "date": "2026-07-15", "ts": "2026-07-15T07:00:49+00:00", "endpoint_f": 90.0, "endpoint_n": 30, "cur_f": 89.0, "cur_ts": "2026-07-15T14:58:11+0800"}
+{"city": "singapore", "date": "2026-07-15", "ts": "2026-07-15T10:15:25+00:00", "endpoint_f": 90.0, "endpoint_n": 37, "cur_f": 84.0, "cur_ts": "2026-07-15T18:08:32+0800"}
+{"city": "singapore", "date": "2026-07-15", "ts": "2026-07-15T14:42:38+00:00", "endpoint_f": 90.0, "endpoint_n": 46, "cur_f": 85.0, "cur_ts": "2026-07-15T22:38:59+0800"}
+{"city": "london", "date": "2026-07-15", "ts": "2026-07-15T14:42:40+00:00", "endpoint_f": 81.0, "endpoint_n": 31, "cur_f": 82.0, "cur_ts": "2026-07-15T15:35:37+0100"}
+{"city": "san francisco", "date": "2026-07-15", "ts": "2026-07-15T16:39:52+00:00", "endpoint_f": 66.0, "endpoint_n": 9, "cur_f": 68.0, "cur_ts": "2026-07-15T09:35:27-0700"}
+{"city": "san francisco", "date": "2026-07-15", "ts": "2026-07-15T20:03:11+00:00", "endpoint_f": 70.0, "endpoint_n": 12, "cur_f": 74.0, "cur_ts": "2026-07-15T12:55:49-0700"}
+{"city": "singapore", "date": "2026-07-16", "ts": "2026-07-15T20:45:21+00:00", "endpoint_f": 84.0, "endpoint_n": 10, "cur_f": 83.0, "cur_ts": "2026-07-16T04:39:39+0800"}
+{"city": "london", "date": "2026-07-15", "ts": "2026-07-15T20:45:24+00:00", "endpoint_f": 82.0, "endpoint_n": 43, "cur_f": 74.0, "cur_ts": "2026-07-15T21:36:13+0100"}
+{"city": "san francisco", "date": "2026-07-15", "ts": "2026-07-15T21:00:34+00:00", "endpoint_f": 70.0, "endpoint_n": 13, "cur_f": 73.0, "cur_ts": "2026-07-15T13:55:55-0700"}
+{"city": "san francisco", "date": "2026-07-15", "ts": "2026-07-15T21:02:54+00:00", "endpoint_f": 70.0, "endpoint_n": 13, "cur_f": 73.0, "cur_ts": "2026-07-15T13:55:55-0700"}
+{"city": "san francisco", "date": "2026-07-15", "ts": "2026-07-15T22:08:54+00:00", "endpoint_f": 73.0, "endpoint_n": 15, "cur_f": 74.0, "cur_ts": "2026-07-15T15:06:02-0700"}
+{"city": "san francisco", "date": "2026-07-15", "ts": "2026-07-15T22:30:44+00:00", "endpoint_f": 73.0, "endpoint_n": 15, "cur_f": 74.0, "cur_ts": "2026-07-15T15:26:05-0700"}
+{"city": "singapore", "date": "2026-07-16", "ts": "2026-07-16T05:15:19+00:00", "endpoint_f": 90.0, "endpoint_n": 27, "cur_f": 89.0, "cur_ts": "2026-07-16T13:10:33+0800"}
+{"city": "singapore", "date": "2026-07-16", "ts": "2026-07-16T07:00:25+00:00", "endpoint_f": 90.0, "endpoint_n": 30, "cur_f": 88.0, "cur_ts": "2026-07-16T14:50:43+0800"}
+{"city": "singapore", "date": "2026-07-16", "ts": "2026-07-16T10:30:52+00:00", "endpoint_f": 90.0, "endpoint_n": 37, "cur_f": 86.0, "cur_ts": "2026-07-16T18:21:04+0800"}
+{"city": "san francisco", "date": "2026-07-16", "ts": "2026-07-16T13:40:13+00:00", "endpoint_f": 59.0, "endpoint_n": 5, "cur_f": 57.0, "cur_ts": "2026-07-16T06:37:45-0700"}
+{"city": "singapore", "date": "2026-07-16", "ts": "2026-07-16T14:30:06+00:00", "endpoint_f": 90.0, "endpoint_n": 45, "cur_f": 85.0, "cur_ts": "2026-07-16T22:21:30+0800"}
+{"city": "london", "date": "2026-07-16", "ts": "2026-07-16T14:30:09+00:00", "endpoint_f": 81.0, "endpoint_n": 31, "cur_f": 82.0, "cur_ts": "2026-07-16T15:28:01+0100"}
+{"city": "san francisco", "date": "2026-07-16", "ts": "2026-07-16T16:54:31+00:00", "endpoint_f": 62.0, "endpoint_n": 9, "cur_f": 65.0, "cur_ts": "2026-07-16T09:48:04-0700"}
+{"city": "san francisco", "date": "2026-07-16", "ts": "2026-07-16T19:02:34+00:00", "endpoint_f": 66.0, "endpoint_n": 11, "cur_f": 69.0, "cur_ts": "2026-07-16T11:58:18-0700"}
+{"city": "san francisco", "date": "2026-07-16", "ts": "2026-07-16T19:28:22+00:00", "endpoint_f": 66.0, "endpoint_n": 11, "cur_f": 69.0, "cur_ts": "2026-07-16T12:28:21-0700"}
+{"city": "san francisco", "date": "2026-07-16", "ts": "2026-07-16T20:05:25+00:00", "endpoint_f": 68.0, "endpoint_n": 12, "cur_f": 69.0, "cur_ts": "2026-07-16T12:58:24-0700"}
+{"city": "singapore", "date": "2026-07-17", "ts": "2026-07-16T20:45:16+00:00", "endpoint_f": 84.0, "endpoint_n": 10, "cur_f": 83.0, "cur_ts": "2026-07-17T04:42:08+0800"}
+{"city": "london", "date": "2026-07-16", "ts": "2026-07-16T20:45:19+00:00", "endpoint_f": 81.0, "endpoint_n": 43, "cur_f": 71.0, "cur_ts": "2026-07-16T21:38:38+0100"}
+{"city": "san francisco", "date": "2026-07-16", "ts": "2026-07-16T21:36:10+00:00", "endpoint_f": 69.0, "endpoint_n": 13, "cur_f": 68.0, "cur_ts": "2026-07-16T14:28:34-0700"}
+{"city": "san francisco", "date": "2026-07-16", "ts": "2026-07-16T22:00:56+00:00", "endpoint_f": 69.0, "endpoint_n": 14, "cur_f": 68.0, "cur_ts": "2026-07-16T14:58:37-0700"}
+{"city": "san francisco", "date": "2026-07-16", "ts": "2026-07-16T22:41:19+00:00", "endpoint_f": 69.0, "endpoint_n": 14, "cur_f": 68.0, "cur_ts": "2026-07-16T15:38:41-0700"}
+{"city": "singapore", "date": "2026-07-17", "ts": "2026-07-17T05:15:23+00:00", "endpoint_f": 86.0, "endpoint_n": 28, "cur_f": 83.0, "cur_ts": "2026-07-17T13:12:59+0800"}
+{"city": "singapore", "date": "2026-07-17", "ts": "2026-07-17T07:00:21+00:00", "endpoint_f": 86.0, "endpoint_n": 35, "cur_f": 78.0, "cur_ts": "2026-07-17T14:53:09+0800"}
+{"city": "singapore", "date": "2026-07-17", "ts": "2026-07-17T10:15:19+00:00", "endpoint_f": 86.0, "endpoint_n": 42, "cur_f": 85.0, "cur_ts": "2026-07-17T18:13:29+0800"}
+{"city": "singapore", "date": "2026-07-17", "ts": "2026-07-17T14:30:06+00:00", "endpoint_f": 86.0, "endpoint_n": 50, "cur_f": 81.0, "cur_ts": "2026-07-17T22:23:54+0800"}
+{"city": "london", "date": "2026-07-17", "ts": "2026-07-17T14:30:08+00:00", "endpoint_f": 81.0, "endpoint_n": 31, "cur_f": 83.0, "cur_ts": "2026-07-17T15:20:25+0100"}
+{"city": "singapore", "date": "2026-07-18", "ts": "2026-07-17T20:45:17+00:00", "endpoint_f": 84.0, "endpoint_n": 10, "cur_f": 82.0, "cur_ts": "2026-07-18T04:44:33+0800"}
+{"city": "london", "date": "2026-07-17", "ts": "2026-07-17T20:45:19+00:00", "endpoint_f": 81.0, "endpoint_n": 43, "cur_f": 68.0, "cur_ts": "2026-07-17T21:41:03+0100"}
+{"city": "singapore", "date": "2026-07-18", "ts": "2026-07-18T05:15:17+00:00", "endpoint_f": 88.0, "endpoint_n": 27, "cur_f": 88.0, "cur_ts": "2026-07-18T13:05:23+0800"}
+{"city": "singapore", "date": "2026-07-18", "ts": "2026-07-18T07:00:21+00:00", "endpoint_f": 90.0, "endpoint_n": 30, "cur_f": 90.0, "cur_ts": "2026-07-18T14:55:34+0800"}
+{"city": "singapore", "date": "2026-07-18", "ts": "2026-07-18T10:15:25+00:00", "endpoint_f": 90.0, "endpoint_n": 37, "cur_f": 86.0, "cur_ts": "2026-07-18T18:05:53+0800"}
+{"city": "singapore", "date": "2026-07-18", "ts": "2026-07-18T14:30:03+00:00", "endpoint_f": 90.0, "endpoint_n": 45, "cur_f": 82.0, "cur_ts": "2026-07-18T22:26:19+0800"}
+{"city": "london", "date": "2026-07-18", "ts": "2026-07-18T14:30:06+00:00", "endpoint_f": 70.0, "endpoint_n": 31, "cur_f": 71.0, "cur_ts": "2026-07-18T15:22:47+0100"}
+{"city": "san francisco", "date": "2026-07-18", "ts": "2026-07-18T20:41:58+00:00", "endpoint_f": 70.0, "endpoint_n": 16, "cur_f": 71.0, "cur_ts": "2026-07-18T13:33:15-0700"}
+{"city": "san francisco", "date": "2026-07-18", "ts": "2026-07-18T20:42:22+00:00", "endpoint_f": 70.0, "endpoint_n": 16, "cur_f": 71.0, "cur_ts": "2026-07-18T13:33:15-0700"}
+{"city": "san francisco", "date": "2026-07-18", "ts": "2026-07-18T20:43:31+00:00", "endpoint_f": 70.0, "endpoint_n": 16, "cur_f": 71.0, "cur_ts": "2026-07-18T13:43:16-0700"}
+{"city": "singapore", "date": "2026-07-19", "ts": "2026-07-18T20:45:14+00:00", "endpoint_f": 84.0, "endpoint_n": 10, "cur_f": 80.0, "cur_ts": "2026-07-19T04:36:56+0800"}
+{"city": "london", "date": "2026-07-18", "ts": "2026-07-18T20:45:16+00:00", "endpoint_f": 70.0, "endpoint_n": 43, "cur_f": 65.0, "cur_ts": "2026-07-18T21:43:25+0100"}
+{"city": "singapore", "date": "2026-07-19", "ts": "2026-07-19T05:15:20+00:00", "endpoint_f": 88.0, "endpoint_n": 27, "cur_f": 89.0, "cur_ts": "2026-07-19T13:07:48+0800"}
+{"city": "singapore", "date": "2026-07-19", "ts": "2026-07-19T07:00:25+00:00", "endpoint_f": 90.0, "endpoint_n": 30, "cur_f": 89.0, "cur_ts": "2026-07-19T14:57:59+0800"}
+{"city": "singapore", "date": "2026-07-19", "ts": "2026-07-19T10:15:20+00:00", "endpoint_f": 90.0, "endpoint_n": 37, "cur_f": 88.0, "cur_ts": "2026-07-19T18:08:18+0800"}
+{"city": "san francisco", "date": "2026-07-19", "ts": "2026-07-19T10:47:09+00:00", "endpoint_f": 56.0, "endpoint_n": 4, "cur_f": 56.0, "cur_ts": "2026-07-19T03:44:40-0700"}
+{"city": "singapore", "date": "2026-07-19", "ts": "2026-07-19T14:30:01+00:00", "endpoint_f": 90.0, "endpoint_n": 45, "cur_f": 84.0, "cur_ts": "2026-07-19T22:28:44+0800"}
+{"city": "london", "date": "2026-07-19", "ts": "2026-07-19T14:30:03+00:00", "endpoint_f": 70.0, "endpoint_n": 31, "cur_f": 72.0, "cur_ts": "2026-07-19T15:25:11+0100"}
+{"city": "singapore", "date": "2026-07-20", "ts": "2026-07-19T20:45:44+00:00", "endpoint_f": 84.0, "endpoint_n": 10, "cur_f": 83.0, "cur_ts": "2026-07-20T04:39:22+0800"}
+{"city": "london", "date": "2026-07-19", "ts": "2026-07-19T20:45:46+00:00", "endpoint_f": 70.0, "endpoint_n": 43, "cur_f": 65.0, "cur_ts": "2026-07-19T21:35:48+0100"}
+{"city": "san francisco", "date": "2026-07-19", "ts": "2026-07-19T23:17:00+00:00", "endpoint_f": 65.0, "endpoint_n": 19, "cur_f": 65.0, "cur_ts": "2026-07-19T16:15:55-0700"}
+{"city": "singapore", "date": "2026-07-20", "ts": "2026-07-20T05:15:20+00:00", "endpoint_f": 90.0, "endpoint_n": 27, "cur_f": 90.0, "cur_ts": "2026-07-20T13:10:14+0800"}
+{"city": "singapore", "date": "2026-07-20", "ts": "2026-07-20T07:00:22+00:00", "endpoint_f": 90.0, "endpoint_n": 30, "cur_f": 90.0, "cur_ts": "2026-07-20T14:50:24+0800"}
+{"city": "singapore", "date": "2026-07-20", "ts": "2026-07-20T10:15:21+00:00", "endpoint_f": 90.0, "endpoint_n": 37, "cur_f": 84.0, "cur_ts": "2026-07-20T18:10:44+0800"}
+{"city": "san francisco", "date": "2026-07-20", "ts": "2026-07-20T10:37:50+00:00", "endpoint_f": 60.0, "endpoint_n": 3, "cur_f": 60.0, "cur_ts": "2026-07-20T03:37:03-0700"}
+{"city": "singapore", "date": "2026-07-20", "ts": "2026-07-20T14:38:26+00:00", "endpoint_f": 90.0, "endpoint_n": 46, "cur_f": 83.0, "cur_ts": "2026-07-20T22:31:11+0800"}
+{"city": "london", "date": "2026-07-20", "ts": "2026-07-20T14:38:28+00:00", "endpoint_f": 75.0, "endpoint_n": 31, "cur_f": 77.0, "cur_ts": "2026-07-20T15:37:36+0100"}
+{"city": "london", "date": "2026-07-20", "ts": "2026-07-20T20:47:00+00:00", "endpoint_f": 77.0, "endpoint_n": 43, "cur_f": 66.0, "cur_ts": "2026-07-20T21:38:11+0100"}
+{"city": "singapore", "date": "2026-07-21", "ts": "2026-07-21T05:15:49+00:00", "endpoint_f": 86.0, "endpoint_n": 28, "cur_f": 85.0, "cur_ts": "2026-07-21T13:12:40+0800"}
+{"city": "singapore", "date": "2026-07-21", "ts": "2026-07-21T07:00:25+00:00", "endpoint_f": 88.0, "endpoint_n": 33, "cur_f": 87.0, "cur_ts": "2026-07-21T14:52:50+0800"}
+{"city": "singapore", "date": "2026-07-21", "ts": "2026-07-21T10:15:25+00:00", "endpoint_f": 88.0, "endpoint_n": 40, "cur_f": 87.0, "cur_ts": "2026-07-21T18:13:10+0800"}
+{"city": "singapore", "date": "2026-07-21", "ts": "2026-07-21T14:30:07+00:00", "endpoint_f": 88.0, "endpoint_n": 48, "cur_f": 84.0, "cur_ts": "2026-07-21T22:23:35+0800"}
+{"city": "london", "date": "2026-07-21", "ts": "2026-07-21T14:30:09+00:00", "endpoint_f": 70.0, "endpoint_n": 31, "cur_f": 70.0, "cur_ts": "2026-07-21T15:29:58+0100"}
+{"city": "singapore", "date": "2026-07-22", "ts": "2026-07-21T20:58:11+00:00", "endpoint_f": 84.0, "endpoint_n": 10, "cur_f": 82.0, "cur_ts": "2026-07-22T04:54:17+0800"}
+{"city": "london", "date": "2026-07-21", "ts": "2026-07-21T20:58:14+00:00", "endpoint_f": 72.0, "endpoint_n": 44, "cur_f": 68.0, "cur_ts": "2026-07-21T21:50:36+0100"}
+{"city": "singapore", "date": "2026-07-22", "ts": "2026-07-22T07:00:23+00:00", "endpoint_f": 86.0, "endpoint_n": 30, "cur_f": 78.0, "cur_ts": "2026-07-22T14:55:19+0800"}
+{"city": "singapore", "date": "2026-07-22", "ts": "2026-07-22T10:15:24+00:00", "endpoint_f": 86.0, "endpoint_n": 38, "cur_f": 81.0, "cur_ts": "2026-07-22T18:05:39+0800"}
+{"city": "singapore", "date": "2026-07-22", "ts": "2026-07-22T14:36:40+00:00", "endpoint_f": 86.0, "endpoint_n": 47, "cur_f": 80.0, "cur_ts": "2026-07-22T22:36:06+0800"}
+{"city": "london", "date": "2026-07-22", "ts": "2026-07-22T14:36:42+00:00", "endpoint_f": 77.0, "endpoint_n": 31, "cur_f": 78.0, "cur_ts": "2026-07-22T15:31:12+0100"}
+{"city": "singapore", "date": "2026-07-23", "ts": "2026-07-22T20:45:16+00:00", "endpoint_f": 82.0, "endpoint_n": 10, "cur_f": 81.0, "cur_ts": "2026-07-23T04:35:42+0800"}
+{"city": "london", "date": "2026-07-22", "ts": "2026-07-22T20:45:18+00:00", "endpoint_f": 77.0, "endpoint_n": 43, "cur_f": 68.0, "cur_ts": "2026-07-22T21:40:32+0100"}
+{"city": "singapore", "date": "2026-07-23", "ts": "2026-07-23T05:22:50+00:00", "endpoint_f": 86.0, "endpoint_n": 27, "cur_f": 83.0, "cur_ts": "2026-07-23T13:14:47+0800"}
+{"city": "singapore", "date": "2026-07-23", "ts": "2026-07-23T07:04:00+00:00", "endpoint_f": 86.0, "endpoint_n": 31, "cur_f": 86.0, "cur_ts": "2026-07-23T14:54:17+0800"}
+{"city": "singapore", "date": "2026-07-23", "ts": "2026-07-23T10:15:19+00:00", "endpoint_f": 86.0, "endpoint_n": 37, "cur_f": 84.0, "cur_ts": "2026-07-23T18:13:38+0800"}

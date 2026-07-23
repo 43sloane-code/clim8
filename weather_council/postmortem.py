@@ -27,7 +27,8 @@ __all__ = ["EPS", "IdentityError", "build_postmortem", "run_postmortems",
            "attribution_histogram"]
 
 import json
-import math
+
+from .sources import _round_half_up
 
 EPS = 1e-6
 
@@ -35,11 +36,6 @@ EPS = 1e-6
 class IdentityError(ValueError):
     """Raised when the decomposed components do not sum to the total error — the attribution
     cannot be trusted, so no row is written (a wrong attribution is worse than none)."""
-
-
-def _rhu(x: float) -> int:
-    """Settlement-style round-half-up (matches the whole-°C bucket the contract pays on)."""
-    return math.floor(x + 0.5)
 
 
 def build_postmortem(final: float, actual: float, prov: dict,
@@ -67,7 +63,7 @@ def build_postmortem(final: float, actual: float, prov: dict,
             f"components {input_error:+.4f}+{blend_deviation:+.4f}+{bias_contribution:+.4f} "
             f"!= total {total_error:+.4f}")
 
-    verdict_bucket, actual_bucket = _rhu(final), _rhu(actual)
+    verdict_bucket, actual_bucket = _round_half_up(final), _round_half_up(actual)
     crossed = verdict_bucket != actual_bucket
     margin = round(0.5 - abs(final - verdict_bucket), 4)   # small == fragile (near a boundary)
 
@@ -117,7 +113,7 @@ def run_postmortems(db_path=None) -> dict:
     (settled rows with no provenance — counted, never guessed). Read-only w.r.t. forecasting."""
     from . import storage
     from .storage import utc_now_iso
-    conn = storage._connect() if db_path is None else _connect_at(db_path)
+    conn = storage._connect() if db_path is None else storage._connect_at(db_path)
     scored, aborted, preprov = 0, 0, 0
     by_cause: dict[str, int] = {}
     try:
@@ -172,16 +168,11 @@ def _pm_resolved_bucket(conn, place, target) -> int | None:
     return int(m.group()) if m else None
 
 
-def _connect_at(db_path):
-    from . import storage
-    return storage._connect_at(db_path)      # single shared impl (was duplicated 4x)
-
-
 def attribution_histogram(db_path=None, hours=None) -> dict:
     """{cause: count} over the postmortems table (all, or last `hours`). Read-only summary the
     healthcheck surfaces; SETTLEMENT is always an ALARM tier there."""
     from . import storage
-    conn = storage._connect() if db_path is None else _connect_at(db_path)
+    conn = storage._connect() if db_path is None else storage._connect_at(db_path)
     try:
         q = "SELECT attributed_cause, COUNT(*) FROM postmortems"
         args = ()

@@ -35,16 +35,12 @@ import sys
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
 
-from weather_council.sources import Sources
+from weather_council.sources import Sources, _round_half_up
 from weather_council import quantum_kernel as qk
 
 WINDOW = 60          # sliding training window (days)
 LAGS = 3             # how many prior days feed the feature vector
 LAM = 0.5            # ridge regularisation (shared by both KRR models)
-
-
-def _round_half_up(v: float) -> int:
-    return math.floor(v + 0.5)
 
 
 def _load_series() -> dict[str, dict[str, float]]:
@@ -54,7 +50,7 @@ def _load_series() -> dict[str, dict[str, float]]:
     out: dict[str, dict[str, float]] = {}
     hk = s.hko_truth_series(today, back_years=4)
     out["Hong Kong (HKO Observatory)"] = {d: hi for d, (hi, lo) in hk.items()}
-    ldn = s.london_eglc_truth_series(today, back_years=2)
+    ldn = s.iem_overlay_truth_series("EGLC", "Europe/London", today, back_years=2)
     out["London (EGLC City Airport)"] = {d: hi for d, (hi, lo) in ldn.items()}
     return out
 

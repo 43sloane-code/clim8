@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 
 from tools import lessons
+from weather_council import storage
 
 
 def _bias_hurt_cell(conn, place, month="2026-07", n=10, hurt=9):
@@ -36,7 +37,7 @@ class TestLessons(unittest.TestCase):
         self._q = self._dir / "candidates.json"
 
     def _conn(self):
-        return lessons._connect_at(self._db)
+        return storage._connect_at(self._db)
 
     def test_module_selftest(self):
         lessons._selftest()

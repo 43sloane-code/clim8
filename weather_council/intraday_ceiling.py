@@ -273,12 +273,13 @@ _HOURLY_STATION = {
     "san francisco": ("KSFO", "America/Los_Angeles", False, "San Francisco Intl"),
     "karachi": ("OPKC", "Asia/Karachi", False, "Jinnah Intl"),
     "jeddah": ("OEJN", "Asia/Riyadh", False, "King Abdulaziz Intl"),
+    "seattle": ("KSEA", "America/Los_Angeles", False, "Seattle-Tacoma Intl"),
 }
 _NO_HOURLY = {"hong kong": True}    # settles on a daily-max-only record (no hourly)
 # Settlement UNIT per city: whole °C everywhere except San Francisco, which settles
 # (and its 2°F Polymarket buckets pay out) in whole °F. The running max is always
 # carried in °C; the quantizer converts to this grain before bucketing.
-_SETTLE_GRAIN = {"san francisco": "F"}    # default "C"
+_SETTLE_GRAIN = {"san francisco": "F", "seattle": "F"}    # default "C"
 # Cities whose intraday lever reads the WUNDERGROUND settlement feed (whole °F)
 # instead of IEM METAR (whole °C) — running max, remaining-rise and settled bucket
 # then live on the SAME feed the market pays out on. IEM's coarser °C grain hides

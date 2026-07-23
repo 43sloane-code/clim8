@@ -43,8 +43,9 @@ from .ensemble_verification import (
 from .convergence import ConvergenceInputs, Mechanism
 from .observation import Observation, observe
 from .security import RateLimitError
-from .sources import (DailySeries, Place, Sources, Station, place_today,
-                      quantize_to_grain)
+from .failures import record_soft_failure
+from .sources import (DailySeries, Place, Sources, Station, _IEM_OVERLAY_TZ,
+                      place_today, quantize_to_grain)
 
 # A predictive distribution needs a minimum residual sample before its CRPS or
 # coverage means anything; below this we score that held-out day's point error
@@ -136,7 +137,8 @@ SEASON_MATCH_DAYS = 31
 # settles on. Keyed by case-insensitive city-name substring -> the anchor's ICAO.
 # London weather markets settle on London City Airport (EGLC), ~17 km east of the
 # nearest station (the central London Weather Centre), so we prefer EGLC.
-PINNED_ANCHOR_ICAO = {"london": "EGLC", "karachi": "OPKC", "jeddah": "OEJN"}
+PINNED_ANCHOR_ICAO = {"london": "EGLC", "karachi": "OPKC", "jeddah": "OEJN",
+                     "austin": "KAUS", "seattle": "KSEA"}
 
 # ICAO-pinned cities whose anchor is STRICT — the same rule as the HKO anchor:
 # when the pinned airport's feed is stale/unavailable, the verdict must NOT
@@ -145,7 +147,7 @@ PINNED_ANCHOR_ICAO = {"london": "EGLC", "karachi": "OPKC", "jeddah": "OEJN"}
 # two physical sensors that read differently, making the verdict jump between
 # stations and read as model imprecision. So for these cities it is EGLC-or-honest
 # -ERA5-grid, never a substitute station. (See _resolve_truth.)
-STRICT_ANCHOR_ICAO = {"london", "karachi", "jeddah"}
+STRICT_ANCHOR_ICAO = {"london", "karachi", "jeddah", "austin", "seattle"}
 
 # Cities pinned to the Hong Kong Royal Observatory anchor. The Observatory has no
 # ICAO (it is not an airport), so it is identified structurally by
@@ -871,12 +873,12 @@ class Council:
         ensemble = self._ensemble(fp, target, observed, w_start, w_end)
 
         # Stage 3 — Interpretation: bias correction, weighting, outlier screen.
-        high, inc_h, spread_h, wts_h = self._blend(votes, "high")
-        low, inc_l, spread_l, wts_l = self._blend(votes, "low")
+        high, inc_h, spread_h, wts_h, out_h = self._blend(votes, "high")
+        low, inc_l, spread_l, wts_l, out_l = self._blend(votes, "low")
         naive_h = self._naive(votes, "high")
         naive_l = self._naive(votes, "low")
         validation = self._validate(votes, observed, fp)
-        interpretation = self._interpret(votes, inc_h, window)
+        interpretation = self._interpret(votes, inc_h, window, out_h + out_l)
         diurnal = self._diurnal(fp, target, w_start, w_end,
                                 round(high, 1), round(low, 1), window)
         records = self._records(fp, target, round(high, 1))
@@ -921,12 +923,13 @@ class Council:
     def _station_provenance(self, st: Station) -> tuple[str, str]:
         """Honest provenance for an anchor station: (data_source, human feed label).
         The Hong Kong Observatory anchor is served from the HKO open-data API (its
-        Meteostat file ends 1992); EGLC's extremes come from the IEM ASOS METAR
-        archive overlaid on Meteostat; everything else is plain Meteostat."""
+        Meteostat file ends 1992); IEM-overlay airports (EGLC/OPKC/OEJN/KAUS) get
+        their extremes from the IEM ASOS METAR archive overlaid on Meteostat;
+        everything else is plain Meteostat."""
         if self.sources.is_hko_observatory(st):
             return "hko_opendata", "Hong Kong Observatory open-data daily observations"
-        if self.sources.is_london_eglc(st):
-            return "iem_metar", ("IEM ASOS METAR daily extremes at the EGLC sensor "
+        if (st.icao or "").upper() in _IEM_OVERLAY_TZ:
+            return "iem_metar", (f"IEM ASOS METAR daily extremes at the {st.icao} sensor "
                                  "(overlaid on Meteostat for older days)")
         return "meteostat", "Meteostat daily observations"
 
@@ -1001,7 +1004,8 @@ class Council:
 
         try:
             candidates = self.sources.nearest_stations(place)
-        except Exception:
+        except Exception as exc:
+            record_soft_failure("truth_nearest_stations", exc)   # swallow stays; not silent
             candidates = []
 
         # User-pinned anchor: for cities that settle on a specific station (e.g.
@@ -1038,7 +1042,8 @@ class Council:
                 continue                          # strict ICAO anchor: EGLC only, else grid
             try:
                 series = self.sources.fetch_station_daily(st)
-            except Exception:
+            except Exception as exc:
+                record_soft_failure("truth_station_fetch", exc)   # swallow stays; not silent
                 continue
             usable = {d: v for d, v in series.items()
                       if d <= default_end.isoformat()}
@@ -1162,12 +1167,8 @@ class Council:
                 continue
             changed = False
             for attr, raw, set_skill, set_corr in (
-                ("high", v.raw_high,
-                 lambda s: setattr(v, "skill_high", s),
-                 lambda c: setattr(v, "corrected_high", c)),
-                ("low", v.raw_low,
-                 lambda s: setattr(v, "skill_low", s),
-                 lambda c: setattr(v, "corrected_low", c)),
+                ("high", v.raw_high, *self._attr_setters(v, "high")),
+                ("low", v.raw_low, *self._attr_setters(v, "low")),
             ):
                 sk = seasonal_skill(hist, analog_obs, target, attr)
                 if sk is None or raw is None:
@@ -1221,12 +1222,8 @@ class Council:
         for v in votes:
             changed = False
             for raw, hist, set_skill, set_corr in (
-                (v.raw_high, v.hist_high,
-                 lambda s: setattr(v, "skill_high", s),
-                 lambda c: setattr(v, "corrected_high", c)),
-                (v.raw_low, v.hist_low,
-                 lambda s: setattr(v, "skill_low", s),
-                 lambda c: setattr(v, "corrected_low", c)),
+                (v.raw_high, v.hist_high, *self._attr_setters(v, "high")),
+                (v.raw_low, v.hist_low, *self._attr_setters(v, "low")),
             ):
                 if raw is None or len(hist) < MIN_SAMPLES:
                     continue
@@ -1491,15 +1488,13 @@ class Council:
         )
 
     def _interpret(self, votes: list[Vote], included_high: list[str],
-                   window: int) -> Interpretation:
+                   window: int, outliers_set_aside: int) -> Interpretation:
         used = [v for v in votes if v.eligible]
-        outliers = sum(1 for n in (note for v in votes for note in v.notes)
-                       if "outlier" in n)
         biases_h = [abs(v.skill_high.bias) for v in used if v.skill_high]
         biases_l = [abs(v.skill_low.bias) for v in used if v.skill_low]
         return Interpretation(
             members_used=len(used),
-            outliers_set_aside=outliers,
+            outliers_set_aside=outliers_set_aside,
             mean_bias_removed_high=statistics.mean(biases_h) if biases_h else None,
             mean_bias_removed_low=statistics.mean(biases_l) if biases_l else None,
             history_days=window,
@@ -1694,6 +1689,16 @@ class Council:
         return vote.corrected_high if attr == "high" else vote.corrected_low
 
     @staticmethod
+    def _attr_setters(v: Vote, attr: str):
+        """(set_skill, set_corr) closures for one attribute of a vote — the pair
+        both in-place correction passes (seasonal-analog, recency-bias) apply."""
+        if attr == "high":
+            return (lambda s: setattr(v, "skill_high", s),
+                    lambda c: setattr(v, "corrected_high", c))
+        return (lambda s: setattr(v, "skill_low", s),
+                lambda c: setattr(v, "corrected_low", c))
+
+    @staticmethod
     def _skill(vote: Vote, attr: str):
         return vote.skill_high if attr == "high" else vote.skill_low
 
@@ -1722,14 +1727,19 @@ class Council:
         thresh = max(OUTLIER_FLOOR_C, 3 * mad)
 
         included: list[Vote] = []
+        set_aside: list[Vote] = []
         for v in usable:
             x = self._corrected(v, attr)
             if abs(x - median) > thresh:
-                v.notes.append(f"{attr} outlier ({x:.1f} vs median {median:.1f}) — excluded")
+                set_aside.append(v)
             else:
                 included.append(v)
         if not included:                      # everyone disagreed wildly; keep all
             included = usable
+            set_aside = []                    # fallback re-includes: nothing was set aside
+        for v in set_aside:
+            x = self._corrected(v, attr)
+            v.notes.append(f"{attr} outlier ({x:.1f} vs median {median:.1f}) — excluded")
 
         weights: dict[str, float] = {}
         for v in included:
@@ -1743,7 +1753,10 @@ class Council:
                       for v in included)
         inc_vals = [self._corrected(v, attr) for v in included]
         spread = max(inc_vals) - min(inc_vals)
-        return blended, [v.spec.member_id for v in included], spread, weights
+        # 5th element: members ACTUALLY set aside (0 under the keep-all fallback),
+        # so _interpret never reports "N outliers set aside" while all N were kept.
+        return (blended, [v.spec.member_id for v in included], spread, weights,
+                len(set_aside))
 
     def _naive(self, votes: list[Vote], attr: str) -> float | None:
         raws = [(v.raw_high if attr == "high" else v.raw_low)
@@ -2061,6 +2074,9 @@ class Council:
             if day not in series:
                 continue
             train_pairs = [series[d] for d in series if d in train]
+            # NOTE: this 5-pair floor deliberately diverges from MIN_SAMPLES (10)
+            # used elsewhere — legacy, intentionally UNCHANGED: raising it would
+            # alter the walk-forward validation history every number was learned on.
             if len(train_pairs) < 5:
                 continue
             if bias_halflife is None:

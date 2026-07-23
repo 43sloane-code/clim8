@@ -160,19 +160,21 @@ def duty2_regression(repo, ab_now, res):
         return
     base = _load_json(bpath)  # expected: {city: {hour: hit_rate, ...}, ...}
 
-    # schema guard: the crossover baseline is {city: {hour: hit_rate}}. The repo's
+    # schema guard: the crossover baseline is {city: {hour: hit_rate}} (plus an
+    # optional "_meta" window-record the emitter writes). The repo's
     # reports/baseline.json is currently the BASKET-MAE baseline the daily monitor
     # writes ({basket_mae_current, date, variant}) -- a different instrument. Don't
     # crash iterating a float; ABSTAIN until a real crossover baseline lives here.
     if not base or not all(isinstance(v, dict) for v in base.values()):
         res.add("2-regression", "ABSTAIN",
-                "reports/baseline.json is not a {city:{hour:hit_rate}} crossover baseline "
+                "reports/crossover_baseline.json is not a {city:{hour:hit_rate}} crossover baseline "
                 "(looks like the basket-MAE monitor baseline) -- Duty 2 not applicable yet.")
         return
 
-    worst_drop = 0.0
     breaches = []
     for city, hours in base.items():
+        if city.startswith("_"):             # "_meta" window record, not a city
+            continue
         now_city = ab_now.get(city, {})
         for hour, base_hit in hours.items():
             now_hit = now_city.get(hour)
@@ -184,7 +186,6 @@ def duty2_regression(repo, ab_now, res):
             drop = base_hit - now_hit
             if drop > DETERMINISM_BAND:
                 breaches.append(f"{city}@{hour}: {now_hit:.1%} vs base {base_hit:.1%} (-{drop:.1%})")
-                worst_drop = max(worst_drop, drop)
     if breaches:
         res.add("2-regression", "RED",
                 "edge regressed beyond determinism band: " + "; ".join(breaches))
@@ -242,17 +243,21 @@ def duty3_drift(repo, config_truth_sources, recent_ecmwf_bias, res):
 # canary — known-bad fixtures that MUST trip RED
 # ----------------------------------------------------------------------------
 def run_canary():
+    """Feed known-bad fixtures through the REAL duty functions (never an inline
+    re-implementation — a canary that re-derives the comparison tests the copy,
+    not the detector). MUST come back RED or the watchdog is worthless."""
+    import tempfile
     res = Result()
-    # canary 2: a baseline with a hit-rate the "current run" badly misses
-    fake_base = {"WSSS": {"14:00": 0.91}}
-    fake_now = {"WSSS": {"14:00": 0.50}}   # 41pt drop -> must be RED
-    # inline reimpl of the comparison to avoid touching disk
-    drop = fake_base["WSSS"]["14:00"] - fake_now["WSSS"]["14:00"]
-    res.add("canary-2", "RED" if drop > DETERMINISM_BAND else "GREEN",
-            f"injected {drop:.0%} drop")
-    # canary 3: truth source reverted to meteostat -> must be RED
-    res.add("canary-3", "RED" if WU_TRUTH_TOKEN not in "meteostat_daily" else "GREEN",
-            "injected meteostat truth source")
+    # canary 2: a baseline with a hit-rate the "current run" badly misses ->
+    # duty2_regression must read the fixture baseline from disk and trip RED.
+    with tempfile.TemporaryDirectory() as td:
+        os.makedirs(os.path.join(td, "reports"))
+        with open(os.path.join(td, "reports", "crossover_baseline.json"), "w") as f:
+            json.dump({"WSSS": {"14:00": 0.91}}, f)
+        duty2_regression(td, {"WSSS": {"14:00": 0.50}}, res)   # 41pt drop -> RED
+    # canary 3: truth source reverted to meteostat -> duty3_drift must trip RED.
+    duty3_drift(None, [["council._WU_TRUTH_STATIONS[manila]", "meteostat_daily"]],
+                None, res)
     code = res.exit_code()
     res.emit()
     if code != Result.RANK["RED"]:
@@ -283,11 +288,32 @@ def main():
 
     duty1_scorecard(args.repo, cities, res)
 
-    ab_now = _load_json(args.ab_now) if args.ab_now and os.path.exists(args.ab_now) else {}
-    duty2_regression(args.repo, ab_now, res)
+    # A malformed JSON input means the duty cannot run honestly -> ABORT(4) per
+    # the exit-code contract, never an uncaught traceback (which the cron wrapper
+    # reads as an opaque crash, not a duty verdict).
+    ab_now = {}
+    if args.ab_now and os.path.exists(args.ab_now):
+        try:
+            ab_now = _load_json(args.ab_now)
+        except (OSError, ValueError) as e:
+            res.add("2-regression", "ABORT",
+                    f"--ab-now {args.ab_now}: unreadable/malformed JSON ({e}); "
+                    f"Duty 2 cannot run honestly")
+            ab_now = None
+    if ab_now is not None:
+        duty2_regression(args.repo, ab_now, res)
 
-    truth_cfg = _load_json(args.truth_config) if args.truth_config and os.path.exists(args.truth_config) else []
-    duty3_drift(args.repo, truth_cfg, args.ecmwf_bias, res)
+    truth_cfg = []
+    if args.truth_config and os.path.exists(args.truth_config):
+        try:
+            truth_cfg = _load_json(args.truth_config)
+        except (OSError, ValueError) as e:
+            res.add("3-drift", "ABORT",
+                    f"--truth-config {args.truth_config}: unreadable/malformed JSON ({e}); "
+                    f"Duty 3 cannot run honestly")
+            truth_cfg = None
+    if truth_cfg is not None:
+        duty3_drift(args.repo, truth_cfg, args.ecmwf_bias, res)
 
     res.emit(args.out)
     return res.exit_code()

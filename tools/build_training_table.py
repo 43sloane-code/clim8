@@ -26,7 +26,7 @@ import json
 import math
 from pathlib import Path
 
-from weather_council.sources import ARCHIVE_URL, Sources
+from weather_council.sources import ARCHIVE_URL, Sources, _round_half_up as _b
 from weather_council.intraday_ceiling import _running_max, _final_max, _day_state
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -34,10 +34,6 @@ OBS = ROOT / "data" / "wsss_hourly_iem.jsonl"
 OUT = ROOT / "data" / "wsss_training.jsonl"
 LAT, LON, TZ = 1.3502, 103.994, "Asia/Singapore"
 ERA5_VARS = "cloudcover,shortwave_radiation,precipitation,windspeed_10m"
-
-
-def _b(c):
-    return math.floor(c + 0.5)
 
 
 def fetch_era5(src: Sources, start: _dt.date, end: _dt.date) -> dict[str, dict[str, list]]:

@@ -59,15 +59,17 @@ def observe(sources: Sources, place: Place, observed: DailySeries,
                 or "Hong Kong Observatory (live rhrread)")
             current["temperature_record_time"] = live.get("record_time")
     elif truth_source.get("data_source") == "iem_metar":
+        st = truth_source.get("station") or {}
+        icao = st.get("icao") or "EGLC"
         try:
-            live = sources.eglc_current()
+            live = sources.iem_metar_current(icao, place.timezone)
         except Exception:
             live = None
         if live and live.get("temperature_2m") is not None:
             current = dict(current)
             current["temperature_2m"] = live["temperature_2m"]
             current["temperature_source"] = (
-                "London City Airport EGLC (live IEM METAR, whole-degree)")
+                f"{st.get('name') or icao} {icao} (live IEM METAR)")
             current["temperature_record_time"] = live.get("record_time")
     elif "Wunderground" in (truth_source.get("data_source") or ""):
         st = truth_source.get("station") or {}
@@ -93,8 +95,8 @@ def observe(sources: Sources, place: Place, observed: DailySeries,
                         f"'now' reading from the HKO rhrread feed)")
         elif truth_source.get("data_source") == "iem_metar":
             backbone = (f"{st['name']} daily extremes reconstructed from raw "
-                        f"IEM ASOS METAR (London City Airport's own EGLC sensor "
-                        f"— the point the London market settles on)")
+                        f"IEM ASOS METAR ({st.get('icao') or ''} sensor — the "
+                        f"point the temperature record settles on)")
         elif "Wunderground" in (truth_source.get("data_source") or ""):
             backbone = (f"{st['name']} ({st.get('icao')}) daily extremes from the "
                         f"Wunderground / Weather Company record — the exact feed the "

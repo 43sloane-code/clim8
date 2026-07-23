@@ -43,6 +43,7 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import fcntl
+import json
 import os
 import sqlite3
 import subprocess
@@ -50,6 +51,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# The launchd plist invokes this script with no PYTHONPATH, so the in-process
+# imports below (postmortem / lessons / shadow_score) must not depend on the
+# launcher's environment — same shim as tools/kalshi_logger.py.
+sys.path.insert(0, str(ROOT))
 PY = sys.executable                       # the interpreter running this script
 DB = ROOT / "verdicts.db"
 LOGS = ROOT / "logs"
@@ -88,18 +93,26 @@ def _log(msg: str) -> None:
         f.write(line + "\n")
 
 
-def _run(args: list[str]) -> tuple[int, str]:
-    """Invoke the read-only run.py CLI in a subprocess (PYTHONPATH pinned to the
-    repo so it imports regardless of the launchd working directory)."""
+def _run_tool(argv: list[str]) -> tuple[int, str]:
+    """Invoke one repo CLI in a subprocess (PYTHONPATH pinned to the repo so it
+    imports regardless of the launchd working directory). Returns (rc, stdout+stderr
+    merged) — merging stderr is deliberate: a tool that writes its error only to
+    stderr would otherwise show a healthy-looking last stdout line and hide the
+    failure (_tail_status's whole purpose)."""
     env = dict(os.environ, PYTHONPATH=str(ROOT))
     try:
         p = subprocess.run(
-            [PY, "run.py", *args], cwd=ROOT, env=env,
+            [PY, *argv], cwd=ROOT, env=env,
             capture_output=True, text=True, timeout=TIMEOUT_S,
         )
         return p.returncode, (p.stdout or "") + (p.stderr or "")
     except subprocess.TimeoutExpired:
         return 124, f"timeout after {TIMEOUT_S}s"
+
+
+def _run(args: list[str]) -> tuple[int, str]:
+    """Invoke the read-only run.py CLI through the shared subprocess wrapper."""
+    return _run_tool(["run.py", *args])
 
 
 def _tail_status(out: str) -> str:
@@ -108,7 +121,11 @@ def _tail_status(out: str) -> str:
     lines = [l.strip() for l in (out or "").splitlines() if l.strip()]
     if not lines:
         return "(no output)"
-    bad = next((l for l in lines if "fail" in l.lower() or "error" in l.lower()), None)
+    # "RED" is matched case-SENSITIVE and whole-token: the watchdog's verdict word
+    # is uppercase, and a lowercase substring match false-positives on "covered"/"shared".
+    bad = next((l for l in lines
+                if "fail" in l.lower() or "error" in l.lower() or "RED" in l.split()
+                or '"RED"' in l), None)
     last = lines[-1]
     return f"{bad}  ||  {last}" if bad and bad != last else last
 
@@ -118,12 +135,8 @@ def _ledger_step(label: str, script: str) -> None:
     break the core loop, and its failure must be VISIBLE (_tail_status), never last-line-hidden
     (the 2026-07-02 dead-DNS lesson)."""
     try:
-        env = dict(os.environ, PYTHONPATH=str(ROOT))
-        p = subprocess.run([PY, script], cwd=ROOT, env=env,
-                           capture_output=True, text=True, timeout=TIMEOUT_S)
-        # merge stderr: a tool that writes its error only to stderr would otherwise show a
-        # healthy-looking last stdout line and hide the failure (_tail_status's whole purpose).
-        _log(f"{label} rc={p.returncode} | {_tail_status((p.stdout or '') + (p.stderr or ''))}")
+        rc, out = _run_tool([script])
+        _log(f"{label} rc={rc} | {_tail_status(out)}")
     except Exception as e:                                   # noqa: BLE001 — non-fatal by design
         _log(f"{label} failed (non-fatal): {type(e).__name__}: {e}")
 
@@ -141,14 +154,18 @@ def _snapshot_db() -> None:
         dst.mkdir(exist_ok=True)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tf:
             tmp = tf.name
-        with contextlib.closing(sqlite3.connect(DB)) as src_c, \
-                contextlib.closing(sqlite3.connect(tmp)) as dst_c:   # close both even if backup raises
-            with dst_c:
-                src_c.backup(dst_c)
-        with open(tmp, "rb") as f, open(dst / "verdicts.db.gz", "wb") as out:
-            with gzip.GzipFile(fileobj=out, mode="wb", mtime=0) as g:
-                g.write(f.read())
-        os.unlink(tmp)
+        try:
+            with contextlib.closing(sqlite3.connect(DB)) as src_c, \
+                    contextlib.closing(sqlite3.connect(tmp)) as dst_c:   # close both even if backup raises
+                with dst_c:
+                    src_c.backup(dst_c)
+            with open(tmp, "rb") as f, open(dst / "verdicts.db.gz", "wb") as out:
+                with gzip.GzipFile(fileobj=out, mode="wb", mtime=0) as g:
+                    g.write(f.read())
+        finally:
+            # delete=False means the tempfile survives a backup()/gzip raise — never leak it
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
         _log(f"db snapshot -> backups/verdicts.db.gz "
              f"({(dst / 'verdicts.db.gz').stat().st_size // 1024}KB)")
     except Exception as e:                                   # noqa: BLE001 — non-fatal by design
@@ -173,10 +190,39 @@ def _snapshotted_today(city: str) -> bool:
             (city + "%", today),
         ).fetchone()
         return row is not None
-    except sqlite3.OperationalError:
-        return False                        # table not created yet — first run
+    except sqlite3.OperationalError as e:
+        # ONLY "no such table" reads as first-run (table not created yet). Any other
+        # OperationalError — above all "database is locked" — must NOT return False:
+        # a False here is "no snapshot today", and the run would then write exactly
+        # the correlated duplicate this guard exists to prevent. Let it raise.
+        if "no such table" not in str(e).lower():
+            raise
+        return False
     finally:
         con.close()
+
+
+def _crossover_window_args() -> tuple[str, list[str]]:
+    """(hours, extra CLI args) pinning the current-run crossover emit to the SAME
+    evaluation window the frozen baseline used — watchdog Duty 2's contract. The
+    window is read from the baseline's own "_meta" record (written by
+    intraday_ceiling_backtest --emit-crossover since 2026-07-22). A baseline with
+    no "_meta" stays UNPINNED and says so loudly — never invent a pin from nothing."""
+    try:
+        meta = json.loads((ROOT / "reports" / "crossover_baseline.json")
+                          .read_text()).get("_meta") or {}
+    except (OSError, ValueError):
+        meta = {}
+    hours = str(meta.get("hours") or "13,14,15,16")
+    args: list[str] = []
+    if meta.get("end"):
+        args += ["--end", str(meta["end"])]
+    if meta.get("days"):
+        args += ["--days", str(meta["days"])]
+    if not args:
+        _log("WARN: crossover baseline carries no window metadata (_meta) — emit is "
+             "UNPINNED, a moving window vs a frozen baseline can false-RED on data drift")
+    return hours, args
 
 
 def main() -> int:
@@ -253,7 +299,6 @@ def main() -> int:
     # freshly emitted crossover (--ab-now) and the truth config handed to it, else every
     # baseline entry reads "missing" and it fires a false RED (found live on first wiring).
     try:
-        env = dict(os.environ, PYTHONPATH=str(ROOT))
         # BOTH certified-lock cities (london added 2026-07-12, executing
         # london_lock_instrumentation.md §2): --emit-crossover MERGES per-ICAO into the
         # shared file, and the baseline now pins WSSS + EGLC — a missing city here reads as
@@ -262,22 +307,24 @@ def main() -> int:
         # handed watchdog Duty 2 YESTERDAY'S hit-rates as "current" — stale-but-
         # present numbers diff GREEN, defeating the missing-city-reads-RED design.
         # After the reset, a city whose emit fails is genuinely ABSENT.
+        # The emit is PINNED to the baseline's own evaluation window (_meta in
+        # reports/crossover_baseline.json) — an unpinned emit defaults --end to TODAY,
+        # so a moving window diffs RED against the frozen baseline on pure data drift
+        # (fired live 2026-07-20 and 07-22; band is 0.03).
         (ROOT / "reports" / "crossover_now.json").unlink(missing_ok=True)
+        cx_hours, cx_pin = _crossover_window_args()
         for _cx_city in ("singapore", "london"):
-            cx = subprocess.run([PY, "tools/intraday_ceiling_backtest.py", "--city", _cx_city,
-                                 "--hours", "13,14,15,16", "--emit-crossover",
-                                 "reports/crossover_now.json"],
-                                cwd=ROOT, env=env, capture_output=True, text=True,
-                                timeout=TIMEOUT_S)
-            if cx.returncode != 0:                    # emit failure -> stale crossover; visible
-                _log(f"crossover emit ({_cx_city}) rc={cx.returncode} (non-fatal) | "
-                     f"{_tail_status((cx.stdout or '') + (cx.stderr or ''))}")
+            rc_cx, cx_out = _run_tool(["tools/intraday_ceiling_backtest.py",
+                                       "--city", _cx_city, "--hours", cx_hours, *cx_pin,
+                                       "--emit-crossover", "reports/crossover_now.json"])
+            if rc_cx != 0:                            # emit failure -> stale crossover; visible
+                _log(f"crossover emit ({_cx_city}) rc={rc_cx} (non-fatal) | "
+                     f"{_tail_status(cx_out)}")
         # truth-config: NEVER clobber a good config with an empty "[]" on a resolve failure — that
         # makes watchdog Duty 3 ABSTAIN (false-GREEN) on the exact drift it exists to catch. Write
         # only real output; on failure preserve the prior file (or seed "[]" only if none exists).
-        t = subprocess.run([PY, "tools/resolve_truth_sources.py"], cwd=ROOT, env=env,
-                           capture_output=True, text=True, timeout=TIMEOUT_S)
-        tconf = t.stdout.strip() if t.returncode == 0 else ""
+        rc_t, t_out = _run_tool(["tools/resolve_truth_sources.py"])
+        tconf = t_out.strip() if rc_t == 0 else ""
         tpath = ROOT / "reports" / "truth_config.json"
         if tconf:
             tpath.write_text(tconf)
@@ -285,13 +332,16 @@ def main() -> int:
             tpath.write_text("[]")
             _log("truth-config resolve failed and no prior config — seeded [] (watchdog ABSTAINs)")
         else:
-            _log(f"truth-config resolve rc={t.returncode} — preserving prior config (not clobbering) | "
-                 f"{_tail_status((t.stdout or '') + (t.stderr or ''))}")
-        p = subprocess.run([PY, "tools/watchdog_core.py", "--cities", "RPLL,WSSS,EGLC",
-                            "--ab-now", "reports/crossover_now.json",
-                            "--truth-config", "reports/truth_config.json"],
-                           cwd=ROOT, env=env, capture_output=True, text=True, timeout=TIMEOUT_S)
-        _log(f"watchdog rc={p.returncode} | {_tail_status((p.stdout or '') + (p.stderr or ''))}")
+            _log(f"truth-config resolve rc={rc_t} — preserving prior config (not clobbering) | "
+                 f"{_tail_status(t_out)}")
+        # --out persists the dated JSON report: a RED without it left no artifact — the duty
+        # message (what regressed, where) was lost the moment the log line scrolled away.
+        wd_out = f"reports/watchdog_{dt.datetime.now(dt.timezone.utc).date().isoformat()}.json"
+        rc_wd, wd = _run_tool(["tools/watchdog_core.py", "--cities", "RPLL,WSSS,EGLC",
+                               "--ab-now", "reports/crossover_now.json",
+                               "--truth-config", "reports/truth_config.json",
+                               "--out", wd_out])
+        _log(f"watchdog rc={rc_wd} | {_tail_status(wd)}")
     except Exception as e:                                   # noqa: BLE001 — non-fatal by design
         _log(f"watchdog failed (non-fatal): {type(e).__name__}: {e}")
 
@@ -349,10 +399,16 @@ def main() -> int:
     _ledger_step("settlement audit", "tools/settlement_audit.py")
     _snapshot_db()
 
-    # 3. Refresh the at-a-glance C7 status file.
+    # 3. Refresh the at-a-glance C7 status file — but ONLY from a clean --edge run:
+    # a non-zero rc means edge_out is a traceback/error text, and persisting it
+    # would replace the last good status with crash output that reads as a verdict.
     try:
-        STATUS.write_text(f"# C7 status as of {_now()}\n\n{edge_out}\n")
-        _log(f"wrote {STATUS.relative_to(ROOT)}")
+        if rc != 0:
+            _log(f"--edge rc={rc} — NOT refreshing c7_status.txt "
+                 f"(keeping the last good status) | {_tail_status(edge_out)}")
+        else:
+            STATUS.write_text(f"# C7 status as of {_now()}\n\n{edge_out}\n")
+            _log(f"wrote {STATUS.relative_to(ROOT)}")
     except OSError as e:
         _log(f"status write failed: {e}")
 

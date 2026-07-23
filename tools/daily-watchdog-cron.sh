@@ -84,11 +84,12 @@ done
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || { echo "[$(date -Is)] $PYTHON_BIN not found." >&2; exit 1; }
 
 # ---- Pin ref under test; tests-green floor before anything ----
+# mkdir MUST precede the redirect below: a missing $LOG_DIR fails the redirect
+# itself, and the || branch would then misreport a "test floor FAILED".
+mkdir -p "$LOG_DIR" "$REPO/ledger/traces"
 git checkout "$BASELINE_REF"
 PYTHONPATH=. "$PYTHON_BIN" -m unittest discover -s tests >/dev/null 2>"$LOG_DIR/$DATE-tests.log" \
   || { echo "[$(date -Is)] test floor FAILED on $BASELINE_REF -- aborting." >&2; exit 1; }
-
-mkdir -p "$LOG_DIR" "$REPO/ledger/traces"
 
 # ============================================================================
 # STEP 1 -- CANARY GATE. The detector must trip RED on known-bad input, or a
@@ -113,7 +114,8 @@ for cty in $XOVER_CITIES; do
     || echo "[$(date -Is)] crossover emit failed for $cty (Duty 2 will flag the missing city)" >&2
 done
 
-# 2b. Truth-source config for Duty 3. resolve_truth_sources.py is not wired yet;
+# 2b. Truth-source config for Duty 3. resolve_truth_sources.py IS wired (also run
+#     in-process by tools/accumulate.py's watchdog step); on a resolve failure
 #     write [] so Duty 3 leans on --ecmwf-bias (or ABSTAINs) rather than crashing.
 TRUTH_CFG="$LOG_DIR/$DATE-truth.json"
 if [ -f "tools/resolve_truth_sources.py" ]; then

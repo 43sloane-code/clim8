@@ -493,14 +493,6 @@ class TestLondonEGLCMetarOverlay(unittest.TestCase):
                        icao=icao, latitude=51.487, longitude=0.114,
                        elevation=None, distance_km=16.8)
 
-    def test_is_london_eglc_matches_by_icao_only(self):
-        from weather_council.sources import Sources
-        s = Sources()
-        self.assertTrue(s.is_london_eglc(self._station("EGLC")))
-        self.assertTrue(s.is_london_eglc(self._station("eglc")))   # case-insensitive
-        self.assertFalse(s.is_london_eglc(self._station("EGLL")))  # Heathrow, not us
-        self.assertFalse(s.is_london_eglc(self._station(None)))
-
     def test_overlay_replaces_recent_days_keeps_old(self):
         from types import SimpleNamespace
         from weather_council.sources import Sources

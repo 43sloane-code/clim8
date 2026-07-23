@@ -1,4 +1,4 @@
-"""Network-free tests for sources.py live-feed parsing: HKO rhrread (whole-degree), HKO 1-minute 0.1 C feed, and the live EGLC METAR 'now'.
+"""Network-free tests for sources.py live-feed parsing: HKO rhrread (whole-degree) and the HKO 1-minute 0.1 C feed.
 
 Stdlib unittest only. Run with:
     PYTHONPATH=. python3 -m unittest discover -s tests
@@ -125,32 +125,6 @@ class TestHKO1MinTemp(unittest.TestCase):
         out = s.hko_current()
         self.assertEqual(out["temperature_2m"], 28.0)
         self.assertIn("rhrread", out["temperature_source"])
-
-class TestEGLCCurrent(unittest.TestCase):
-    """London's live 'now' must come from the EGLC settlement sensor's most
-    recent METAR (the airport the market resolves on), not the Open-Meteo grid."""
-
-    def test_returns_latest_observation_as_iso(self):
-        from weather_council.sources import Sources
-        s = Sources()
-        s.fetch_metar_observations = lambda *a, **k: [
-            ("2026-06-07 16:20", 19.0), ("2026-06-07 16:50", 19.0)]
-        out = s.eglc_current()
-        self.assertEqual(out["temperature_2m"], 19.0)      # latest, not the first
-        self.assertEqual(out["record_time"], "2026-06-07T16:50")
-
-    def test_empty_feed_yields_none(self):
-        from weather_council.sources import Sources
-        s = Sources()
-        s.fetch_metar_observations = lambda *a, **k: []
-        self.assertIsNone(s.eglc_current())
-
-    def test_fetch_failure_yields_none(self):
-        from weather_council.sources import Sources
-        def _boom(*a, **k): raise RuntimeError("IEM down")
-        s = Sources()
-        s.fetch_metar_observations = _boom
-        self.assertIsNone(s.eglc_current())   # caller then keeps the grid 'now'
 
 if __name__ == "__main__":
     unittest.main()

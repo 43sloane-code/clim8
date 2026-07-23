@@ -135,6 +135,13 @@ def main() -> int:
             data = {}
         data[icao] = {f"{h:02d}:00": sum(hits[h]) / len(hits[h])
                       for h in eval_hours if hits[h]}
+        # Record the evaluation window the numbers were produced on, so a later
+        # current-run emit can be pinned to the SAME held-out days as the baseline
+        # (watchdog_core Duty 2's contract). Without it the emit defaults --end to
+        # today and a moving window diffs RED against the frozen baseline on pure
+        # data drift (fired live 2026-07-20/22). Duty 2 skips "_" metadata keys.
+        data["_meta"] = {"end": end.isoformat(), "days": args.days,
+                         "hours": args.hours}
         with open(args.emit_crossover, "w") as f:
             json.dump(data, f, indent=2, sort_keys=True)
         print(f"  emitted crossover hit-rates for {icao} -> {args.emit_crossover}")
