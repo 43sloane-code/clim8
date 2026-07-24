@@ -64,6 +64,14 @@ are output.
   The FLOOR is not the SETTLE — holding days climb (July: London 37% @16:00, SG ~30% @14:00).
 - "DECLINING" requires the last TWO reads below runmax−0.3°C (certified: single-read declines
   are false 16–30%; 2-consec thirds it, +30min). One tick-down = still HOLDING = the trap.
+- HOURLY-GRAIN TRAP (operator directive 2026-07-23, all cities, every scenario): the hourly
+  rows MISS between-obs spikes — the settling CLI-grade extreme lives in the METAR 6-hourly
+  1-group / 24h 4-group. KSEA 07-23: hourly topped at 23.9°C=75°F (machine served 98% on
+  "75 or below") while the 1-group printed 10244=24.4°C=76°F — the bucket that pays. Before
+  serving high conviction near a bucket boundary on ANY ASOS/NWS-oracle city, cross-check
+  the 6-hourly extreme groups (tools/finegrain_read.py) — the hourly floor is a floor, never
+  the settle. The NWS CLI product (forecast.weather.gov/product.php?site=<WFO>&product=CLI)
+  is the final authority; fetch it to confirm settlement.
 - While HOLDING: serve "INTRADAY FLOOR — PROVISIONAL (peak NOT formed)". NEVER headline a
   90%+ lock on a holding day (user caught this twice). Quote the STATE-conditional rate.
 - Served raise-risk is (state × meteorological season × hour), n≥30 cell, state-only fallback
