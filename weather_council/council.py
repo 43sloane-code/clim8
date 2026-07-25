@@ -172,11 +172,22 @@ _WU_TRUTH_STATIONS = {
                "lat": 14.5086, "lon": 121.0194},
     "singapore": {"icao": "WSSS", "name": "Changi",
                   "lat": 1.3502, "lon": 103.9944},
-    # San Francisco settles on the Wunderground KSFO record (whole-°F), a live WU feed
-    # like RPLL/WSSS — so it anchors on the oracle, not the Meteostat/IEM path.
+    # San Francisco's BACKTEST truth anchors on the Wunderground KSFO record (whole-°F),
+    # a live WU feed like RPLL/WSSS. NOTE (operator directive 2026-07-25): the Kalshi
+    # contract settles on the NWS CLI, not WU — the SETTLEMENT RECORD display leads with
+    # the CLI (run.py _CLI_PRIMARY_SETTLEMENT) and WU is a secondary cross-ref there.
+    # This table governs the model's truth scale, which stays WU until a CLI-scale
+    # recalibration clears the gate — do not "fix" it to CLI here.
     "san francisco": {"icao": "KSFO", "name": "San Francisco Intl",
                       "lat": 37.6189, "lon": -122.375},
 }
+
+# Stations in _WU_TRUTH_STATIONS whose CONTRACT settles on the NWS CLI, not WU
+# (kalshi_sf_seam.md; operator directive 2026-07-25). WU remains their backtest
+# TRUTH (gated — do not re-anchor), but served labels must not call WU "the
+# market's oracle" for them: the SETTLEMENT RECORD block (run.py
+# _CLI_PRIMARY_SETTLEMENT) leads with the CLI for these stations.
+_CLI_SETTLED_ICAOS = {"KSFO"}
 
 # Airports whose SETTLEMENT (today's realized bucket) reads the Wunderground daily high —
 # the record the contract pays on — even when their multi-year BACKTEST anchor is the deep
@@ -983,15 +994,21 @@ class Council:
                 w_end = dt.date.fromisoformat(max(obs))
                 fp = Place(place.name, place.country, wu["lat"], wu["lon"],
                            place.timezone)
+                cli_settled = wu["icao"] in _CLI_SETTLED_ICAOS
                 truth_source = {
                     "kind": "station",
-                    "data_source": "Wunderground / Weather Company (settlement oracle)",
+                    "data_source": ("Wunderground / Weather Company (backtest truth; "
+                                    "contract settles on the NWS CLI)" if cli_settled else
+                                    "Wunderground / Weather Company (settlement oracle)"),
                     "station": {
                         "id": wu["icao"], "name": wu["name"], "icao": wu["icao"],
                         "wmo": None, "latitude": wu["lat"], "longitude": wu["lon"],
                         "elevation": None, "distance_km": 0.0,
                     },
-                    "label": (f"{wu['name']} ({wu['icao']}) — Wunderground "
+                    "label": (f"{wu['name']} ({wu['icao']}) — Wunderground daily record "
+                              f"(backtest truth; Kalshi settles on the NWS CLI — "
+                              f"see SETTLEMENT RECORD)" if cli_settled else
+                              f"{wu['name']} ({wu['icao']}) — Wunderground "
                               f"settlement record (the market's own oracle, current)"),
                     "window_start": w_start.isoformat(),
                     "window_end": w_end.isoformat(),

@@ -686,6 +686,98 @@ class TestSettlementReferenceGrain(unittest.TestCase):
         self.assertNotIn("bucket 90", text)
 
 
+class TestCliPrimarySettlement(unittest.TestCase):
+    """CLI-primary SETTLEMENT RECORD (operator directive 2026-07-25; kalshi_sf_seam.md:
+    "Kalshi truth = the FINAL NWS CLI, never WU"). For KSFO the block must LEAD with the
+    NWS CLI, use IEM as the primary cross-ref, and demote WU to a labeled secondary
+    cross-ref — the old WU-led header must not appear. °C cities are untouched (they
+    never carry cli_primary; TestSettlementReferenceGrain pins their byte-shape)."""
+
+    def _ref(self, **over):
+        ref = {
+            "icao": "KSFO", "name": "San Francisco Intl",
+            "url": "http://example/wu", "cli_url": "http://example/cli",
+            "grain": "F", "cli_primary": True,
+            "target_date": "2026-07-24", "target_status": "settled",
+            "target_record": (21.1, 15.6),          # IEM 70°F high / 60°F low
+            "cli_target": {"high_f": 71.0, "high_time": "245 PM"},
+            "cli_days": [{"date": "2026-07-23", "high_f": 70.0, "high_time": "MM"},
+                         {"date": "2026-07-24", "high_f": 71.0, "high_time": "245 PM"}],
+            "cli_seam": {"mean": 1.1, "n": 8},
+            "verdict_high": 20.8, "verdict_low": 15.0,
+            "anchor_offset": None, "anchor_is_same": True,
+            "recent": [{"date": "2026-07-24", "high": 21.1, "low": 15.6}],
+            "wunderground": {"days": [{"date": "2026-07-24", "wu_max_c": 21.1,
+                                       "wu_bucket": 70, "iem_bucket": 70,
+                                       "agree": True}], "agree": 1, "total": 1},
+        }
+        ref.update(over)
+        return ref
+
+    def test_leads_with_nws_cli_and_demotes_wu(self):
+        import run
+        text = "\n".join(run._settlement_reference_lines(self._ref()))
+        self.assertIn("SETTLEMENT RECORD — NWS CLI KSFO", text)
+        self.assertIn("RECORDED: CLI high 71°F at 245 PM", text)
+        self.assertIn("NWS CLI = the settle", text)
+        self.assertIn("PRIMARY CROSS-REF — IEM KSFO", text)
+        self.assertIn("SECONDARY CROSS-REF — Wunderground KSFO (never the settle)", text)
+        self.assertIn("CLI − WU +1.10 °F", text)          # the seam is quoted
+        self.assertNotIn("the settlement oracle", text)   # WU is no longer the headline
+        self.assertLess(text.index("NWS CLI KSFO"),
+                        text.index("SECONDARY CROSS-REF"))  # CLI genuinely first
+
+    def test_intraday_falls_back_to_iem_provisional(self):
+        import run
+        ref = self._ref(cli_target=None, target_status="forecast")
+        text = "\n".join(run._settlement_reference_lines(ref))
+        self.assertIn("CLI not yet issued", text)
+        self.assertIn("IEM primary cross-ref high 70°F", text)
+        self.assertIn("(provisional;", text)
+
+    def test_cli_fetch_failure_is_loud(self):
+        import run
+        ref = self._ref(cli_target=None, cli_error="boom")
+        text = "\n".join(run._settlement_reference_lines(ref))
+        self.assertIn("⚠ CLI FETCH FAILED", text)
+        self.assertIn("NOT the NWS CLI the contract settles on", text)
+
+    def test_no_celsius_leakage(self):
+        import run
+        text = "\n".join(run._settlement_reference_lines(self._ref()))
+        self.assertNotIn("°C", text)
+
+
+class TestCliBackboneLabel(unittest.TestCase):
+    """The observation 'truth backbone' line for a CLI-settled station must say
+    backtest-truth, not 'the exact feed the market settles on' — that phrasing is
+    reserved for genuinely WU-settled cities (Manila/Singapore)."""
+
+    def _observe(self, data_source):
+        from weather_council.observation import observe
+        from weather_council.sources import Place
+
+        class _S:
+            def fetch_current(self, place): return {}
+
+        place = Place("San Francisco", "United States", 37.62, -122.38, "America/Los_Angeles")
+        truth = {"kind": "station", "data_source": data_source,
+                 "station": {"id": "KSFO", "name": "San Francisco Intl", "icao": "KSFO",
+                             "latitude": 37.62, "longitude": -122.38}}
+        return observe(_S(), place, {"2026-07-24": (21.1, 15.6)}, truth)
+
+    def test_cli_settled_station_says_backtest_truth(self):
+        obs = self._observe("Wunderground / Weather Company (backtest truth; "
+                            "contract settles on the NWS CLI)")
+        self.assertIn("backtest truth", obs.backbone)
+        self.assertIn("NWS CLI", obs.backbone)
+        self.assertNotIn("the exact feed the market settles on", obs.backbone)
+
+    def test_wu_settled_cities_keep_oracle_wording(self):
+        obs = self._observe("Wunderground / Weather Company (settlement oracle)")
+        self.assertIn("the exact feed the market settles on", obs.backbone)
+
+
 class TestWp7WindowGuard(unittest.TestCase):
     """WP-7 (served-number campaign, F7): the truth window is frozen canonical N+1 days, but a
     NON-POSITIVE window must never leak the WHOLE series through the WU-path `[-(window+1):]` slice

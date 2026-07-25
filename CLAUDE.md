@@ -41,7 +41,15 @@ are output.
 | Singapore | WSSS Changi      | WU oracle (live, current)    | whole-°F → °C round-half-up| YES    |
 | Manila    | RPLL             | WU oracle (live)             | whole-°F → °C round-half-up| YES (serving only; improvement OUT OF SCOPE by user directive) |
 | London    | EGLC City Airport| SETTLE: WU oracle (live) · BACKTEST: IEM-EGLC (10y deep) | whole-°C, round-half-up (17.6→18) | YES    |
-| San Francisco | KSFO         | WU oracle (live)             | WHOLE-°F (2°F market buckets)| NO — on-demand; headline pmf still °C (registered blocker: sf_verdict_blockers.md). For SF quote the SETTLEMENT-section °F number, never the °C headline. |
+| San Francisco | KSFO         | **NWS CLISFO final** (Kalshi's oracle — kalshi_sf_seam.md) · IEM METAR = primary cross-ref (10y archive + 6-hourly T-groups) · WU = SECONDARY cross-ref only | WHOLE-°F (2°F market buckets)| NO — on-demand; headline pmf still °C (registered blocker: sf_verdict_blockers.md). For SF quote the SETTLEMENT-section °F number, never the °C headline. |
+
+> SF truth hierarchy (operator directive 2026-07-25): the main oracle is the NWS CLI product
+> (what Kalshi settles on). IEM KSFO METAR is the primary cross-reference — the backtest
+> backbone and the fine-grain (T-group) spike channel. WU is a secondary cross-reference ONLY:
+> quote it last, never headline it as the settle, and expect it to read 1-2°F below CLI
+> (07-12: CLI 76 vs WU 74; 07-24: CLI 71 vs WU 70 — the logged seam series). The legacy
+> "WU oracle" row was Polymarket-era; the model pmf remains WU-scale until the CLI-scale
+> recalibration is pre-registered and gated.
 | Hong Kong | HKO Observatory  | HKO open-data                | 0.1°C, FLOOR (28.6→28)     | removed |
 
 > London's SETTLE≠BACKTEST split (user directive "wunderground only", 2026-07-07): the market
@@ -142,6 +150,7 @@ are output.
 - weather_council/intraday_ceiling.py — the lever: _day_state (2-consec), state_late_risk
   (state×season), remaining-rise pmf
 - weather_council/sources.py — feeds: WU oracle (WU_GEO/WU_LOCATION/_WU daily+v3),
+  nws_cli_daily (IEM parsed-CLI — the Kalshi settle),
   IEM METAR (fetch_metar_daily; grain detect frac_f>frac_c&≥0.4), _IEM_OVERLAY_TZ (EGLC)
 - weather_council/council.py — _WU_TRUTH_STATIONS, PINNED/STRICT anchors
 - weather_council/storage.py — _WU_SETTLE_TZ, settle_market_snapshots, scorecards

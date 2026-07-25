@@ -99,6 +99,22 @@ SETTLEMENT_REFERENCE: dict[str, dict[str, str]] = {
     },
 }
 
+# Stations whose market settles on the NWS CLI product, not WU (operator
+# directive 2026-07-25, executing the frozen kalshi_sf_seam.md rule "Kalshi
+# truth = the FINAL NWS CLI, never WU"). For these, the SETTLEMENT RECORD
+# block leads with the NWS CLI daily report, IEM METAR is the PRIMARY
+# cross-reference, and WU is demoted to a SECONDARY cross-reference quoted
+# with its measured CLI-vs-WU seam (ledger/<icao>_cli_wu.jsonl). The verdict
+# itself (pmf, backtest truth) is untouched — this reorders the served
+# DISPLAY only. {icao: (WFO site, product page)}
+_CLI_PRIMARY_SETTLEMENT: dict[str, dict[str, str]] = {
+    "KSFO": {
+        "wfo": "MTR",
+        "url": ("https://forecast.weather.gov/product.php?site=MTR&product=CLI"
+                "&issuedby=SFO&format=txt"),
+    },
+}
+
 # Cities anchored on a NON-airport settlement station, with a nearby airport shown
 # only as a cross-reference. User-supplied directive, same discipline as
 # SETTLEMENT_REFERENCE — never a guessed station table. Hong Kong is the canonical
@@ -142,11 +158,14 @@ def _settlement_reference_for(place) -> dict[str, str] | None:
 
 
 def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict | None:
-    """Build the 'compare & contrast vs the cited Wunderground airport record'
-    block for a user-pinned city (e.g. London -> EGLC). The settlement HIGH is the
-    Wunderground oracle (the record the contract pays on); the IEM METAR archive
-    provides the window context + a whole-°C cross-reference that surfaces the °F/°C
-    boundary divergence (07-07 EGLC: WU 90°F=32 vs IEM 31). Contrasts the settlement
+    """Build the 'compare & contrast vs the settlement record' block for a
+    user-pinned city (e.g. London -> EGLC). For WU-oracle cities the settlement
+    HIGH is the Wunderground record (the record the contract pays on); for
+    CLI-primary stations (_CLI_PRIMARY_SETTLEMENT, e.g. SF/KSFO on Kalshi) the
+    block leads with the NWS CLI daily report and WU is demoted to a secondary
+    cross-ref. The IEM METAR archive provides the window context + primary
+    cross-reference in both cases, surfacing the °F/°C boundary divergence
+    (07-07 EGLC: WU 90°F=32 vs IEM 31). Contrasts the settlement
     record with (a) the verdict for the target day, when that day has settled, and
     (b) the council's own anchor station over the backtest window, so any
     settlement-vs-backtest divergence is visible — the lesson from the HK miss.
@@ -253,7 +272,7 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
     if wu_target_high is not None:
         iem_low = target_record[1] if target_record is not None else None
         target_record = (wu_target_high, iem_low)
-    return {
+    out = {
         "icao": icao,
         "name": ref["name"],
         "url": ref["url"],
@@ -270,6 +289,41 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
         # Wunderground anchor: the oracle's own record, with IEM as the cross-ref.
         "wunderground": {"days": wu_days, "agree": wu_agree, "total": wu_total},
     }
+    # CLI-primary stations (kalshi_sf_seam.md; operator directive 2026-07-25): the
+    # contract settles on the NWS CLI, so the block must LEAD with it. The model pmf
+    # stays WU-scale (recalibration is separately gated) — this is the display truth.
+    cli_cfg = _CLI_PRIMARY_SETTLEMENT.get(icao)
+    if cli_cfg is not None:
+        out["cli_primary"] = True
+        out["cli_url"] = cli_cfg["url"]
+        cli_start = dt.date.fromisoformat(recent[0]) if recent else w_start
+        try:
+            cli = sources.nws_cli_daily(icao, min(cli_start, target), fetch_end)
+            out["cli_days"] = [
+                {"date": d, "high_f": cli[d]["high_f"], "high_time": cli[d]["high_time"]}
+                for d in sorted(cli)
+            ]
+            t = cli.get(target.isoformat())
+            out["cli_target"] = t if (t and t.get("high_f") is not None) else None
+        except Exception as exc:
+            # The header claims the CLI is the settle — a failed CLI fetch must be
+            # as loud as a failed WU-oracle fetch (the wu_target_failed precedent).
+            out["cli_error"] = str(exc)
+        # The logged CLI-vs-WU seam series (kalshi_logger duty) — the measured,
+        # systematic divergence that a WU-scale read hides.
+        seam_path = (Path(__file__).resolve().parent / "ledger"
+                     / f"{icao.lower()}_cli_wu.jsonl")
+        try:
+            divs = [json.loads(l)["divergence"] for l in
+                    seam_path.read_text().splitlines() if l.strip()]
+            divs = [x for x in divs if isinstance(x, (int, float))
+                    and not isinstance(x, bool)][-30:]
+            if divs:
+                import statistics as _st
+                out["cli_seam"] = {"mean": round(_st.mean(divs), 2), "n": len(divs)}
+        except Exception:
+            pass
+    return out
 
 
 def _anchor_cross_reference_for(place) -> dict[str, str] | None:
@@ -561,12 +615,14 @@ def _market_lines(c: VerdictMarketComparison, kind: str = "high") -> list[str]:
 
 
 def _settlement_reference_lines(ref: dict) -> list[str]:
-    """Render the user-pinned 'compare & contrast vs Wunderground airport' block.
+    """Render the user-pinned 'compare & contrast vs the settlement record' block.
 
     Grain-aware: the record is rendered in the MARKET's native settlement unit
     (SF/KSFO settles whole °F; London/Manila/Singapore whole °C). For °C cities
     every conversion below is the identity, so their output is byte-for-byte
-    unchanged; only SF now reads in °F (the record the market actually pays on)."""
+    unchanged; only SF now reads in °F (the record the market actually pays on).
+    CLI-primary stations (_CLI_PRIMARY_SETTLEMENT — Kalshi-settled) take the
+    NWS-CLI-led path in _cli_primary_settlement_lines instead."""
     grain = ref.get("grain") or "C"
     u = grain
     def _nat(c):        # a °C value rendered in the market's native grain
@@ -582,6 +638,8 @@ def _settlement_reference_lines(ref: dict) -> list[str]:
                  f"run. Verdict {vh:.1f}/{vl:.1f} °C still stands to be checked against it.")
         L.append("")
         return L
+    if ref.get("cli_primary"):
+        return _cli_primary_settlement_lines(ref)
     L.append(f"               (settlement HIGH is the Wunderground oracle — the record the "
              f"contract pays on; IEM ASOS METAR is the cross-ref below; grain whole °{ref['grain']})")
     tr = ref.get("target_record")
@@ -641,6 +699,90 @@ def _settlement_reference_lines(ref: dict) -> list[str]:
         if wu.get("total"):
             L.append(f"    WU↔IEM cross-check: agree {wu['agree']}/{wu['total']} settled days "
                      f"(WU anchors the settlement; IEM is the cross-reference)")
+    L.append("")
+    return L
+
+
+def _cli_primary_settlement_lines(ref: dict) -> list[str]:
+    """SETTLEMENT RECORD for stations whose contract settles on the NWS CLI
+    (kalshi_sf_seam.md, frozen: "Kalshi truth = the FINAL NWS CLI, never WU";
+    operator directive 2026-07-25). The CLI daily report LEADS, IEM METAR is
+    the primary cross-reference, and WU is demoted to a secondary
+    cross-reference quoted with its measured CLI-vs-WU seam. Whole-°F grain
+    (all CLI-primary stations are US high-temp contracts). The verdict itself
+    stays WU-scale until a CLI-scale recalibration clears the gate — the seam
+    line says exactly how far that scale sits from the settle."""
+    def _f(c):          # internal °C -> display °F
+        return c * 9 / 5 + 32
+    vh = ref.get("verdict_high")
+    L = [f"  SETTLEMENT RECORD — NWS CLI {ref['icao']} ({ref['name']}) [user-pinned]"]
+    L.append(f"    source   : {ref.get('cli_url')}")
+    L.append("    hierarchy: NWS CLI = the settle (the contract's oracle) · IEM METAR = "
+             "primary cross-ref (backtest backbone) · WU = secondary cross-ref only")
+    if ref.get("cli_error"):
+        L.append(f"    ⚠ CLI FETCH FAILED ({ref['cli_error']}) — the high below is the IEM "
+                 f"primary cross-reference, NOT the NWS CLI the contract settles on; "
+                 f"re-run before trusting a boundary call")
+    tr = ref.get("target_record")
+    ct = ref.get("cli_target")
+    settled = ref.get("target_status") != "forecast"
+    low_txt = f"  low {_f(tr[1]):.0f}°F" if (tr is not None and tr[1] is not None) else ""
+    if ct is not None:
+        t_txt = f" at {ct['high_time']}" if ct.get("high_time") else ""
+        L.append(f"    {ref['target_date']} {ref['icao']} RECORDED: CLI high "
+                 f"{ct['high_f']:.0f}°F{t_txt}{low_txt}")
+        if vh is not None:
+            L.append(f"    verdict vs record: verdict {_f(vh):.1f}°F — high "
+                     f"{_f(vh) - ct['high_f']:+.1f} °F vs the CLI settle")
+    elif tr is not None:
+        word = "RECORDED (IEM)" if settled else "so far (day not finished)"
+        L.append(f"    {ref['target_date']} {ref['icao']} {word}: CLI not yet issued "
+                 f"(publishes early next morning) — IEM primary cross-ref high "
+                 f"{_f(tr[0]):.0f}°F{low_txt}")
+        if vh is not None:
+            L.append(f"    verdict vs record: verdict {_f(vh):.1f}°F — high "
+                     f"{_f(vh) - _f(tr[0]):+.1f} °F vs IEM (provisional; the CLI settle "
+                     f"prints at or above the hourly-table max via the 6-hourly groups)")
+    else:
+        v_txt = f"{_f(vh):.1f}°F" if vh is not None else "—"
+        L.append(f"    {ref['target_date']}: no CLI or IEM record yet — verdict {v_txt} "
+                 f"stands to be checked once the CLI publishes.")
+    seam = ref.get("cli_seam")
+    if seam:
+        L.append(f"    seam     : CLI − WU {seam['mean']:+.2f} °F mean over the last "
+                 f"{seam['n']} logged days (ledger/{ref['icao'].lower()}_cli_wu.jsonl) — "
+                 f"a WU-scale read sits structurally ~{abs(seam['mean']):.0f}°F cold "
+                 f"against what the contract pays")
+    days = ref.get("cli_days") or []
+    if days:
+        L.append(f"    recent {ref['icao']} CLI record (NWS daily reports):")
+        for d in days[-7:]:
+            hf = d.get("high_f")
+            if hf is None:
+                L.append(f"      {d['date']}  CLI high missing (M)")
+            else:
+                t_txt = f" at {d['high_time']}" if d.get("high_time") else ""
+                L.append(f"      {d['date']}  CLI high {hf:.0f}°F{t_txt}")
+    if ref.get("anchor_is_same"):
+        L.append(f"    anchor   : the council backtests on {ref['icao']} — settlement "
+                 f"station and backtest station are the same airport (the TRUTH SCALE "
+                 f"differs: backtest WU-scale, settle CLI-scale — see the seam above).")
+    rec = ref.get("recent") or []
+    if rec:
+        L.append(f"    PRIMARY CROSS-REF — IEM {ref['icao']} METAR daily record:")
+        for r in rec:
+            L.append(f"      {r['date']}  high {_f(r['high']):.0f}°F  low {_f(r['low']):.0f}°F")
+    wu = ref.get("wunderground") or {}
+    wud = wu.get("days") or []
+    if wud:
+        L.append(f"    SECONDARY CROSS-REF — Wunderground {ref['icao']} (never the settle):")
+        for w in wud:
+            ib = w.get("iem_bucket")
+            xref = f" | IEM {ib}°F" if ib is not None else ""
+            L.append(f"      {w['date']}  WU max {_f(w['wu_max_c']):.1f}°F → bucket "
+                     f"{w['wu_bucket']}°F{xref}")
+        if wu.get("total"):
+            L.append(f"    WU↔IEM cross-check: agree {wu['agree']}/{wu['total']} settled days")
     L.append("")
     return L
 

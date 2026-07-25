@@ -1464,6 +1464,38 @@ class Sources:
         return {"daily": daily, "grain": grain,
                 "grain_evidence": {"C": round(frac_c, 3), "F": round(frac_f, 3)}}
 
+    def nws_cli_daily(self, icao: str, start: dt.date,
+                      end: dt.date) -> dict[str, dict]:
+        """Daily NWS CLI (climatological report) highs from the IEM parsed-CLI
+        archive — the record Kalshi's US high-temperature contracts settle on
+        (kalshi_sf_seam.md: "Kalshi truth = the FINAL NWS CLI, never WU"). The
+        CLI maximum ingests the 6-hourly METAR max groups, so it reads at or
+        above the hourly-table max (the between-obs spike channel).
+
+        Returns {date -> {"high_f": float|None, "high_time": str|None}} for
+        start..end inclusive. A CLI "high" can be the non-numeric sentinel "M"
+        (missing) — surfaced as None, never as a number (the kalshi_logger bug:
+        "M" passed an is-not-None check and TypeError'd downstream). Only days
+        the CLI has been ISSUED for appear; the current day is absent until the
+        report publishes (~early next morning local)."""
+        out: dict[str, dict] = {}
+        for year in range(start.year, end.year + 1):
+            data = self.http.get_json(
+                "https://mesonet.agron.iastate.edu/json/cli.py",
+                {"station": icao, "year": str(year)},
+            )
+            for row in data.get("results", []) or []:
+                day = row.get("valid")
+                if not isinstance(day, str) or day < start.isoformat() or day > end.isoformat():
+                    continue
+                high = row.get("high")
+                out[day] = {
+                    "high_f": float(high) if isinstance(high, (int, float))
+                    and not isinstance(high, bool) else None,
+                    "high_time": row.get("high_time"),
+                }
+        return out
+
     # -- Climatological records: how this date compares historically ---------
     def fetch_climatology(self, place: Place, start: dt.date,
                           end: dt.date) -> DailySeries:

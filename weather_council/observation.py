@@ -97,6 +97,13 @@ def observe(sources: Sources, place: Place, observed: DailySeries,
             backbone = (f"{st['name']} daily extremes reconstructed from raw "
                         f"IEM ASOS METAR ({st.get('icao') or ''} sensor — the "
                         f"point the temperature record settles on)")
+        elif "backtest truth" in (truth_source.get("data_source") or ""):
+            # CLI-settled station (kalshi_sf_seam.md): WU is the model's backtest
+            # truth, NOT the settle — the label must not call it the market's feed.
+            backbone = (f"{st['name']} ({st.get('icao')}) daily extremes from the "
+                        f"Wunderground / Weather Company record — the model's backtest "
+                        f"truth, current (no archive lag); the contract settles on the "
+                        f"NWS CLI (see SETTLEMENT RECORD)")
         elif "Wunderground" in (truth_source.get("data_source") or ""):
             backbone = (f"{st['name']} ({st.get('icao')}) daily extremes from the "
                         f"Wunderground / Weather Company record — the exact feed the "

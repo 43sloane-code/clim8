@@ -126,5 +126,49 @@ class TestHKO1MinTemp(unittest.TestCase):
         self.assertEqual(out["temperature_2m"], 28.0)
         self.assertIn("rhrread", out["temperature_source"])
 
+class TestNwsCliDaily(unittest.TestCase):
+    """nws_cli_daily — the IEM parsed-CLI feed that Kalshi-settled stations lead
+    with (kalshi_sf_seam.md seam rule 1). KATs: the "M" missing sentinel must
+    surface as None (never as a number — the kalshi_logger TypeError bug), days
+    outside the requested window are dropped, and multi-year spans work."""
+
+    PAYLOAD = {
+        "results": [
+            {"valid": "2026-07-23", "high": 70, "high_time": "MM"},
+            {"valid": "2026-07-24", "high": 71, "high_time": "245 PM"},
+            {"valid": "2026-07-25", "high": "M", "high_time": "MM"},
+            {"valid": "2026-06-30", "high": 66, "high_time": "100 PM"},
+        ]
+    }
+
+    def _sources(self, payload=None):
+        from weather_council.sources import Sources
+
+        class _FakeHTTP:
+            def get_json(self, url, params): return payload if payload is not None else TestNwsCliDaily.PAYLOAD
+
+        s = Sources()
+        s.http = _FakeHTTP()
+        return s
+
+    def test_parses_highs_and_drops_out_of_window(self):
+        import datetime as dt
+        out = self._sources().nws_cli_daily("KSFO", dt.date(2026, 7, 23), dt.date(2026, 7, 25))
+        self.assertEqual(out["2026-07-24"], {"high_f": 71.0, "high_time": "245 PM"})
+        self.assertNotIn("2026-06-30", out)          # outside the requested window
+        self.assertEqual(set(out), {"2026-07-23", "2026-07-24", "2026-07-25"})
+
+    def test_missing_sentinel_is_none_not_a_number(self):
+        import datetime as dt
+        out = self._sources().nws_cli_daily("KSFO", dt.date(2026, 7, 25), dt.date(2026, 7, 25))
+        self.assertIsNone(out["2026-07-25"]["high_f"])
+
+    def test_empty_results_returns_empty(self):
+        import datetime as dt
+        out = self._sources({"results": []}).nws_cli_daily(
+            "KSFO", dt.date(2026, 7, 1), dt.date(2026, 7, 2))
+        self.assertEqual(out, {})
+
+
 if __name__ == "__main__":
     unittest.main()
