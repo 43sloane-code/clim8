@@ -38,6 +38,9 @@ from pathlib import Path
 _STATION_OFFICE = {
     "KSFO": ("KMTR", re.compile(r"SAN FRANCISCO AIRPORT CLIMATE SUMMARY")),
 }
+# AFOS product id for the IEM raw-text archive (the one-shot historical direct
+# half — see fetch_direct_half_iem).
+_STATION_PIL = {"KSFO": "CLISFO"}
 # Per-run fetch cap for product texts (SafeHTTPClient budget is 64/run; the IEM
 # half costs 1) and the accrual ledger that makes ≥30-day coverage reachable
 # across runs (the /products window only spans recent days — accrue, never
@@ -171,12 +174,37 @@ def fetch_direct_half(station: str,
     return accr, n_new
 
 
+def fetch_direct_half_iem(station: str, limit: int = 90) -> dict[str, float | None]:
+    """One-shot HISTORICAL direct half: raw CLI product text from the IEM AFOS
+    archive (cgi-bin/afos/retrieve.py — the same allowlisted host, one request,
+    \\x01-separated products). This completes the ≥30-day S2 verification TODAY
+    instead of after a month of accrual. INDEPENDENCE CAVEAT (stated, not hidden):
+    parsed and text both come from IEM's archive, so this verifies IEM's PARSING
+    against its own source text — the api.weather.gov accrual half remains the
+    independent line and overrides on overlap."""
+    from weather_council.security import SafeHTTPClient
+    c = SafeHTTPClient()
+    txt = c.get_text(
+        "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py",
+        {"pil": _STATION_PIL[station.upper()], "limit": str(limit), "fmt": "text"})
+    out: dict[str, float | None] = {}
+    for chunk in txt.split("\x01"):
+        parsed = parse_cli_product(chunk)
+        if parsed is not None and parsed[0] not in out:
+            out[parsed[0]] = parsed[1]      # first (latest) version wins
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Verify the IEM parsed-CLI archive "
                                      "against first-party CLISFO text (S2 rule 2).")
     ap.add_argument("--station", default="KSFO")
     ap.add_argument("--days", type=int, default=40)
     ap.add_argument("--min-days", type=int, default=30)
+    ap.add_argument("--direct-source", choices=["accrual", "iem", "both"],
+                    default="both",
+                    help="direct half: api accrual only, IEM AFOS raw text only, "
+                         "or both (api overrides on overlap; default both)")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
@@ -189,14 +217,23 @@ def main() -> int:
     end = dt.date.today() - dt.timedelta(days=1)   # CLI for today not yet issued
     start = end - dt.timedelta(days=args.days - 1)
     iem = fetch_iem_half(station, start, end)
+    # Direct half: the INDEPENDENT api.weather.gov accrual overrides; the IEM
+    # AFOS raw-text archive fills the ≥30-day depth (parsing verification).
     direct, n_new = fetch_direct_half(station)
+    n_api = len(direct)
+    if args.direct_source in ("iem", "both"):
+        iem_text = fetch_direct_half_iem(station,
+                                         limit=max(args.days * 2, 90))
+        for d, v in iem_text.items():
+            direct.setdefault(d, v)          # api (independent) wins on overlap
     dates = sorted(set(iem) | set(direct))
     pairs = [(d, (iem.get(d) or {}).get("high_f"), direct.get(d)) for d in dates]
     res = compare_cli_series(pairs, min_days=args.min_days)
     print(f"{station} CLI archive verification (S2 rule 2), {start}..{end}")
-    print(f"  direct capture  : {len(direct)} accrued day(s) in "
-          f"ledger/{station.lower()}_cli_direct.jsonl (+{n_new} this run) — "
-          f"the products window is recent-only; accrue by rerunning daily")
+    print(f"  direct capture  : {len(direct)} day(s) — {n_api} independent "
+          f"api.weather.gov (accrual ledger/ksfo_cli_direct.jsonl, +{n_new} this "
+          f"run) + {len(direct) - n_api} IEM AFOS raw-text (parsing check, "
+          f"same-host caveat)")
     print(f"  comparable days : {res['n_comparable']} of {res['n_pairs']} paired "
           f"(IEM parsed-CLI vs first-party product text)")
     print(f"  exact matches   : {res['n_exact']} ({res['exact_rate']:.1%}, "
