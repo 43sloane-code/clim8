@@ -271,24 +271,41 @@ def mc_layer(days: list[dict], sims: int, seed: int) -> dict:
 def driver_stats(days: list[dict]) -> dict:
     """The 10y catch distribution — the prereg kill-condition input (the driver
     dies if the catch is not positive and sign-stable across halves). Also the
-    BUCKET-cross rate: how often the CLI settle lands in a higher 2°F market
-    bucket than the obs-scale final max (the day-type the guard exists for)."""
+    BUCKET-cross rate (how often the CLI settle lands in a higher 2°F market
+    bucket than the obs-scale final max) and the REGIME breakdown the
+    driver-first prereg requires ("the regime it lives in"): the driver stats
+    per meteorological season."""
     catches = [d["catch_f"] for d in days]
     h1, h2 = _chrono_halves(days, "date")
     bucket = lambda f: 2 * math.floor(f / 2)
     cross = [d for d in days if bucket(d["cli_f"]) > bucket(d["obs_max_f"])]
     def _stats(xs):
+        if not xs:
+            return {"n": 0, "mean": None, "p_catch_gt_0": None,
+                    "p50": None, "p90": None, "max": None}
         return {"n": len(xs), "mean": round(statistics.mean(xs), 3),
                 "p_catch_gt_0": round(sum(1 for x in xs if x > 0.05) / len(xs), 4),
                 "p50": round(statistics.median(xs), 2),
                 "p90": round(sorted(xs)[int(0.9 * (len(xs) - 1))], 2),
                 "max": round(max(xs), 2)}
+    seasons = {"DJF": (12, 1, 2), "MAM": (3, 4, 5), "JJA": (6, 7, 8),
+               "SON": (9, 10, 11)}
+    by_season = {}
+    for name, months in seasons.items():
+        sel = [d for d in days if int(d["date"][5:7]) in months]
+        s = _stats([d["catch_f"] for d in sel])
+        s["bucket_cross_rate"] = round(
+            sum(1 for d in sel if bucket(d["cli_f"]) > bucket(d["obs_max_f"]))
+            / len(sel), 4) if sel else None
+        by_season[name] = s
     return {"all": _stats(catches),
             "h1": _stats([d["catch_f"] for d in h1]),
             "h2": _stats([d["catch_f"] for d in h2]),
             "bucket_cross_rate": round(len(cross) / len(days), 4),
+            "by_season": by_season,
             "note": "CLI − hourly-obs daily max (°F); >=0 by mechanism (6-hourly "
-                    "groups). Sign-stable positive across halves = driver alive."}
+                    "groups). Sign-stable positive across halves AND seasons = "
+                    "driver alive in every regime."}
 
 
 def main() -> int:
