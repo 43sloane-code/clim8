@@ -1,0 +1,112 @@
+{
+  "probe": "sf_cli_scale_intraday_pmf",
+  "prereg": "ledger/preregistered/sf_cli_scale_intraday_pmf.md",
+  "frozen": "2026-07-27, BEFORE scoring \u2014 ONE registered attempt",
+  "generated": "2026-07-28T10:56:26",
+  "station": "KSFO",
+  "spec": {
+    "served_hours": [
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+    ],
+    "min_history_days": 30,
+    "seam_estimator": "expanding-window mean of (cli_f - obs_max_f) over strictly-earlier days",
+    "quantize": "round-half-up whole \u00b0F (mirrors intraday_ceiling sharpen_pmf)",
+    "bucket": "2\u00b0F inclusive, v -> 2*floor(v/2)",
+    "log_floor": 1e-06,
+    "argmax_tie_break": "lowest bucket (deterministic)"
+  },
+  "dataset": {
+    "n_days": 3613,
+    "span": [
+      "2016-07-08",
+      "2026-07-05"
+    ],
+    "n_quarantined_truth": 16,
+    "quarantined_dates": [
+      "2017-09-01",
+      "2018-02-11",
+      "2018-07-06",
+      "2018-10-13",
+      "2018-10-21",
+      "2019-01-10",
+      "2019-11-18",
+      "2020-03-23",
+      "2020-05-04",
+      "2020-06-03",
+      "2021-04-02",
+      "2021-09-23",
+      "2022-10-19",
+      "2024-01-01",
+      "2024-05-06",
+      "2026-02-08"
+    ],
+    "n_skipped_early_days": 30,
+    "n_cells": 25081
+  },
+  "pooled": {
+    "arm_A": {
+      "n": 25081,
+      "bucket_hit_rate": 0.371437,
+      "mean_log_score": -1.742984
+    },
+    "arm_B": {
+      "n": 25081,
+      "bucket_hit_rate": 0.449145,
+      "mean_log_score": -2.251016
+    },
+    "delta_hit_B_minus_A": 0.077708,
+    "delta_log_B_minus_A": -0.508032
+  },
+  "half1": {
+    "arm_A": {
+      "n": 12537,
+      "bucket_hit_rate": 0.362846,
+      "mean_log_score": -1.790441
+    },
+    "arm_B": {
+      "n": 12537,
+      "bucket_hit_rate": 0.439499,
+      "mean_log_score": -2.295157
+    },
+    "delta_hit_B_minus_A": 0.076653,
+    "delta_log_B_minus_A": -0.504716
+  },
+  "half2": {
+    "arm_A": {
+      "n": 12544,
+      "bucket_hit_rate": 0.380022,
+      "mean_log_score": -1.695554
+    },
+    "arm_B": {
+      "n": 12544,
+      "bucket_hit_rate": 0.458785,
+      "mean_log_score": -2.206899
+    },
+    "delta_hit_B_minus_A": 0.078763,
+    "delta_log_B_minus_A": -0.511345
+  },
+  "half_split": "chronological by day at the median scored date",
+  "gate": {
+    "C1_bucket_hit_both_halves": true,
+    "C2_log_score_both_halves": false,
+    "C3_shift_never_touches_floor_design_check": true,
+    "C4_driver_alive_sign_stable": true,
+    "failed": [
+      "C2"
+    ],
+    "verdict": "DEAD"
+  },
+  "driver": {
+    "catch_mean_all": 0.858,
+    "catch_mean_h1": 0.896,
+    "catch_mean_h2": 0.82,
+    "p_catch_gt_0_all": 0.649,
+    "bucket_cross_rate": 0.5929
+  }
+}

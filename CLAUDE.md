@@ -159,12 +159,16 @@ are output.
    work, not an accuracy lever.
 
 ## OPEN CLOCKS (waiting is the work; do not peek-and-claim)
-- SF CLI archive verification: tools/verify_cli_archive.py accrues
-  ledger/ksfo_cli_direct.jsonl (rerun daily); ADOPT bar at ≥30 comparable days.
-  The 16 quarantined truth-artifact days (|catch|>5°F, mc_verdict_sim) resolve here.
-- SF CLI-scale intraday pmf probe: FROZEN (ledger/preregistered/sf_cli_scale_intraday_pmf.md,
-  one attempt, driver-first; driver measured ALIVE 2026-07-27: +0.858°F mean, sign-stable
-  across halves and all four seasons). Score ONLY after the S2 archive verifies ADOPT.
+- SF CLI archive verification: tools/verify_cli_archive.py — **ADOPT 2026-07-28**
+  (44/44 exact: 41 IEM AFOS raw-text parsing check + 3 independent api.weather.gov,
+  same-host caveat logged). The 16 quarantined truth-artifact days (|catch|>5°F)
+  stay quarantined — the api accrual (ledger/ksfo_cli_direct.jsonl, rerun daily)
+  is the independent line that can pardon them.
+- SF CLI-scale intraday pmf probe: **SCORED 2026-07-28 — DEAD (D29)**: C1 hit
+  passed both halves, C2 log score failed both halves (the full shift over-sharpens
+  off the obs-scale bucket that still settles ~35% of days). One attempt spent;
+  the labeling guard is the standing mitigation. A partial-shift/mixture variant
+  would be a NEW candidate needing its own prereg — do not relitigate the full shift.
 - p2b 12:00 forward ledger: gate at n≥60 settled non-fallback (ledger/p2b_1200.jsonl).
 - TWC 9th-member: gate at n≥40 settled pairs (never asserted into the blend before).
 - Lock certification bins: n≥20 per hour (Singapore); uninstrumented hours need the two

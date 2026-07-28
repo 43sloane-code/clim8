@@ -1,9 +1,12 @@
 # Weather-Verdict — Accuracy Program State
 
 _Compacted session state. Last updated 2026-07-27. Standing mandate: constantly
-improve day-ahead → intraday bucket-prediction accuracy for the two tracked
-cities to match Polymarket settlement. Ship only gate-respecting changes;
-abstain/close when no robust edge._
+improve day-ahead → intraday bucket-prediction accuracy for the tracked cities to
+match KALSHI settlement (NWS CLI / city-native oracle — the primary contract);
+Polymarket's WU record is a SECONDARY cross-reference only (kalshi_sf_seam.md,
+operator directive 2026-07-25: "Kalshi truth = the FINAL NWS CLI, never WU" — the
+§1/§2 Polymarket-era directive below is preserved as history, superseded for SF).
+Ship only gate-respecting changes; abstain/close when no robust edge._
 
 ---
 
@@ -38,10 +41,14 @@ hourly T-groups topped at 69.1). Three failure classes, three fixes (all on
   a HIGHER 2°F bucket than the obs max's bucket on **59.3%** of days. Guard in the decision
   window (h14-16): recall 68.5%, precision 74.0% vs 51.6% base, sign-stable both halves;
   20k-sim MC through the shipped code path corroborates (0.62).
-- **Gate-bound**: the served seam-SHIFT of the intraday pmf is frozen under
+- **Gate-bound**: the served seam-SHIFT of the intraday pmf was frozen under
   `ledger/preregistered/sf_cli_scale_intraday_pmf.md` (ONE probe, driver-first, kill on the
-  driver; addendum: the probe must also emit the CLI-scale catch-rate series that replaces
-  pattern_rate's obs-scale truth). NOT scored yet — the MC run validated the labeling only.
+  driver) — **SCORED 2026-07-28, DEAD (D29)**: C1 bucket-hit passed both halves
+  (+7.7pt) but C2 log score failed both halves (−0.51; the full shift over-sharpens
+  off the obs-scale bucket that still settles ~35% of days). Driver ALIVE (+0.858°F,
+  all seasons) — the candidate is dead, the mechanism is real; a partial-shift/mixture
+  variant would need its own prereg. The labeling guard is the standing mitigation.
+  S2 archive verification ADOPT (44/44 exact, tools/verify_cli_archive.py IEM-AFOS mode).
 - **SF full-stack verdict ritual** (the remembered procedure): `run.py "San Francisco"
   --lead 0 --intraday` → quote the BUCKET CALL block verbatim + the CLI-scale guard; at
   bucket boundaries cross-check `tools/finegrain_read.py --pattern-hour H` (obs-climb floor,

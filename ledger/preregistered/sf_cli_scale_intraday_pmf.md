@@ -78,3 +78,19 @@ label). 07-27: it served 0% from 17:00 against the 70-71 bucket the CLI then
 paid via `10211`. The probe replaces the obs-scale archive truth with the
 catch-inclusive CLI-scale truth behind the SAME leak-free conditioning; the
 relabel stays until that series lands and clears the same sign-stability bar.
+
+## OUTCOME — SCORED 2026-07-28, **FAILED THE GATE (DEAD, D29)**
+
+S2 precondition ADOPT (44/44 exact, IEM parsed-CLI vs raw CLISFO text). Probe:
+tools/probe_sf_cli_scale.py, 25,081 leak-free day×hour cells (2016-07-08..
+2026-07-05, 16 truth-artifact days quarantined), report
+reports/probe_sf_cli_scale_2026-07-27.json.
+- C1 bucket-hit: PASS both halves (+0.0767 / +0.0788).
+- C2 log score: **FAIL both halves (−0.5047 / −0.5113)** — the full shift moves
+  mass OFF the obs-scale bucket that still settles ~35% of days; the proper
+  score punishes the misses harder than the hits pay.
+- C3 floor semantics PASS; C4 driver ALIVE (+0.858°F, halves +0.896/+0.820).
+One attempt spent → dead ledger D29. A partial-shift/mixture variant is a NEW
+candidate needing its own prereg. The 2026-07-27 labeling guard remains the
+standing mitigation. The CLI-scale catch-rate series for pattern_rate (addendum
+above) survives as a measurement deliverable of the MC tool, not a served number.
