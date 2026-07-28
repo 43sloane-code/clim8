@@ -65,3 +65,16 @@ Ship only with a KAT (shift applied at serve time, frozen artifact rules
 respected) and this file stamped CERTIFIED with the probe numbers. If the gate
 fails: dead-ledger entry citing this file, and the labeling guard shipped
 2026-07-27 remains the standing mitigation.
+
+## ADDENDUM (2026-07-27, still PRE-SCORING — no probe number has been computed)
+
+Scope extension, same driver, same gate: the probe's CLI-scale truth assembly
+(10y IEM parsed-CLI vs the hourly-obs archive) must ALSO emit the CLI-scale
+catch-rate series for tools/finegrain_read.py `pattern_rate`. That instrument's
+archive is hourly-obs rows only, so its "catch rate" is the obs-climb rate —
+a floor for the paying CLI-catch rate, mislabeled until the 2026-07-27 honesty
+relabel (tests/test_finegrain_read.py TestPatternLabeling pins the honest
+label). 07-27: it served 0% from 17:00 against the 70-71 bucket the CLI then
+paid via `10211`. The probe replaces the obs-scale archive truth with the
+catch-inclusive CLI-scale truth behind the SAME leak-free conditioning; the
+relabel stays until that series lands and clears the same sign-stability bar.

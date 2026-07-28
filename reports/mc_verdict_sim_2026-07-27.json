@@ -1,0 +1,219 @@
+{
+  "generated": "2026-07-28T02:17:26",
+  "station": "KSFO",
+  "n_days": 3613,
+  "n_quarantined_truth": 16,
+  "quarantined_days": [
+    {
+      "date": "2017-09-01",
+      "obs_max_f": 98.0,
+      "cli_f": 104.0,
+      "catch_f": 5.99
+    },
+    {
+      "date": "2018-02-11",
+      "obs_max_f": 56.0,
+      "cli_f": 63.0,
+      "catch_f": 7.01
+    },
+    {
+      "date": "2018-07-06",
+      "obs_max_f": 84.0,
+      "cli_f": 95.0,
+      "catch_f": 11.0
+    },
+    {
+      "date": "2018-10-13",
+      "obs_max_f": 67.0,
+      "cli_f": 78.0,
+      "catch_f": 11.01
+    },
+    {
+      "date": "2018-10-21",
+      "obs_max_f": 61.0,
+      "cli_f": 68.0,
+      "catch_f": 7.0
+    },
+    {
+      "date": "2019-01-10",
+      "obs_max_f": 66.0,
+      "cli_f": 61.0,
+      "catch_f": -5.0
+    },
+    {
+      "date": "2019-11-18",
+      "obs_max_f": 66.0,
+      "cli_f": 73.0,
+      "catch_f": 7.0
+    },
+    {
+      "date": "2020-03-23",
+      "obs_max_f": 54.0,
+      "cli_f": 60.0,
+      "catch_f": 6.0
+    },
+    {
+      "date": "2020-05-04",
+      "obs_max_f": 67.0,
+      "cli_f": 73.0,
+      "catch_f": 6.01
+    },
+    {
+      "date": "2020-06-03",
+      "obs_max_f": 83.0,
+      "cli_f": 89.0,
+      "catch_f": 6.01
+    },
+    {
+      "date": "2021-04-02",
+      "obs_max_f": 62.0,
+      "cli_f": 70.0,
+      "catch_f": 7.99
+    },
+    {
+      "date": "2021-09-23",
+      "obs_max_f": 76.0,
+      "cli_f": 82.0,
+      "catch_f": 6.01
+    },
+    {
+      "date": "2022-10-19",
+      "obs_max_f": 80.0,
+      "cli_f": 86.0,
+      "catch_f": 5.99
+    },
+    {
+      "date": "2024-01-01",
+      "obs_max_f": 68.0,
+      "cli_f": 60.0,
+      "catch_f": -8.0
+    },
+    {
+      "date": "2024-05-06",
+      "obs_max_f": 63.0,
+      "cli_f": 68.0,
+      "catch_f": 5.0
+    },
+    {
+      "date": "2026-02-08",
+      "obs_max_f": 59.0,
+      "cli_f": 65.0,
+      "catch_f": 6.0
+    }
+  ],
+  "span": [
+    "2016-07-08",
+    "2026-07-05"
+  ],
+  "caveats": [
+    "backtest anchor is IEM-obs-scale (10y catch mean ~0.88\u00b0F); the PRODUCTION anchor is WU-scale (CLI\u2212WU seam 1.27\u00b0F) \u2014 the backtest validates predicate mechanics, the MC layer validates the shipped path with the shipped seam",
+    "obs archive right edge: the 10y hourly file ends 2026-07-05 (backfill is the launchd spine's duty) \u2014 recent days excluded",
+    "the frozen seam-shift probe (sf_cli_scale_intraday_pmf.md) is NOT scored here \u2014 this validates the labeling guard only",
+    "|catch| > 5\u00b0F days are quarantined as truth-source artifacts (physically implausible as between-obs spikes; resolution path = tools/verify_cli_archive.py direct-product check)"
+  ],
+  "driver": {
+    "all": {
+      "n": 3613,
+      "mean": 0.858,
+      "p_catch_gt_0": 0.649,
+      "p50": 1.0,
+      "p90": 2.0,
+      "max": 5.0
+    },
+    "h1": {
+      "n": 1806,
+      "mean": 0.896,
+      "p_catch_gt_0": 0.6517,
+      "p50": 1.0,
+      "p90": 2.0,
+      "max": 5.0
+    },
+    "h2": {
+      "n": 1807,
+      "mean": 0.82,
+      "p_catch_gt_0": 0.6464,
+      "p50": 1.0,
+      "p90": 2.0,
+      "max": 5.0
+    },
+    "bucket_cross_rate": 0.5929,
+    "note": "CLI \u2212 hourly-obs daily max (\u00b0F); >=0 by mechanism (6-hourly groups). Sign-stable positive across halves = driver alive."
+  },
+  "backtest": {
+    "overall": {
+      "n": 25291,
+      "warn_rate": 0.4741,
+      "above_pay_rate": 0.4881,
+      "recall": 0.6118,
+      "precision": 0.6299,
+      "n_above_pays": 12344,
+      "n_warned": 11990,
+      "n_caught": 7552
+    },
+    "parity_baseline": {
+      "n": 25291,
+      "warn_rate": 0.4966,
+      "above_pay_rate": 0.4881,
+      "recall": 0.6364,
+      "precision": 0.6255,
+      "n_above_pays": 12344,
+      "n_warned": 12559,
+      "n_caught": 7856
+    },
+    "halves": [
+      {
+        "n": 12642,
+        "warn_rate": 0.4848,
+        "above_pay_rate": 0.5048,
+        "recall": 0.6098,
+        "precision": 0.635,
+        "n_above_pays": 6382,
+        "n_warned": 6129,
+        "n_caught": 3892
+      },
+      {
+        "n": 12649,
+        "warn_rate": 0.4634,
+        "above_pay_rate": 0.4713,
+        "recall": 0.6139,
+        "precision": 0.6245,
+        "n_above_pays": 5962,
+        "n_warned": 5861,
+        "n_caught": 3660
+      }
+    ],
+    "by_band": {
+      "h10_13": {
+        "n": 14452,
+        "warn_rate": 0.4711,
+        "above_pay_rate": 0.4671,
+        "recall": 0.5509,
+        "precision": 0.5463,
+        "n_above_pays": 6751,
+        "n_warned": 6808,
+        "n_caught": 3719
+      },
+      "h14_16": {
+        "n": 10839,
+        "warn_rate": 0.4781,
+        "above_pay_rate": 0.516,
+        "recall": 0.6853,
+        "precision": 0.7397,
+        "n_above_pays": 5593,
+        "n_warned": 5182,
+        "n_caught": 3833
+      }
+    },
+    "n_cells": 25291
+  },
+  "monte_carlo": {
+    "sims": 20000,
+    "seed": 20260727,
+    "seam_f_used": 1.27,
+    "warn_rate": 0.4968,
+    "above_pay_rate": 0.4634,
+    "recall": 0.6191,
+    "precision": 0.5776,
+    "path": "run._cli_seam_guard_lines (shipped)"
+  }
+}
