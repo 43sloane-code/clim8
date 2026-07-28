@@ -19,7 +19,10 @@ stack verdict / intraday validation also quotes the HISTORICAL pattern: over the
 10y archive, of days whose running max at hour H matched today's, what fraction
 ended >= the next whole-°F threshold? (The n=182 43% query that outranked the n=4
 offset series and flipped the 07-16 favorite correctly.) Leak-free by construction
-(archive days all strictly earlier).
+(archive days all strictly earlier). SCALE HONESTY (2026-07-27 audit): the archive
+is hourly-obs rows only, so the pattern rate is the OBS-CLIMB rate — a FLOOR for
+the CLI-catch rate the market pays on, never the thing itself (07-27: obs-climb
+0% from 17:00, CLI paid +1 bucket via `10211`). Read the caveat line it prints.
 
 Run:      PYTHONPATH=. python3 tools/finegrain_read.py --station KSFO \
               --date 2026-07-16 --tz America/Los_Angeles [--pattern-hour 14]
@@ -85,9 +88,18 @@ def finegrain_day_max(raw_rows: list[tuple[str, str]], date_iso: str):
 def pattern_rate(station: str, hour: float, runmax_f: float,
                  band_f: float = 0.4, threshold_extra_f: float = 0.4):
     """Historical pattern: of archive days whose running max by `hour` sat within
-    ±band_f of `runmax_f`, what fraction reached >= runmax_f + threshold_extra_f
-    (the next-whole-°F / CLI-catch path)? Returns (n_match, n_catch) — leak-free
-    (every archive day predates today by construction)."""
+    ±band_f of `runmax_f`, what fraction climbed >= runmax_f + threshold_extra_f
+    ON THE HOURLY-OBS RECORD? Returns (n_match, n_catch) — leak-free (every
+    archive day predates today by construction).
+
+    OBS-SCALE ONLY (2026-07-27 audit): the archive is hourly (hour, °C) rows —
+    no raw METARs, no 6-hourly groups — so this measures the OBS-CLIMB rate,
+    NOT the CLI-catch rate a Kalshi/CLI-settled market pays on. The CLI prints
+    at/above the hourly-obs max via the 6-hourly groups, so the paying catch
+    rate is >= this number (07-27: obs-climb 0% from 17:00, yet the CLI paid
+    +1 bucket via `10211`=21.1°C=69.98°F→70 — the day this mislabel served
+    "0%" against the bucket that won). The CLI-scale replacement series is
+    registered under ledger/preregistered/sf_cli_scale_intraday_pmf.md."""
     path = ARCHIVES.get(station.upper())
     if path is None or not path.exists():
         return None
@@ -98,7 +110,7 @@ def pattern_rate(station: str, hour: float, runmax_f: float,
                 r = json.loads(line)
             except ValueError:
                 continue
-            obs = r.get("obs") or []
+            obs = _screen_obs(r.get("obs") or [])
             if len(obs) < 20:
                 continue
             by_h = [c for h, c in obs if h <= hour]
@@ -110,6 +122,55 @@ def pattern_rate(station: str, hour: float, runmax_f: float,
                 if max(c for _, c in obs) * 9 / 5 + 32 >= runmax_f + threshold_extra_f:
                     n_catch += 1
     return n_match, n_catch
+
+
+def _cli_seam_note(station: str) -> str:
+    """The measured CLI-vs-obs/WU seam for the station's ledger series, or an
+    honest 'not yet logged' (same ledger run._load_cli_seam reads — one source
+    of truth for the number, so the tool and the verdict cannot drift). Rows are
+    screened with the same ±8°F out-of-band rule as run._clean_divergences."""
+    path = ROOT / "ledger" / f"{station.lower()}_cli_wu.jsonl"
+    try:
+        divs = [json.loads(l)["divergence"] for l in
+                path.read_text().splitlines() if l.strip()]
+        divs = [x for x in divs if isinstance(x, (int, float))
+                and not isinstance(x, bool) and abs(x) <= 8.0][-30:]
+        if divs:
+            import statistics
+            return (f"seam CLI − obs/WU {statistics.mean(divs):+.2f}F mean "
+                    f"(n={len(divs)})")
+    except Exception:
+        pass
+    return "seam not yet logged"
+
+
+def _screen_obs(obs: list, lo_c: float = -30.0, hi_c: float = 55.0) -> list:
+    """Drop malformed / out-of-band (hour, °C) archive rows before any statistic
+    touches them (same hygiene class as the verdict's QC screen: KSFO cannot
+    physically approach either bound; a row past it is a parse artifact)."""
+    return [(h, c) for h, c in obs
+            if isinstance(c, (int, float)) and not isinstance(c, bool)
+            and lo_c <= c <= hi_c]
+
+
+def _pattern_lines(station: str, hour: float, runmax_f: float,
+                   pr: tuple[int, int]) -> list[str]:
+    """The pattern read-out, honestly labeled (2026-07-27 audit): the archive is
+    hourly-obs only, so the rate is the OBS-CLIMB rate — a floor for the paying
+    CLI-catch rate, never the thing itself. LABELING ONLY: the numbers
+    (n_match, n_catch) are unchanged; the words now say what they measure."""
+    n, k = pr
+    return [
+        f"pattern: {n} archive days had running max ~{runmax_f:.0f}F "
+        f"by {hour:.0f}:00; {k} ({k / max(1, n) * 100:.0f}%) climbed "
+        f">= {runmax_f + 0.4:.1f}F ON THE HOURLY-OBS RECORD (obs-climb rate — "
+        f"NOT the CLI settle)",
+        f"pattern-scale caveat: the CLI prints at/above the obs max via the "
+        f"6-hourly groups ({_cli_seam_note(station)}), so the PAYING CLI-catch "
+        f"rate is >= this — 07-27: obs-climb 0% from 17:00, CLI paid +1 bucket "
+        f"via 10211=21.1C=69.98F->70. CLI-scale series pending "
+        f"sf_cli_scale_intraday_pmf.md.",
+    ]
 
 
 def fetch_day_metars(station: str, date_iso: str, tz: str) -> list[tuple[str, str]]:
@@ -155,10 +216,9 @@ def main() -> int:
     if args.pattern_hour is not None:
         pr = pattern_rate(args.station, args.pattern_hour, res["max_f"])
         if pr:
-            n, k = pr
-            print(f"pattern: {n} archive days had running max ~{res['max_f']:.0f}F "
-                  f"by {args.pattern_hour:.0f}:00; {k} ({k/max(1,n)*100:.0f}%) reached "
-                  f">= {res['max_f']+0.4:.1f}F (the CLI-catch path)")
+            for line in _pattern_lines(args.station, args.pattern_hour,
+                                       res["max_f"], pr):
+                print(line)
     return 0
 
 

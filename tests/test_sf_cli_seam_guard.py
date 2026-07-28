@@ -8,22 +8,25 @@ but never applied at the bucket-interpretation point, and a whole-°C 5-minute
 plateau at the boundary was misread as evidence FOR the lower bucket.
 
 The guard is LABELING ONLY (sf_verdict_blockers #3 precedent): it must never
-change a pmf/modal number — it appends the seam context and, when the modal is
-the TOP of its 2°F market bucket before the 18-00Z group can have printed, the
-UNRESOLVED-at-obs-scale warning. These KATs pin the firing and non-firing cases
-so the guard cannot silently rot; `make check` runs them.
+change a pmf/modal number — it appends the seam context and, when the day's max
+anchor sits within the measured seam of its 2°F market-bucket top boundary before
+the 18-00Z group can have printed, the UNRESOLVED-at-obs-scale warning
+(distance-based predicate; day-type replays live in test_verdict_stress.py).
+These KATs pin the firing and non-firing cases so the guard cannot silently rot;
+`make check` runs them.
 """
 import unittest
 
 from weather_council.intraday_ceiling import IntradayCeiling
-from run import _ceiling_lines, _cli_seam_guard_lines, _load_cli_seam
+from run import _ceiling_lines, _cli_seam_guard_lines, _load_cli_seam, \
+    _clean_divergences
 
 
 def _ceiling(modal=69, prob=0.78, hour=12, city="San Francisco, United States",
-             grain="F"):
+             grain="F", rm_c=20.6):
     return IntradayCeiling(
         kind="sharpened", city=city, target="2026-07-27", sub_degree=False,
-        grain=grain, hour=hour, running_max_c=20.6, n_rise=160,
+        grain=grain, hour=hour, running_max_c=rm_c, n_rise=160,
         pmf=((modal, prob), (modal + 1, 0.08), (modal + 2, 0.06), (modal + 4, 0.02)),
         modal_bucket=modal, modal_prob=prob, source="test")
 
@@ -50,8 +53,9 @@ class TestGuardFires(unittest.TestCase):
 
 class TestGuardDoesNotFire(unittest.TestCase):
     def test_even_modal_is_safe(self):
-        # 68 is the BOTTOM of 68-69: a +1°F CLI-catch stays inside the bucket.
-        lines = _cli_seam_guard_lines(_ceiling(modal=68))
+        # 68 with a matching running max (19.4°C = 66.9°F): the anchor sits 1.5°F
+        # below the 69.5 boundary — OUTSIDE the +1.27 seam, so no warning.
+        lines = _cli_seam_guard_lines(_ceiling(modal=68, rm_c=19.4))
         self.assertTrue(any("CLI-scale guard" in l for l in lines))   # context stays
         self.assertFalse(any("⚠" in l for l in lines))                # warning does not
 
@@ -95,6 +99,11 @@ class TestSeamLoader(unittest.TestCase):
 
     def test_unknown_station_degrades_to_none(self):
         self.assertIsNone(_load_cli_seam("XXXX"))
+
+    def test_clean_divergences_screens_out_of_band(self):
+        kept, rejected = _clean_divergences([1.3, 22.0, True, "x", -9.0, 0.8, 8.0])
+        self.assertEqual(kept, [1.3, 0.8, 8.0])   # 22/-9 out-of-band, bool/str dropped
+        self.assertEqual(rejected, 4)
 
 
 if __name__ == "__main__":

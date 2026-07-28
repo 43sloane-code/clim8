@@ -101,21 +101,41 @@ SETTLEMENT_REFERENCE: dict[str, dict[str, str]] = {
     },
 }
 
+def _clean_divergences(divs, bound_f: float = 8.0) -> tuple[list, int]:
+    """Screen raw CLI−WU divergences (°F): keep finite non-bool numbers inside
+    ±bound_f; reject the rest as parse/correction artifacts (a PRELIMINARY-vs-
+    FINAL CLI swap or a mangled row can sit many °F off — the logged seam lives
+    within a few °F; kalshi_sf_seam.md rule 1 anticipates correction rows).
+    Returns (kept, n_rejected) in original order."""
+    kept, rejected = [], 0
+    for x in divs:
+        if (isinstance(x, (int, float)) and not isinstance(x, bool)
+                and abs(x) <= bound_f):
+            kept.append(x)
+        else:
+            rejected += 1
+    return kept, rejected
+
+
 def _load_cli_seam(icao: str) -> dict | None:
     """The logged CLI-vs-WU seam series for a CLI-primary station (kalshi_logger
-    duty; ledger/<icao>_cli_wu.jsonl) — {"mean", "n"} over the last ≤30 logged
-    divergences, or None when no usable series exists. The measured, systematic
-    divergence that an obs/WU-scale read hides."""
+    duty; ledger/<icao>_cli_wu.jsonl) — {"mean", "n"} over the last ≤30 CLEANED
+    divergences ("rejected" added when the screen dropped rows), or None when no
+    usable series exists. The measured, systematic divergence that an obs/WU-scale
+    read hides."""
     seam_path = (Path(__file__).resolve().parent / "ledger"
                  / f"{icao.lower()}_cli_wu.jsonl")
     try:
-        divs = [json.loads(l)["divergence"] for l in
-                seam_path.read_text().splitlines() if l.strip()]
-        divs = [x for x in divs if isinstance(x, (int, float))
-                and not isinstance(x, bool)][-30:]
+        raw = [json.loads(l).get("divergence") for l in
+               seam_path.read_text().splitlines() if l.strip()]
+        divs, rejected = _clean_divergences(raw)
+        divs = divs[-30:]
         if divs:
             import statistics as _st
-            return {"mean": round(_st.mean(divs), 2), "n": len(divs)}
+            out = {"mean": round(_st.mean(divs), 2), "n": len(divs)}
+            if rejected:
+                out["rejected"] = rejected
+            return out
     except Exception:
         pass
     return None
@@ -2158,6 +2178,14 @@ def _intraday_to_dict(f, v: Verdict) -> dict:
     }
 
 
+def _market_bucket_top_boundary(anchor_f: float) -> float:
+    """Top edge (°F) of the 2°F Kalshi bucket containing anchor_f — buckets are
+    [even, even+1] inclusive (kalshi_sf_seam.md: 68–69, 70–71, …), so the rounding
+    boundary that pays the bucket ABOVE sits at odd + 0.5."""
+    import math
+    return 2 * math.floor(anchor_f / 2) + 1.5
+
+
 def _cli_seam_guard_lines(c) -> list[str]:
     """CLI-scale guard appended to the intraday-ceiling block on CLI-primary
     (Kalshi) stations — LABELING ONLY: no served number, pmf, or modal moves
@@ -2170,12 +2198,15 @@ def _cli_seam_guard_lines(c) -> list[str]:
     Two annotations for sharpened whole-°F reads on _CLI_PRIMARY_SETTLEMENT cities:
       1. seam context — the obs-scale pmf sits structurally cold vs the CLI settle,
          which prints AT OR ABOVE the hourly-obs max via the 6-hourly groups;
-      2. boundary guard — when the modal bucket is the TOP of its 2°F market bucket
-         (odd °F, e.g. 69 in 68-69) and the 18-00Z group cannot have printed yet
-         (hour < 17 local), the CLI-catch can pay the market bucket ABOVE: the read
-         is UNRESOLVED at obs scale; name both market buckets, serve neither alone.
-    (An EVEN modal is the bottom of its market bucket — a +1°F catch stays inside
-    it, so the asymmetry of CLI ≥ obs makes only the top-of-bucket case dangerous.)
+      2. boundary guard — DISTANCE-BASED (2026-07-27 stress-test revision): anchor
+         = max(running max, modal) in °F; if the anchor sits within the measured
+         seam (fallback 2.0°F — the 07-12 CLI 76 vs WU 74 +2 catch) of the TOP
+         boundary of its 2°F market bucket and the 18-00Z group cannot have
+         printed yet (hour < 17 local), the CLI-catch can pay the market bucket
+         ABOVE: the read is UNRESOLVED at obs scale; name both market buckets,
+         serve neither alone. (The earlier odd-modal parity test was only a proxy
+         for this — an EVEN modal high in its bucket is equally exposed on +2
+         catch days.)
     """
     if c.kind != "sharpened" or getattr(c, "grain", "C") != "F":
         return []
@@ -2196,12 +2227,24 @@ def _cli_seam_guard_lines(c) -> list[str]:
         L.append("      seam not yet logged — the CLI still prints at or above the "
                  "hourly-obs max via the 6-hourly groups (07-15: obs 73→CLI 74; "
                  "07-27: obs 69.1→CLI 70).")
-    if c.modal_bucket is not None and c.modal_bucket % 2 == 1 and (c.hour or 0) < 17:
-        L.append(f"      ⚠ modal {c.modal_bucket}°F is the TOP of its 2°F market bucket "
-                 f"({c.modal_bucket - 1}–{c.modal_bucket}) and the 18-00Z 6-hourly group "
-                 f"prints only ~17:00 local — the CLI-catch can pay the bucket ABOVE "
-                 f"({c.modal_bucket + 1}–{c.modal_bucket + 2}). UNRESOLVED at obs scale "
-                 f"until then: name both market buckets, serve neither alone.")
+    if c.modal_bucket is None or (c.hour or 0) >= 17:
+        return L
+    anchor_f = max(c.running_max_c * 9 / 5 + 32
+                   if c.running_max_c is not None else c.modal_bucket,
+                   c.modal_bucket)
+    catch_f = abs(seam["mean"]) if seam is not None else 2.0
+    boundary = _market_bucket_top_boundary(anchor_f)
+    dist = boundary - anchor_f
+    if dist < catch_f:
+        above = int(boundary + 0.5)
+        own = int(boundary - 1.5)
+        src = "measured seam" if seam is not None else "unmeasured catch bound"
+        L.append(f"      ⚠ the day's max anchor {anchor_f:.1f}°F sits {dist:.1f}°F below "
+                 f"the {boundary:.1f}°F boundary — INSIDE the {src} ({catch_f:.2f}°F): "
+                 f"the CLI-catch can pay the bucket ABOVE ({above}–{above + 1} vs "
+                 f"{own}–{own + 1}) and the 18-00Z 6-hourly group prints only ~17:00 "
+                 f"local. UNRESOLVED at obs scale until then: name both market "
+                 f"buckets, serve neither alone.")
     return L
 
 
