@@ -20,6 +20,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from weather_council.agents import WINDY_MEMBERS
@@ -41,7 +42,8 @@ from weather_council.security import RateLimitError, SecurityError
 from weather_council.sources import Sources, place_today, _round_half_up
 from weather_council.tc_gate import tc_halt
 from weather_council.intraday import intraday_floor
-from weather_council.intraday_ceiling import intraday_ceiling, banked_vs_leading
+from weather_council.intraday_ceiling import (intraday_ceiling, banked_vs_leading,
+                                              _city_key, _HOURLY_STATION)
 from weather_council.intraday_grade import (intraday_grade, grade_lines,
                                             sunset_local_hour)
 from weather_council import intraday_tape
@@ -98,6 +100,26 @@ SETTLEMENT_REFERENCE: dict[str, dict[str, str]] = {
         "url": "https://www.wunderground.com/history/daily/sa/jeddah/OEJN",
     },
 }
+
+def _load_cli_seam(icao: str) -> dict | None:
+    """The logged CLI-vs-WU seam series for a CLI-primary station (kalshi_logger
+    duty; ledger/<icao>_cli_wu.jsonl) — {"mean", "n"} over the last ≤30 logged
+    divergences, or None when no usable series exists. The measured, systematic
+    divergence that an obs/WU-scale read hides."""
+    seam_path = (Path(__file__).resolve().parent / "ledger"
+                 / f"{icao.lower()}_cli_wu.jsonl")
+    try:
+        divs = [json.loads(l)["divergence"] for l in
+                seam_path.read_text().splitlines() if l.strip()]
+        divs = [x for x in divs if isinstance(x, (int, float))
+                and not isinstance(x, bool)][-30:]
+        if divs:
+            import statistics as _st
+            return {"mean": round(_st.mean(divs), 2), "n": len(divs)}
+    except Exception:
+        pass
+    return None
+
 
 # Stations whose market settles on the NWS CLI product, not WU (operator
 # directive 2026-07-25, executing the frozen kalshi_sf_seam.md rule "Kalshi
@@ -311,18 +333,9 @@ def _settlement_reference(sources: Sources, place, target, v: Verdict) -> dict |
             out["cli_error"] = str(exc)
         # The logged CLI-vs-WU seam series (kalshi_logger duty) — the measured,
         # systematic divergence that a WU-scale read hides.
-        seam_path = (Path(__file__).resolve().parent / "ledger"
-                     / f"{icao.lower()}_cli_wu.jsonl")
-        try:
-            divs = [json.loads(l)["divergence"] for l in
-                    seam_path.read_text().splitlines() if l.strip()]
-            divs = [x for x in divs if isinstance(x, (int, float))
-                    and not isinstance(x, bool)][-30:]
-            if divs:
-                import statistics as _st
-                out["cli_seam"] = {"mean": round(_st.mean(divs), 2), "n": len(divs)}
-        except Exception:
-            pass
+        seam = _load_cli_seam(icao)
+        if seam is not None:
+            out["cli_seam"] = seam
     return out
 
 
@@ -2145,6 +2158,53 @@ def _intraday_to_dict(f, v: Verdict) -> dict:
     }
 
 
+def _cli_seam_guard_lines(c) -> list[str]:
+    """CLI-scale guard appended to the intraday-ceiling block on CLI-primary
+    (Kalshi) stations — LABELING ONLY: no served number, pmf, or modal moves
+    (2026-07-27 KSFO specimen: the obs-scale modal 69°F was served at 78% while
+    the settling CLI printed 70 via the 18-00Z 6-hourly catch — the +1.27°F
+    CLI−WU seam was quoted in the SETTLEMENT RECORD block all afternoon but never
+    applied at the bucket-interpretation point, and a whole-°C 5-min plateau at
+    the boundary was misread as evidence FOR the lower bucket).
+
+    Two annotations for sharpened whole-°F reads on _CLI_PRIMARY_SETTLEMENT cities:
+      1. seam context — the obs-scale pmf sits structurally cold vs the CLI settle,
+         which prints AT OR ABOVE the hourly-obs max via the 6-hourly groups;
+      2. boundary guard — when the modal bucket is the TOP of its 2°F market bucket
+         (odd °F, e.g. 69 in 68-69) and the 18-00Z group cannot have printed yet
+         (hour < 17 local), the CLI-catch can pay the market bucket ABOVE: the read
+         is UNRESOLVED at obs scale; name both market buckets, serve neither alone.
+    (An EVEN modal is the bottom of its market bucket — a +1°F catch stays inside
+    it, so the asymmetry of CLI ≥ obs makes only the top-of-bucket case dangerous.)
+    """
+    if c.kind != "sharpened" or getattr(c, "grain", "C") != "F":
+        return []
+    key = _city_key(SimpleNamespace(name=c.city))
+    if key is None or key not in _HOURLY_STATION:
+        return []
+    icao = _HOURLY_STATION[key][0]
+    if icao not in _CLI_PRIMARY_SETTLEMENT:
+        return []
+    L = ["    CLI-scale guard (the contract pays the NWS CLI, not this obs-scale pmf):"]
+    seam = _load_cli_seam(icao)
+    if seam is not None:
+        L.append(f"      seam CLI − WU {seam['mean']:+.2f} °F mean (n={seam['n']}, "
+                 f"ledger/{icao.lower()}_cli_wu.jsonl) — the CLI prints AT OR ABOVE "
+                 f"the hourly-obs max via the 6-hourly groups (07-15: obs 73→CLI 74; "
+                 f"07-27: obs 69.1→CLI 70).")
+    else:
+        L.append("      seam not yet logged — the CLI still prints at or above the "
+                 "hourly-obs max via the 6-hourly groups (07-15: obs 73→CLI 74; "
+                 "07-27: obs 69.1→CLI 70).")
+    if c.modal_bucket is not None and c.modal_bucket % 2 == 1 and (c.hour or 0) < 17:
+        L.append(f"      ⚠ modal {c.modal_bucket}°F is the TOP of its 2°F market bucket "
+                 f"({c.modal_bucket - 1}–{c.modal_bucket}) and the 18-00Z 6-hourly group "
+                 f"prints only ~17:00 local — the CLI-catch can pay the bucket ABOVE "
+                 f"({c.modal_bucket + 1}–{c.modal_bucket + 2}). UNRESOLVED at obs scale "
+                 f"until then: name both market buckets, serve neither alone.")
+    return L
+
+
 def _ceiling_lines(c) -> list[str]:
     """Read-only block for the intraday-ceiling sharpening (lead-0 conviction)."""
     L = ["", "  INTRADAY-CEILING SHARPENING (read-only; today only — the conviction lever)"]
@@ -2182,6 +2242,7 @@ def _ceiling_lines(c) -> list[str]:
     else:
         L.append(f"    => still diffuse ({c.modal_bucket}°{u} at {pct:.0f}%) — too "
                  f"early; conviction rises through the afternoon as the peak nears")
+    L.extend(_cli_seam_guard_lines(c))
     return L
 
 
