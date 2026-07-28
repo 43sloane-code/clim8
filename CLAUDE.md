@@ -97,14 +97,16 @@ are output.
   — the +1.27°F seam was quoted in the settlement block all afternoon but never applied at
   the bucket-interpretation point. On CLI-primary stations the obs-scale pmf sits ~1.3°F
   cold vs the settle; when the day's max anchor (max of running max, modal) sits WITHIN
-  THE MEASURED SEAM of the top boundary of its 2°F market bucket before the 18-00Z group
-  prints (~17:00 local), the bucket ABOVE stays live — name both market buckets, serve
-  neither alone, and never aggregate single-°F pmf mass into 2°F Kalshi buckets without
-  the seam context. A whole-°C 5-min plateau at a boundary is UNRESOLVED (20.6 and 21.1
-  both print "21"), not evidence for the lower bucket. Guard: run.py _cli_seam_guard_lines
-  (distance-based; KATs test_sf_cli_seam_guard.py + test_verdict_stress.py); the served
-  seam-SHIFT of the pmf is gate-bound under ledger/preregistered/sf_cli_scale_intraday_pmf.md
-  (one probe; S2 archive verification: tools/verify_cli_archive.py).
+  THE MEASURED SEAM of the nearest strike line ABOVE it — read from the LIVE Kalshi
+  ladder (ledger/kalshi_snapshots.jsonl; tails included: a T71 tail puts the line at
+  70.5, off the static 2°F grid — the 07-28 fix; static grid is the no-book fallback) —
+  before the 18-00Z group prints (~17:00 local), the contract ABOVE stays live — name
+  both sides, serve neither alone, and never aggregate single-°F pmf mass into Kalshi
+  buckets without the seam context. A whole-°C 5-min plateau at a boundary is UNRESOLVED
+  (20.6 and 21.1 both print "21"), not evidence for the lower bucket. Guard:
+  run.py _cli_seam_guard_lines (book-aware; KATs test_sf_cli_seam_guard.py +
+  test_verdict_stress.py); the served seam-SHIFT of the pmf is DEAD (D29 — do not
+  relitigate the full shift); seam series loader: weather_council/cli_seam.py (shared).
 - While HOLDING: serve "INTRADAY FLOOR — PROVISIONAL (peak NOT formed)". NEVER headline a
   90%+ lock on a holding day (user caught this twice). Quote the STATE-conditional rate.
 - Served raise-risk is (state × meteorological season × hour), n≥30 cell, state-only fallback
