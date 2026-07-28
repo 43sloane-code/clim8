@@ -432,6 +432,66 @@ book in every read; none of the three is served alone. (D18 boundary: the patter
 layer INFORMS the read, it never moves a served number — SF regime-lean as a lever
 is dead, D18.)
 
+## 14h. THE CLI-CATCH DAY (2026-07-27) — seam guard, pattern honesty, cleaning, regime-measured driver
+
+**The specimen.** KXHIGHTSFO-26JUL27, the mirror image of 07-16 — this time the
+catch FIRED against the served read. Obs-scale modal 69°F served at 78→98% from
+14:00 on (hourly T-groups topped 20.6°C=69.1); a two-hour whole-°C "21" plateau on
+the NWS 5-min feed was read as 69°F-territory evidence; the 00Z ob printed
+`10211`=21.1°C=**69.98°F→CLI 70**. The 70-71 bucket paid. Three failure classes,
+each now machine-bound:
+
+1. **The seam was quoted but never applied.** The +1.27°F CLI−WU ledger sat in the
+   SETTLEMENT RECORD block all afternoon while bucket math ran obs-scale. Fix
+   (labeling-only, HARD RULE 2; commits 4a556a3 + distance-revision 56326d5, KATs
+   tests/test_sf_cli_seam_guard.py + test_verdict_stress.py): every SF ceiling
+   block carries `run._cli_seam_guard_lines` — the live seam figure, and an
+   UNRESOLVED warning naming both market buckets whenever the day's max anchor
+   (max of running max, modal) sits WITHIN THE MEASURED SEAM of its 2°F
+   market-bucket top boundary before the 18-00Z group (~17:00 local). The first
+   version's odd-modal parity test was a proxy — the stress suite caught that an
+   EVEN modal high in its bucket is equally exposed on +2°F catch days (07-12:
+   CLI 76 vs WU 74); the predicate is distance-based. Conviction never buys
+   silence: a 98% modal keeps its number, loses its single-bucket vocabulary.
+2. **The pattern layer mislabeled its own number.** `pattern_rate`'s archive is
+   hourly-obs rows; its "catch rate" was the OBS-CLIMB rate — a floor for the
+   paying CLI-catch rate — labeled "the CLI-catch path". It served 0% from 17:00
+   against the bucket that won. Relabeled honest (numbers untouched; pinned by
+   TestPatternLabeling); every pattern print now carries the seam caveat and the
+   07-27 specimen. The CLI-scale replacement series is a registered deliverable
+   of the probe below.
+3. **The parsed CLI has artifact days.** |catch|>5°F tail = station-mix/day-shift
+   rows (2018-07-06: obs 84/CLI 95, no 95 in any neighboring obs day), not
+   weather — 16/3613 days quarantined from every statistic. Cleaning shipped:
+   `_clean_divergences` (±8°F seam-ledger screen), `_screen_obs` (archive rows),
+   statistic-layer re-screen in the MC dataset. Resolution path for the
+   quarantined days: the direct-product check.
+
+**The verifier (S2 rule 2, kalshi_sf_seam.md).** tools/verify_cli_archive.py pairs
+the IEM parsed-CLI against first-party CLISFO product text (api.weather.gov
+products endpoint — inside the allowlist), M-sentinel honest, verdict
+ADOPT/REJECT/**INSUFFICIENT** with the ≥30-day bar NEVER relaxed; accrues
+ledger/ksfo_cli_direct.jsonl across runs (3 days, 3/3 exact at shipping).
+
+**The validation (tools/mc_verdict_sim.py — MC through the SHIPPED guard).**
+Driver, 10y, sign-stable everywhere: CLI−obs catch mean **+0.858°F**, median +1.0,
+p90 +2.0, positive 65% of days; halves 0.896/0.820; **by season (the regime the
+driver lives in): DJF +0.66 / MAM +0.86 / JJA +0.96 / SON +0.94 — alive in every
+regime, strongest in the marine-layer summer**. The CLI pays a HIGHER 2°F bucket
+than the obs max's bucket on **59.3%** of days. Guard in the decision window
+(h14-16): recall 68.5%, precision 74.0% vs 51.6% base, sign-stable both halves;
+20k-sim seeded MC through run._cli_seam_guard_lines corroborates (0.62). Log:
+ledger/mc_guard_validation.jsonl; report: reports/mc_verdict_sim_2026-07-27.json.
+
+**Standing additions to the 07-16 directive.** At every SF boundary read: the
+guard's warning OVERRIDES single-bucket conviction vocabulary; never aggregate
+single-°F pmf into 2°F Kalshi buckets without the seam; a whole-°C 5-min plateau
+at a boundary is UNRESOLVED (20.6 and 21.1 both print "21"), not evidence for the
+lower bucket; the pattern print is the obs-climb FLOOR, the paying rate is ≥ it.
+Gate-bound: the served seam-SHIFT of the intraday pmf lives under
+ledger/preregistered/sf_cli_scale_intraday_pmf.md (driver-first, kill on the
+driver, ONE probe — unscored at writing; the MC run validated the labeling only).
+
 # PART IV — tv_trading_agent (commits b14f423, da0cbbc)
 
 ## 15. Funding carry (grade A−)

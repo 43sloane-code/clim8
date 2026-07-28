@@ -24,6 +24,18 @@ are output.
 - Full-stack verdict:      python3 run.py "<City>" --lead N [--intraday] [--market]
   * Compute the CITY-LOCAL date first; --lead is relative to the city's today, not yours.
     (Recurring miss: London/Singapore tick over midnight and lead-1 targets the wrong day.)
+  * SF FULL-STACK RITUAL (2026-07-27, standing — every correction of the CLI-catch day
+    is part of the term "full stack verdict"; digest: docs/OPUS_ADAPTATION_MANUAL.md §14h):
+    1. run.py "San Francisco" --lead 0 --intraday — quote the BUCKET CALL block verbatim;
+       the CLI-SCALE GUARD under the ceiling block governs vocabulary (its ⚠ UNRESOLVED
+       overrides any HIGH-CONVICTION label at a market-bucket boundary pre-17:00).
+    2. tools/finegrain_read.py --station KSFO --date <sf-local> --tz America/Los_Angeles
+       --pattern-hour <H> — the T-group/6-hourly fine-grain read + the pattern FLOOR
+       (obs-climb rate, never the CLI rate; the paying rate is ≥ it).
+    3. NEVER aggregate single-°F pmf into 2°F Kalshi buckets without the seam; a whole-°C
+       5-min plateau at a boundary is UNRESOLVED (20.6 and 21.1 both print "21").
+    4. The 00Z ob (~16:56 PDT) 6-hourly group is the final pre-CLI instrument; the CLI
+       itself publishes ~1:42 AM PDT (IEM parsed-CLI usually has it within hours).
 - Daily automation runs ITSELF (launchd → tools/accumulate.py): snapshots for CITIES =
   Manila, Singapore, London; TWC/PoP/p2b/lock ledgers; watchdog chain (emit crossover →
   resolve truth config → compare, cities RPLL,WSSS,EGLC); settlement audit; db snapshot.
@@ -147,6 +159,12 @@ are output.
    work, not an accuracy lever.
 
 ## OPEN CLOCKS (waiting is the work; do not peek-and-claim)
+- SF CLI archive verification: tools/verify_cli_archive.py accrues
+  ledger/ksfo_cli_direct.jsonl (rerun daily); ADOPT bar at ≥30 comparable days.
+  The 16 quarantined truth-artifact days (|catch|>5°F, mc_verdict_sim) resolve here.
+- SF CLI-scale intraday pmf probe: FROZEN (ledger/preregistered/sf_cli_scale_intraday_pmf.md,
+  one attempt, driver-first; driver measured ALIVE 2026-07-27: +0.858°F mean, sign-stable
+  across halves and all four seasons). Score ONLY after the S2 archive verifies ADOPT.
 - p2b 12:00 forward ledger: gate at n≥60 settled non-fallback (ledger/p2b_1200.jsonl).
 - TWC 9th-member: gate at n≥40 settled pairs (never asserted into the blend before).
 - Lock certification bins: n≥20 per hour (Singapore); uninstrumented hours need the two
@@ -159,7 +177,8 @@ are output.
   (D19 — the °C pmf is the better °F answer at day-ahead σ; naive °F grain over-fits).
 
 ## FILE MAP (where each mechanism lives)
-- run.py — verdict render (SETTLEMENT_REFERENCE, holding-cap, banked/final lines)
+- run.py — verdict render (SETTLEMENT_REFERENCE, holding-cap, banked/final lines,
+  _cli_seam_guard_lines: SF CLI-scale guard + _load_cli_seam/_clean_divergences)
 - weather_council/intraday_ceiling.py — the lever: _day_state (2-consec), state_late_risk
   (state×season), remaining-rise pmf
 - weather_council/sources.py — feeds: WU oracle (WU_GEO/WU_LOCATION/_WU daily+v3),
@@ -169,6 +188,10 @@ are output.
 - weather_council/storage.py — _WU_SETTLE_TZ, settle_market_snapshots, scorecards
 - tools/accumulate.py — the daily spine; tools/watchdog_core.py — duties 1–3
 - tools/eval_harness.py — liveness + vocabulary + directives; tools/lock_logger.py — cert ledger
+- tools/finegrain_read.py — 00Z/T-group fine-grain read + obs-climb pattern floor (§14g/§14h)
+- tools/verify_cli_archive.py — S2 rule-2 CLI archive verifier (accrues ksfo_cli_direct.jsonl)
+- tools/mc_verdict_sim.py — guard validation: 10y driver (by season), leak-free backtest,
+  seeded MC through the shipped guard; logs ledger/mc_guard_validation.jsonl
 - tools/p2b_1200_logger.py / twc_forecast_logger.py / singapore_pop_logger.py — accrual clocks
 - tools/backfill_obs_history.py (--source wu|iem) / build_training_table.py — datasets
 - ledger/dead_candidates.jsonl (D01–D17) + ledger/preregistered/*.md — the memory that binds

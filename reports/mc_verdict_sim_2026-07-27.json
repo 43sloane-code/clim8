@@ -1,5 +1,5 @@
 {
-  "generated": "2026-07-28T02:17:26",
+  "generated": "2026-07-28T02:27:11",
   "station": "KSFO",
   "n_days": 3613,
   "n_quarantined_truth": 16,
@@ -137,7 +137,45 @@
       "max": 5.0
     },
     "bucket_cross_rate": 0.5929,
-    "note": "CLI \u2212 hourly-obs daily max (\u00b0F); >=0 by mechanism (6-hourly groups). Sign-stable positive across halves = driver alive."
+    "by_season": {
+      "DJF": {
+        "n": 896,
+        "mean": 0.66,
+        "p_catch_gt_0": 0.5301,
+        "p50": 0.99,
+        "p90": 1.01,
+        "max": 5.0,
+        "bucket_cross_rate": 0.5759
+      },
+      "MAM": {
+        "n": 914,
+        "mean": 0.864,
+        "p_catch_gt_0": 0.6849,
+        "p50": 1.0,
+        "p90": 2.0,
+        "max": 4.01,
+        "bucket_cross_rate": 0.5284
+      },
+      "JJA": {
+        "n": 901,
+        "mean": 0.963,
+        "p_catch_gt_0": 0.7048,
+        "p50": 1.0,
+        "p90": 2.0,
+        "max": 4.99,
+        "bucket_cross_rate": 0.6626
+      },
+      "SON": {
+        "n": 902,
+        "mean": 0.943,
+        "p_catch_gt_0": 0.6752,
+        "p50": 1.0,
+        "p90": 2.0,
+        "max": 5.0,
+        "bucket_cross_rate": 0.6053
+      }
+    },
+    "note": "CLI \u2212 hourly-obs daily max (\u00b0F); >=0 by mechanism (6-hourly groups). Sign-stable positive across halves AND seasons = driver alive in every regime."
   },
   "backtest": {
     "overall": {

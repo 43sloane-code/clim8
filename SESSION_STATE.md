@@ -1,9 +1,53 @@
 # Weather-Verdict — Accuracy Program State
 
-_Compacted session state. Last updated 2026-07-09. Standing mandate: constantly
+_Compacted session state. Last updated 2026-07-27. Standing mandate: constantly
 improve day-ahead → intraday bucket-prediction accuracy for the two tracked
 cities to match Polymarket settlement. Ship only gate-respecting changes;
 abstain/close when no robust edge._
+
+---
+
+## Session 2026-07-27 — the CLI-catch day: seam guard, pattern honesty, data cleaning, MC validation
+
+The specimen: KSFO obs-scale modal 69°F served at 78→98% all afternoon while the
+settling CLISFO printed **70** via the 18-00Z 6-hourly catch (`10211`=21.1°C=69.98°F;
+hourly T-groups topped at 69.1). Three failure classes, three fixes (all on
+`origin/main`, gate 796 green, every rule KAT-pinned):
+
+- **Seam quoted but never applied** → the CLI-scale guard (`4a556a3`, distance-revised `56326d5`):
+  every SF intraday-ceiling block now carries the measured CLI−WU seam (+1.27°F, live from
+  `ledger/ksfo_cli_wu.jsonl` via shared `_load_cli_seam`) and, when the day's max anchor
+  (max of running max, modal — NOT odd-modal parity: an even modal high in its bucket is
+  equally exposed on +2°F catch days) sits within the seam of its 2°F market-bucket top
+  boundary pre-17:00, an UNRESOLVED warning naming both buckets. Labeling-only (HARD RULE 2);
+  KATs `test_sf_cli_seam_guard.py` + day-type replays `test_verdict_stress.py`.
+- **Pattern tool mislabeled its own number** (`56326d5`): `pattern_rate`'s archive is
+  hourly-obs rows — it measures the OBS-CLIMB rate (a FLOOR for the paying CLI-catch rate)
+  but labeled itself "the CLI-catch path" and served 0% against the bucket that won. Relabeled
+  honest (numbers untouched), seam caveat line appended; pinned by `TestPatternLabeling`.
+- **Truth-source artifacts in the parsed CLI**: |catch|>5°F tail is station-mix/day-shift rows
+  (2018-07-06: obs 84/CLI 95, no 95 in any neighbor), not weather — 16 days quarantined.
+  Data cleaning shipped throughout: `_clean_divergences` (±8°F seam screen), `_screen_obs`
+  (archive rows), statistic-layer re-screen in the MC dataset.
+- **Model validation**: `tools/verify_cli_archive.py` — the S2 rule-2 verifier (IEM parsed-CLI
+  vs first-party CLISFO text, ADOPT/REJECT/INSUFFICIENT, ≥30-day bar never relaxed, accrues
+  `ledger/ksfo_cli_direct.jsonl`; 3 days, 3/3 exact so far). Gate-bound until the bar accrues.
+- **MC + 10y backtest validation** (`tools/mc_verdict_sim.py`, log `ledger/mc_guard_validation.jsonl`,
+  report `reports/mc_verdict_sim_2026-07-27.json`): driver ALIVE — 10y CLI−obs catch mean
+  +0.858°F, median +1.0, p90 +2.0, 65% of days, sign-stable halves (0.896/0.820); the CLI pays
+  a HIGHER 2°F bucket than the obs max's bucket on **59.3%** of days. Guard in the decision
+  window (h14-16): recall 68.5%, precision 74.0% vs 51.6% base, sign-stable both halves;
+  20k-sim MC through the shipped code path corroborates (0.62).
+- **Gate-bound**: the served seam-SHIFT of the intraday pmf is frozen under
+  `ledger/preregistered/sf_cli_scale_intraday_pmf.md` (ONE probe, driver-first, kill on the
+  driver; addendum: the probe must also emit the CLI-scale catch-rate series that replaces
+  pattern_rate's obs-scale truth). NOT scored yet — the MC run validated the labeling only.
+- **SF full-stack verdict ritual** (the remembered procedure): `run.py "San Francisco"
+  --lead 0 --intraday` → quote the BUCKET CALL block verbatim + the CLI-scale guard; at
+  bucket boundaries cross-check `tools/finegrain_read.py --pattern-hour H` (obs-climb floor,
+  never the CLI rate) and the 00Z 6-hourly group; NEVER aggregate single-°F pmf into 2°F
+  Kalshi buckets without the seam; a whole-°C 5-min plateau at a boundary is UNRESOLVED
+  (20.6 and 21.1 both print "21"), not evidence for the lower bucket.
 
 ---
 
