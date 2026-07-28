@@ -80,6 +80,17 @@ are output.
   the 6-hourly extreme groups (tools/finegrain_read.py) — the hourly floor is a floor, never
   the settle. The NWS CLI product (forecast.weather.gov/product.php?site=<WFO>&product=CLI)
   is the final authority; fetch it to confirm settlement.
+- CLI-SCALE GUARD (KSFO 07-27 specimen, machine-enforced): obs modal 69°F served at 78%
+  while the CLI printed 70 via the 18-00Z catch (10211=21.1°C=69.98; T-groups topped 69.1)
+  — the +1.27°F seam was quoted in the settlement block all afternoon but never applied at
+  the bucket-interpretation point. On CLI-primary stations the obs-scale pmf sits ~1.3°F
+  cold vs the settle; when the modal is the TOP of its 2°F market bucket (odd °F) before
+  the 18-00Z group prints (~17:00 local), the bucket ABOVE stays live — name both market
+  buckets, serve neither alone, and never aggregate single-°F pmf mass into 2°F Kalshi
+  buckets without the seam context. A whole-°C 5-min plateau at a boundary is UNRESOLVED
+  (20.6 and 21.1 both print "21"), not evidence for the lower bucket. Guard:
+  run.py _cli_seam_guard_lines (KAT test_sf_cli_seam_guard.py); the served seam-SHIFT of
+  the pmf is gate-bound under ledger/preregistered/sf_cli_scale_intraday_pmf.md (one probe).
 - While HOLDING: serve "INTRADAY FLOOR — PROVISIONAL (peak NOT formed)". NEVER headline a
   90%+ lock on a holding day (user caught this twice). Quote the STATE-conditional rate.
 - Served raise-risk is (state × meteorological season × hour), n≥30 cell, state-only fallback

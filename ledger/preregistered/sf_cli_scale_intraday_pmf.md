@@ -1,0 +1,67 @@
+# Pre-registration — SF CLI-scale shift of the intraday sharpened pmf (ONE probe)
+
+*2026-07-27, frozen BEFORE any scoring. Template: twc_member_gate.md (driver-first).
+Context: the 2026-07-27 KSFO miss — obs-scale modal 69°F served at 78% while the
+settling CLISFO printed 70 via the 18-00Z 6-hourly catch (`10211` = 21.1°C = 69.98°F;
+the hourly T-groups topped at 20.6°C = 69.1°F). The labeling half of the fix
+(seam context + top-of-bucket UNRESOLVED warning in the ceiling block, KAT
+tests/test_sf_cli_seam_guard.py) shipped gate-free. THIS file registers the only
+served-number candidate: shifting the SF intraday sharpened final-max pmf by the
+measured CLI−obs seam before bucketing. One attempt; fail → dead ledger.*
+
+## DRIVER (why an edge should exist at all)
+
+The Kalshi KXHIGHTSFO oracle is the NWS CLI daily maximum, computed from the
+sensor's CONTINUOUS record. The sharpened pmf is conditioned on the hourly-obs
+record (WU/IEM), which is blind to between-obs minutes. The 6-hourly METAR max
+groups (`1xxxx`) capture those minutes, so the CLI prints AT OR ABOVE the
+hourly-obs max — an asymmetric, mechanical, one-directional divergence.
+Specimens: 07-15 obs 73 → CLI 74; 07-23 obs 75 → 1-group 76 ("the bucket that
+pays"); 07-27 obs 69.1 → 6h-group 69.98 → CLI 70. Logged series:
+ledger/ksfo_cli_wu.jsonl (CLI − WU mean +1.27°F, n=15, growing daily via the
+kalshi_logger duty). Hierarchy check: identity (same station KSFO) > driver
+(6-hourly catch mechanism, NWS-documented) > pattern (the +1.27°F mean).
+
+## KILL CONDITION (on the driver itself, not on losses)
+
+The driver dies when the catch stops happening: kill if, on the forward
+ledger/ksfo_cli_wu.jsonl series, the CLI−WU mean divergence reaches ≤ 0 over
+any rolling 30-day window, OR the 10y IEM CLI-vs-obs archive probe shows the
+catch rate (CLI max > hourly-obs max) is not sign-stable across BOTH
+chronological halves. A dead driver kills the candidate regardless of score.
+
+## REGIME
+
+KSFO (CLI-primary, Kalshi-settled), INTRADAY lead-0 reads only, post-10:00-local
+states where the sharpened pmf is served. NOT day-ahead (D19: the °C headline
+stands at day-ahead σ — do not relitigate; this candidate is the intraday lever,
+which D19 explicitly does not touch).
+
+## PROBE (cheapest decisive test — historical, leak-free, no forward clock)
+
+Data: 10y IEM KSFO archive — hourly obs (data/ksfo_hourly_iem.jsonl, already
+local) for the obs-scale record; IEM parsed-CLI (sources.nws_cli_daily,
+allowlisted host, probe-verified per kalshi_sf_seam.md S2 rule ≥30 days before
+adoption) for the CLI-scale truth. Walk-forward strictly chronological: for each
+day D and each served hour H ∈ {10..16}, rebuild the remaining-rise sharpened pmf
+using ONLY days < D (the shipped intraday_ceiling machinery), then:
+
+- arm A (served): bucket the pmf at obs scale (status quo);
+- arm B (candidate): shift the running max / pmf by the seam estimator learned
+  ONLY from days < D (expanding-window mean CLI − obs-max divergence), then bucket.
+
+Score both arms against the ACTUAL CLI settle on the 2°F Kalshi market buckets
+(floor/cap inclusive, T-tails per kalshi_sf_seam.md).
+
+## GATE (all required; fail any → dead ledger, one attempt)
+
+- C1: market-bucket hit rate, sign-stable improvement on BOTH chronological halves;
+- C2: log score on the 2°F market-bucket distribution, BOTH halves;
+- C3: no degradation of the banked-floor semantics (the ratchet stays obs-grade;
+  the shift applies to the pmf, never to the floor);
+- C4: driver alive at probe time (kill condition above not triggered).
+
+Ship only with a KAT (shift applied at serve time, frozen artifact rules
+respected) and this file stamped CERTIFIED with the probe numbers. If the gate
+fails: dead-ledger entry citing this file, and the labeling guard shipped
+2026-07-27 remains the standing mitigation.
