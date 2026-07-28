@@ -125,22 +125,13 @@ def pattern_rate(station: str, hour: float, runmax_f: float,
 
 
 def _cli_seam_note(station: str) -> str:
-    """The measured CLI-vs-obs/WU seam for the station's ledger series, or an
-    honest 'not yet logged' (same ledger run._load_cli_seam reads — one source
-    of truth for the number, so the tool and the verdict cannot drift). Rows are
-    screened with the same ±8°F out-of-band rule as run._clean_divergences."""
-    path = ROOT / "ledger" / f"{station.lower()}_cli_wu.jsonl"
-    try:
-        divs = [json.loads(l)["divergence"] for l in
-                path.read_text().splitlines() if l.strip()]
-        divs = [x for x in divs if isinstance(x, (int, float))
-                and not isinstance(x, bool) and abs(x) <= 8.0][-30:]
-        if divs:
-            import statistics
-            return (f"seam CLI − obs/WU {statistics.mean(divs):+.2f}F mean "
-                    f"(n={len(divs)})")
-    except Exception:
-        pass
+    """The measured CLI-vs-obs/WU seam note for the station — reads the SHARED
+    loader (weather_council.cli_seam, the same loader the verdict uses, so the
+    tool and the verdict cannot drift)."""
+    from weather_council.cli_seam import load_cli_seam
+    seam = load_cli_seam(ROOT / "ledger", station)
+    if seam is not None:
+        return f"seam CLI − obs/WU {seam['mean']:+.2f}F mean (n={seam['n']})"
     return "seam not yet logged"
 
 
@@ -168,8 +159,10 @@ def _pattern_lines(station: str, hour: float, runmax_f: float,
         f"pattern-scale caveat: the CLI prints at/above the obs max via the "
         f"6-hourly groups ({_cli_seam_note(station)}), so the PAYING CLI-catch "
         f"rate is >= this — 07-27: obs-climb 0% from 17:00, CLI paid +1 bucket "
-        f"via 10211=21.1C=69.98F->70. CLI-scale series pending "
-        f"sf_cli_scale_intraday_pmf.md.",
+        f"via 10211=21.1C=69.98F->70. The 10y CLI-scale catch-rate series is "
+        f"MEASURED (tools/mc_verdict_sim.py driver stats: mean +0.86F, 59% of "
+        f"days cross a bucket); the seam-SHIFT probe is dead (D29) — this print "
+        f"stays the obs-climb FLOOR, quote it with the seam.",
     ]
 
 

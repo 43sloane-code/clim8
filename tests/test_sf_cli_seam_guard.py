@@ -18,8 +18,8 @@ These KATs pin the firing and non-firing cases so the guard cannot silently rot;
 import unittest
 
 from weather_council.intraday_ceiling import IntradayCeiling
-from run import _ceiling_lines, _cli_seam_guard_lines, _load_cli_seam, \
-    _clean_divergences
+from run import (_ceiling_lines, _cli_seam_guard_lines, _load_cli_seam,
+                 _clean_divergences, _book_lines, _live_book_lines)
 
 
 def _ceiling(modal=69, prob=0.78, hour=12, city="San Francisco, United States",
@@ -104,6 +104,55 @@ class TestSeamLoader(unittest.TestCase):
         kept, rejected = _clean_divergences([1.3, 22.0, True, "x", -9.0, 0.8, 8.0])
         self.assertEqual(kept, [1.3, 0.8, 8.0])   # 22/-9 out-of-band, bool/str dropped
         self.assertEqual(rejected, 4)
+
+
+class TestBookLines(unittest.TestCase):
+    """2026-07-28 revision: the guard reads the BOOK'S OWN strike lines (the T71
+    tail put the day's line at 70.5 — a line the static even-odd grid does not
+    contain; the static-grid guard stayed quiet while the banked 69.98 sat 0.52
+    inside the seam of that line)."""
+
+    def test_edge_math_tails_and_ranged(self):
+        buckets = [
+            {"floor": None, "cap": 71, "sub": "70° or below"},
+            {"floor": 71, "cap": 72, "sub": "71° to 72°"},
+            {"floor": 73, "cap": 74, "sub": "73° to 74°"},
+            {"floor": 78, "cap": None, "sub": "79° or above"},
+        ]
+        lines = _book_lines(buckets)
+        self.assertEqual(sorted(lines), [70.5, 72.5, 74.5, 78.5])
+        self.assertEqual(lines[70.5], ["70° or below", "71° to 72°"])
+
+    def test_0728_live_book_case_fires(self):
+        # THE gap: anchor 70.0 (banked 21.1°C=69.98) vs the book's 70.5 line —
+        # quiet on the static grid (next grid line 71.5), MUST fire on the book's.
+        c = _ceiling(modal=70, rm_c=21.1, hour=15)
+        c = IntradayCeiling(**{**c.__dict__, "target": "2026-07-28"})
+        txt = "\n".join(_cli_seam_guard_lines(c))
+        self.assertIn("⚠", txt)
+        self.assertIn("70.5", txt)
+        self.assertIn("70° or below", txt)
+        self.assertIn("71° to 72°", txt)
+
+    def test_anchor_above_all_book_lines_is_quiet(self):
+        # Anchor 79.0: above every strike in the book — nothing above to pay.
+        c = IntradayCeiling(**{**_ceiling(modal=79, rm_c=26.2).__dict__,
+                              "target": "2026-07-28"})
+        self.assertFalse(any("⚠" in l for l in _cli_seam_guard_lines(c)))
+
+    def test_no_book_falls_back_to_static_grid(self):
+        # No KXHIGHTSFO event for 2026-08-15: the static 2°F grid decides.
+        c = IntradayCeiling(**{**_ceiling(modal=69, rm_c=20.6).__dict__,
+                              "target": "2026-08-15"})
+        txt = "\n".join(_cli_seam_guard_lines(c))
+        self.assertIn("⚠", txt)
+        self.assertIn("69.5", txt)
+
+    def test_live_book_lines_reads_committed_ledger(self):
+        lines = _live_book_lines("KSFO", "2026-07-28")
+        self.assertIsNotNone(lines)
+        self.assertIn(70.5, lines)
+        self.assertIsNone(_live_book_lines("KSFO", "2026-08-15"))
 
 
 if __name__ == "__main__":

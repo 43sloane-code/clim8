@@ -86,6 +86,19 @@ class TestDayTypes(unittest.TestCase):
         # Modal 66 with max 65.5°F: 4°F to the boundary — a quiet day must stay
         # quiet (guard precision: no warning fatigue).
         self.assertFalse(_warned(_day(modal=66, rm_c=18.6, hour=11)))
+    def test_0728_live_book_line_day(self):
+        # 07-28 day-type: book line at 70.5 (T71 tail — NOT on the static 2°F
+        # grid), obs plateaus at 21.1°C=69.98 (banked 70). The static-grid guard
+        # was quiet all afternoon; the book-aware guard must fire and name the
+        # tail and the bucket by their contract titles.
+        c = IntradayCeiling(**{**_day(modal=70, rm_c=21.1, hour=15).__dict__,
+                               "target": "2026-07-28"})
+        lines = _cli_seam_guard_lines(c)
+        txt = "\n".join(lines)
+        self.assertTrue(any("⚠" in l for l in lines))
+        self.assertIn("70.5", txt)
+        self.assertIn("70° or below", txt)
+        self.assertIn("71° to 72°", txt)
 
 
 if __name__ == "__main__":

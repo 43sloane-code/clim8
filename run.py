@@ -101,44 +101,21 @@ SETTLEMENT_REFERENCE: dict[str, dict[str, str]] = {
     },
 }
 
+from weather_council.cli_seam import clean_divergences as _clean_divs_impl, \
+    load_cli_seam as _load_seam_impl
+
+
 def _clean_divergences(divs, bound_f: float = 8.0) -> tuple[list, int]:
-    """Screen raw CLI−WU divergences (°F): keep finite non-bool numbers inside
-    ±bound_f; reject the rest as parse/correction artifacts (a PRELIMINARY-vs-
-    FINAL CLI swap or a mangled row can sit many °F off — the logged seam lives
-    within a few °F; kalshi_sf_seam.md rule 1 anticipates correction rows).
-    Returns (kept, n_rejected) in original order."""
-    kept, rejected = [], 0
-    for x in divs:
-        if (isinstance(x, (int, float)) and not isinstance(x, bool)
-                and abs(x) <= bound_f):
-            kept.append(x)
-        else:
-            rejected += 1
-    return kept, rejected
+    """Alias for weather_council.cli_seam.clean_divergences (kept so existing
+    callers/KATs importing from run keep working; the implementation lives in
+    ONE place, shared by the verdict, the pattern tool, and the MC validator)."""
+    return _clean_divs_impl(divs, bound_f)
 
 
 def _load_cli_seam(icao: str) -> dict | None:
-    """The logged CLI-vs-WU seam series for a CLI-primary station (kalshi_logger
-    duty; ledger/<icao>_cli_wu.jsonl) — {"mean", "n"} over the last ≤30 CLEANED
-    divergences ("rejected" added when the screen dropped rows), or None when no
-    usable series exists. The measured, systematic divergence that an obs/WU-scale
-    read hides."""
-    seam_path = (Path(__file__).resolve().parent / "ledger"
-                 / f"{icao.lower()}_cli_wu.jsonl")
-    try:
-        raw = [json.loads(l).get("divergence") for l in
-               seam_path.read_text().splitlines() if l.strip()]
-        divs, rejected = _clean_divergences(raw)
-        divs = divs[-30:]
-        if divs:
-            import statistics as _st
-            out = {"mean": round(_st.mean(divs), 2), "n": len(divs)}
-            if rejected:
-                out["rejected"] = rejected
-            return out
-    except Exception:
-        pass
-    return None
+    """The logged CLI-vs-WU seam series for a CLI-primary station — alias for
+    weather_council.cli_seam.load_cli_seam on this repo's ledger dir."""
+    return _load_seam_impl(Path(__file__).resolve().parent / "ledger", icao)
 
 
 # Stations whose market settles on the NWS CLI product, not WU (operator
@@ -154,8 +131,70 @@ _CLI_PRIMARY_SETTLEMENT: dict[str, dict[str, str]] = {
         "wfo": "MTR",
         "url": ("https://forecast.weather.gov/product.php?site=MTR&product=CLI"
                 "&issuedby=SFO&format=txt"),
+        "series": "KXHIGHTSFO",   # Kalshi series for live-book strike lines
     },
 }
+
+_BOOK_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+                "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+
+
+def _book_lines(buckets: list[dict]) -> dict:
+    """The tradeable strike lines (°F) of a Kalshi ladder, {boundary: [below_sub,
+    above_sub]}. Contract edges: lower tail (floor None) -> cap−0.5; upper tail
+    (cap None) -> floor+0.5; ranged bucket -> floor−0.5 and cap+0.5. (2026-07-28
+    specimen: the T71 tail put the day's line at 70.5 — a line the static
+    even-odd 2°F grid does NOT contain; the guard must read the BOOK's lines.)
+    """
+    lines: dict[float, list] = {}
+    for b in buckets:
+        floor, cap = b.get("floor"), b.get("cap")
+        sub = b.get("sub") or "?"
+        if floor is None and cap is None:
+            continue
+        lo = None if floor is None else (floor + 0.5 if cap is None
+                                         else floor - 0.5)
+        hi = None if cap is None else (cap - 0.5 if floor is None
+                                       else cap + 0.5)
+        if lo is not None:
+            lines.setdefault(round(lo, 2), [None, None])[1] = sub
+        if hi is not None:
+            lines.setdefault(round(hi, 2), [None, None])[0] = sub
+    return lines
+
+
+def _live_book_lines(icao: str, target_iso: str) -> dict | None:
+    """The tradeable strike lines for the station's Kalshi event on the target
+    date, from the spine's ledger/kalshi_snapshots.jsonl (latest snapshot
+    containing the event), or None when no book is logged (guard falls back to
+    the static 2°F grid)."""
+    series = (_CLI_PRIMARY_SETTLEMENT.get(icao) or {}).get("series")
+    if not series:
+        return None
+    try:
+        d = dt.date.fromisoformat(target_iso)
+    except ValueError:
+        return None
+    event = f"{series}-{str(d.year)[2:]}{_BOOK_MONTHS[d.month - 1]}{d.day:02d}"
+    path = Path(__file__).resolve().parent / "ledger" / "kalshi_snapshots.jsonl"
+    try:
+        found = None
+        with open(path) as f:
+            for line in f:
+                if event not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                for ev in row.get("kalshi", []):
+                    if ev.get("event") == event:
+                        found = ev
+        if found is not None:
+            return _book_lines(found.get("buckets", []))
+    except Exception:
+        pass
+    return None
 
 # Cities anchored on a NON-airport settlement station, with a nearby airport shown
 # only as a cross-reference. User-supplied directive, same discipline as
@@ -2198,15 +2237,18 @@ def _cli_seam_guard_lines(c) -> list[str]:
     Two annotations for sharpened whole-°F reads on _CLI_PRIMARY_SETTLEMENT cities:
       1. seam context — the obs-scale pmf sits structurally cold vs the CLI settle,
          which prints AT OR ABOVE the hourly-obs max via the 6-hourly groups;
-      2. boundary guard — DISTANCE-BASED (2026-07-27 stress-test revision): anchor
-         = max(running max, modal) in °F; if the anchor sits within the measured
-         seam (fallback 2.0°F — the 07-12 CLI 76 vs WU 74 +2 catch) of the TOP
-         boundary of its 2°F market bucket and the 18-00Z group cannot have
-         printed yet (hour < 17 local), the CLI-catch can pay the market bucket
-         ABOVE: the read is UNRESOLVED at obs scale; name both market buckets,
-         serve neither alone. (The earlier odd-modal parity test was only a proxy
-         for this — an EVEN modal high in its bucket is equally exposed on +2
-         catch days.)
+      2. boundary guard — DISTANCE-BASED, on the BOOK'S OWN lines (2026-07-28
+         revision): anchor = max(running max, modal) in °F; the boundary is the
+         nearest strike line ABOVE the anchor from the live Kalshi ladder
+         (ledger/kalshi_snapshots.jsonl — tails included: a T71 tail puts the
+         line at 70.5, which the static grid does not contain; the 07-27
+         version stayed quiet while the banked 69.98 sat 0.52 inside the seam
+         of that line), falling back to the static 2°F grid when no book is
+         logged. If the anchor sits within the measured seam (fallback 2.0°F —
+         the 07-12 +2 catch) of that line and the 18-00Z group cannot have
+         printed yet (hour < 17 local), the CLI-catch can pay the contract
+         ABOVE: the read is UNRESOLVED at obs scale; name both sides, serve
+         neither alone.
     """
     if c.kind != "sharpened" or getattr(c, "grain", "C") != "F":
         return []
@@ -2233,18 +2275,34 @@ def _cli_seam_guard_lines(c) -> list[str]:
                    if c.running_max_c is not None else c.modal_bucket,
                    c.modal_bucket)
     catch_f = abs(seam["mean"]) if seam is not None else 2.0
-    boundary = _market_bucket_top_boundary(anchor_f)
+    # The BOOK's lines first (2026-07-28: T71 tail -> 70.5, a line the static
+    # even-odd grid does not contain — the guard stayed quiet while the banked
+    # 69.98 sat 0.52 inside the seam of that line); static grid as fallback.
+    book = _live_book_lines(icao, c.target)
+    subs = None
+    if book:
+        above_lines = sorted(b for b in book if b > anchor_f)
+        if not above_lines:
+            return L            # anchor already above every line in the book
+        boundary = above_lines[0]
+        subs = book.get(boundary)
+    else:
+        boundary = _market_bucket_top_boundary(anchor_f)
     dist = boundary - anchor_f
     if dist < catch_f:
         above = int(boundary + 0.5)
         own = int(boundary - 1.5)
         src = "measured seam" if seam is not None else "unmeasured catch bound"
+        book_note = ""
+        if subs and any(subs):
+            book_note = (f" — the book's own line: '{subs[1] or '?'}' over "
+                         f"'{subs[0] or '?'}'")
         L.append(f"      ⚠ the day's max anchor {anchor_f:.1f}°F sits {dist:.1f}°F below "
                  f"the {boundary:.1f}°F boundary — INSIDE the {src} ({catch_f:.2f}°F): "
                  f"the CLI-catch can pay the bucket ABOVE ({above}–{above + 1} vs "
-                 f"{own}–{own + 1}) and the 18-00Z 6-hourly group prints only ~17:00 "
-                 f"local. UNRESOLVED at obs scale until then: name both market "
-                 f"buckets, serve neither alone.")
+                 f"{own}–{own + 1}{book_note}) and the 18-00Z 6-hourly group prints "
+                 f"only ~17:00 local. UNRESOLVED at obs scale until then: name both "
+                 f"market buckets, serve neither alone.")
     return L
 
 
