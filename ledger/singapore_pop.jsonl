@@ -24,3 +24,5 @@
 {"target_date": "2026-07-27", "issued_ts": "2026-07-26T09:00:48+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 42.0, "qpf": 0.08, "regime": "convective"}
 {"target_date": "2026-07-28", "issued_ts": "2026-07-27T09:00:49+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 31.0, "qpf": 0.02, "regime": "dry"}
 {"target_date": "2026-07-29", "issued_ts": "2026-07-28T09:00:55+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 24.0, "qpf": 0.0, "regime": "dry"}
+{"target_date": "2026-07-30", "issued_ts": "2026-07-29T09:00:46+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 48.0, "qpf": 0.03, "regime": "convective"}
+{"target_date": "2026-07-31", "issued_ts": "2026-07-30T09:00:55+08:00", "source": "twc-v3-daypart-precipChance", "lead_days": 1, "pop": 19.0, "qpf": 0.0, "regime": "dry"}
