@@ -44,7 +44,7 @@ are output.
   vocabulary guard, ranked NECESSARY NEXT). Trust its ranking over your instincts.
 - Before ANY "improve/optimize/clean up" task:
     python3 tools/improvement_analyzer.py --propose "<the task>"
-    grep -il "<lever keywords>" ledger/dead_candidates.jsonl        # D01–D17
+    grep -il "<lever keywords>" ledger/dead_candidates.jsonl        # D01–D30
   If it matches a dead entry: cite the ID and STOP. Do not relitigate.
 
 ## CITY CONFIG (settlement is per-city; never assume)
@@ -172,7 +172,10 @@ are output.
   the labeling guard is the standing mitigation. A partial-shift/mixture variant
   would be a NEW candidate needing its own prereg — do not relitigate the full shift.
 - p2b 12:00 forward ledger: gate at n≥60 settled non-fallback (ledger/p2b_1200.jsonl).
-- TWC 9th-member: gate at n≥40 settled pairs (never asserted into the blend before).
+- TWC 9th-member: **SCORED 2026-07-29 — DEAD (D30)**: G1/G2/G3′/G4 all fail; the killer is G4
+  (r(TWC err, council err) = 0.9172 ≥ 0.9 — TWC is the council re-warmed, marginal info ~0).
+  One attempt spent; TWC stays a display-only cross-reference forever (tools/twc_gate_score.py,
+  reports/twc_gate_2026-07-29.txt). Do not relitigate.
 - Lock certification bins: n≥20 per hour (Singapore); uninstrumented hours need the two
   user-side plists (midday/evening) loaded.
 - PoP regime split: n≥15 dry days. D17 carve-out: Stage-B-only re-gate at n≥40 snapshots,
@@ -200,7 +203,7 @@ are output.
   seeded MC through the shipped guard; logs ledger/mc_guard_validation.jsonl
 - tools/p2b_1200_logger.py / twc_forecast_logger.py / singapore_pop_logger.py — accrual clocks
 - tools/backfill_obs_history.py (--source wu|iem) / build_training_table.py — datasets
-- ledger/dead_candidates.jsonl (D01–D17) + ledger/preregistered/*.md — the memory that binds
+- ledger/dead_candidates.jsonl (D01–D30) + ledger/preregistered/*.md — the memory that binds
 - data/{wsss,eglc,ksfo}_hourly_iem.jsonl (10y each) + wsss_hourly.jsonl (3y WU grain)
 
 ## COMMIT FLOW

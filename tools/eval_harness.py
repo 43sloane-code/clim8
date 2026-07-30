@@ -34,6 +34,9 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parent.parent
 SUNSET_SGT_H = 19.2          # ~19:10 SGT year-round (equatorial); the PHYSICAL finality clock
 TWC_GATE = 40                # settled pairs before the TWC member gate may run
+# TWC gate scored 2026-07-29 (tools/twc_gate_score.py, one attempt): FAILED all four gates
+# (G4 killer: r(TWC err, council err) = 0.9172 >= 0.9) -> dead ledger D30, display-only forever.
+TWC_GATE_SCORED = "FAILED 2026-07-29 (D30) — display-only cross-reference, one attempt spent"
 POP_GATE_DRY = 15            # dry-day rows before the pre-registered regime split may be tested
 
 try:
@@ -194,9 +197,11 @@ def brief(state: dict) -> list[str]:
                      f"({len(state['dead'])} levers dead).")
 
     twc = state["twc"]
+    twc_note = (f"gate {TWC_GATE_SCORED}." if TWC_GATE_SCORED else
+                "recommend-only; may be SHOWN in the cross-check, may NOT be blended or "
+                "cited as validated.")
     L.append(f"  TWC (candidate 9th member): {twc['n']}/{TWC_GATE} settled pairs "
-             f"({twc['hits']} bucket-hits) — recommend-only; may be SHOWN in the cross-check, "
-             f"may NOT be blended or cited as validated.")
+             f"({twc['hits']} bucket-hits) — {twc_note}")
     pop = state["pop"]
     L.append(f"  PoP REGIME CLOCK: {pop['dry']}/{POP_GATE_DRY} dry days (+{pop['convective']} "
              f"convective) — the pre-registered split is UNTESTED until the dry floor fills; "
@@ -248,13 +253,22 @@ def directives(state: dict) -> list[str]:
              "defect stays recorded in FINDINGS/HANDOFF, unworked.)")
     rank += 1
     twc = state["twc"]
-    twc_eta = ("READY for the gate" if twc["n"] >= TWC_GATE
-               else f"~{max(1, (TWC_GATE - twc['n'] + 1) // 2)}d at 2 pairs/day")
+    if TWC_GATE_SCORED:
+        twc_eta = f"gate {TWC_GATE_SCORED}"
+    else:
+        twc_eta = ("READY for the gate" if twc["n"] >= TWC_GATE
+                   else f"~{max(1, (TWC_GATE - twc['n'] + 1) // 2)}d at 2 pairs/day")
     lock15 = state["lock"]["cov"].get(15, {}).get("n", 0)
+    if TWC_GATE_SCORED:
+        clocks = (f"lock 15:00 bin {lock15}/{N_FLOOR}; PoP "
+                  f"{state['pop']['dry']}/{POP_GATE_DRY} dry days (rate-limited by the weather "
+                  f"itself); TWC {twc_eta} — no clock remains")
+    else:
+        clocks = (f"lock 15:00 bin {lock15}/{N_FLOOR}; TWC {twc['n']}/{TWC_GATE} "
+                  f"({twc_eta}); PoP {state['pop']['dry']}/{POP_GATE_DRY} dry days "
+                  f"(rate-limited by the weather itself)")
     L.append(f"  {rank}. CLOCKS (time-bound, no action accelerates them except not missing "
-             f"days): lock 15:00 bin {lock15}/{N_FLOOR}; TWC {twc['n']}/{TWC_GATE} "
-             f"({twc_eta}); PoP {state['pop']['dry']}/{POP_GATE_DRY} dry days "
-             f"(rate-limited by the weather itself). Redundant logging already guards them.")
+             f"days): {clocks}. Redundant logging already guards them.")
     n_dead = len(state.get("dead") or [])
     L.append(f"  X. Spend NOTHING on: day-ahead point/conditioning levers (all dead — the "
              f"ledger holds {n_dead} dead candidates incl. the 0/17 day-ahead class, D26, "

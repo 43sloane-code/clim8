@@ -1,5 +1,27 @@
 # Pre-registration — TWC 9th-member blend gate (DRIVER-FIRST; frozen before n=40 completes)
 
+## RESULT — FAILED THE GATE (2026-07-29, one attempt spent → dead ledger D30)
+
+Scored once by `tools/twc_gate_score.py` on 76 settled forward pairs (29 with a day-ahead
+council comparator; blend reconstruction validated at the 0.1 °C served grain; TWC member
+stats walk-forward and leak-free at t−2, 5-pair floor mirroring the blend's own):
+
+| Criterion | Result | Numbers |
+|---|---|---|
+| G1 bucket hit (beat BOTH folds) | **FAIL** | fold A 2/6 vs 1/6 (beats); fold B 11/23 vs 11/23 (tie ≠ beats) |
+| G2 log-loss AND CRPS improve, both folds | **FAIL** | fold A ll 1.8969 vs 1.8788, crps 0.7875 vs 0.7640 (both worse); fold B improves only marginally |
+| G3′ offset consistency per city | **FAIL** | London PASS, Singapore PASS, Manila FAIL (medians 0.0/0.0, err-sd wider than council) |
+| G4 independence (\|r\| < 0.9) | **FAIL** | r(TWC err, council err) = **0.9172** — TWC error is spanned by the council it would join |
+
+G4 is the driver-killer the corrected-driver section predicted to watch: the "shared
+verification target" mechanism shows no measurable strength — TWC's errors are the
+council's errors (per-member r up to 0.878 arpege / 0.847 gfs / 0.805 ecmwf), i.e. TWC
+re-bases public NWP with no station-level information of its own. One attempt spent.
+TWC remains a display-only cross-reference — never a truth source, never blended.
+Full report: `reports/twc_gate_2026-07-29.txt` (+ `.json`).
+
+---
+
 *2026-07-12, at n=25/40 settled pairs — registered BEFORE the accrual clock fills so the
 evaluation cannot be shaped by the data. Encodes the driver-first hypothesis law (operator
 directive, 2026-07-12): every candidate must name its DRIVER, the testable chain, the
