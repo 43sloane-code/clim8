@@ -1,0 +1,149 @@
+{
+ "n_pairs": 76,
+ "n_comparator": 29,
+ "n_no_comparator": 47,
+ "n_quarantined": 0,
+ "folds": {
+  "A": {
+   "n": 6,
+   "council_hits": 1,
+   "twc9_hits": 2,
+   "council_ll": 1.878818,
+   "twc9_ll": 1.896922,
+   "council_crps": 0.764032,
+   "twc9_crps": 0.787533,
+   "council_brier": 0.796235,
+   "twc9_brier": 0.801438,
+   "twc_ineligible": 0
+  },
+  "B": {
+   "n": 23,
+   "council_hits": 11,
+   "twc9_hits": 11,
+   "council_ll": 2.058781,
+   "twc9_ll": 2.054942,
+   "council_crps": 0.98009,
+   "twc9_crps": 0.977741,
+   "council_brier": 0.843041,
+   "twc9_brier": 0.842393,
+   "twc_ineligible": 0
+  }
+ },
+ "g1": {
+  "pass": false,
+  "beats": {
+   "A": true,
+   "B": false
+  }
+ },
+ "g2": {
+  "pass": false,
+  "ll_improves": {
+   "A": false,
+   "B": true
+  },
+  "crps_improves": {
+   "A": false,
+   "B": true
+  }
+ },
+ "g3": {
+  "pass": false,
+  "refuse": false,
+  "per_city": {
+   "London, United Kingdom": {
+    "offsets_A": 12,
+    "offsets_B": 12,
+    "median_A": 1.1111,
+    "median_B": 0.5556,
+    "ci_A": [
+     -0.2778,
+     1.1111
+    ],
+    "ci_B": [
+     -0.5556,
+     1.6667
+    ],
+    "err_sd": {
+     "A": {
+      "twc": 0.0,
+      "council": 0.642,
+      "twc_tighter": true
+     },
+     "B": {
+      "twc": 1.6058,
+      "council": 1.5266,
+      "twc_tighter": false
+     }
+    },
+    "verdict": "PASS",
+    "sign_stable": true,
+    "strong_form": false
+   },
+   "Manila, Philippines": {
+    "offsets_A": 13,
+    "offsets_B": 13,
+    "median_A": 0.0,
+    "median_B": 0.0,
+    "ci_A": [
+     -1.6667,
+     0.0
+    ],
+    "ci_B": [
+     0.0,
+     0.5556
+    ],
+    "err_sd": {
+     "B": {
+      "twc": 0.8299,
+      "council": 0.815,
+      "twc_tighter": false
+     }
+    },
+    "verdict": "FAIL",
+    "sign_stable": false,
+    "strong_form": false
+   },
+   "Singapore, Singapore": {
+    "offsets_A": 13,
+    "offsets_B": 13,
+    "median_A": -1.1111,
+    "median_B": -0.5556,
+    "ci_A": [
+     -1.6667,
+     -0.5556
+    ],
+    "ci_B": [
+     -0.5556,
+     0.0
+    ],
+    "err_sd": {
+     "A": {
+      "twc": 0.8333,
+      "council": 0.7111,
+      "twc_tighter": false
+     }
+    },
+    "verdict": "PASS",
+    "sign_stable": true,
+    "strong_form": false
+   }
+  }
+ },
+ "g4": {
+  "pass": false,
+  "n": 29,
+  "r_council": 0.9172,
+  "r_members": {
+   "ecmwf": 0.8052,
+   "ukmo": 0.663,
+   "gfs": 0.8473,
+   "icon": 0.7651,
+   "arpege": 0.8781,
+   "gem": 0.8062,
+   "jma": 0.7045,
+   "cma": 0.5266
+  }
+ },
+ "verdict": "FAIL"
+}
