@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Daily TREEVIEW.md regeneration LaunchAgent for weather-verdict.
+
+  Runs tools/update_treeview.py once a day (23:55 local, late enough that the
+  day's verdict/watchdog/accrual files have landed) to keep the repo's file
+  inventory current. Doc-only: rewrites TREEVIEW.md from the live working tree;
+  never touches code, ledgers, or served numbers.
+
+  INSTALL (runs on YOUR machine, where the repo lives):
+    cp "tools/com.weatherverdict.treeview.plist" ~/Library/LaunchAgents/
+    launchctl load  ~/Library/LaunchAgents/com.weatherverdict.treeview.plist
+
+  RUN NOW as a test:
+    launchctl start com.weatherverdict.treeview
+
+  STOP / REMOVE:
+    launchctl unload ~/Library/LaunchAgents/com.weatherverdict.treeview.plist
+    rm ~/Library/LaunchAgents/com.weatherverdict.treeview.plist
+
+  INSPECT:
+    head -11 TREEVIEW.md
+    cat reports/treeview.launchd.err.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.weatherverdict.treeview</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Frameworks/Python.framework/Versions/3.14/bin/python3</string>
+        <string>/Users/43slauson/Desktop/mock projects/weather-verdict/tools/update_treeview.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/43slauson/Desktop/mock projects/weather-verdict</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>23</integer>
+        <key>Minute</key>
+        <integer>55</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/43slauson/Desktop/mock projects/weather-verdict/reports/treeview.launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/43slauson/Desktop/mock projects/weather-verdict/reports/treeview.launchd.err.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

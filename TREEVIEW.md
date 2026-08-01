@@ -1,13 +1,13 @@
 # TREEVIEW — weather-verdict
 
 Complete directory tree of the live repo (`Desktop/mock projects/weather-verdict`),
-generated 2026-07-29. **Nothing is omitted** from the listing itself; the only
+generated 2026-07-31. **Nothing is omitted** from the listing itself; the only
 exclusions are non-content artifacts: `.git/`, `__pycache__/`, `.ruff_cache/`,
 `.cache/`, `.harness_opt/`, `.DS_Store`, and `*.pyc`.
 
-Size context: `verdicts.db` ≈ 14 MB · `data/` ≈ 22 MB · `reports/` ≈ 17 MB ·
-`ledger/` ≈ 760 KB · 99 test files (~420 tests) · 208 report entries ·
-552 entries listed below.
+Size context: `verdicts.db` ≈ 14 MB · `data/` ≈ 22 MB · `reports/` ≈ 19 MB ·
+`ledger/` ≈ 900 KB · 99 test files (~820 tests) · 227 report entries ·
+573 entries listed below.
 
 ```
 weather-verdict/
@@ -225,7 +225,11 @@ weather-verdict/
 │   ├── sf_verdict_2026-07-25_cli.txt
 │   ├── tape.launchd.err.log
 │   ├── tape.launchd.out.log
+│   ├── treeview.launchd.err.log
+│   ├── treeview.launchd.out.log
 │   ├── truth_config.json
+│   ├── twc_gate_2026-07-29.json
+│   ├── twc_gate_2026-07-29.txt
 │   ├── twc_probe.json
 │   ├── verdict-singapore-2026-06-28-0430sgt.txt
 │   ├── verdict-singapore-2026-06-28-1809sgt.txt
@@ -334,12 +338,22 @@ weather-verdict/
 │   ├── verdict-singapore-2026-07-29-0900sgt.txt
 │   ├── verdict-singapore-2026-07-29-1328sgt.txt
 │   ├── verdict-singapore-2026-07-29-1815sgt.txt
+│   ├── verdict-singapore-2026-07-30-0900sgt.txt
+│   ├── verdict-singapore-2026-07-30-1315sgt.txt
+│   ├── verdict-singapore-2026-07-30-1500sgt.txt
+│   ├── verdict-singapore-2026-07-30-1815sgt.txt
+│   ├── verdict-singapore-2026-07-31-0905sgt.txt
+│   ├── verdict-singapore-2026-07-31-1329sgt.txt
+│   ├── verdict-singapore-2026-07-31-1507sgt.txt
+│   ├── verdict-singapore-2026-07-31-1815sgt.txt
 │   ├── watchdog_2026-07-23.json
 │   ├── watchdog_2026-07-24.json
 │   ├── watchdog_2026-07-25.json
 │   ├── watchdog_2026-07-26.json
 │   ├── watchdog_2026-07-27.json
 │   ├── watchdog_2026-07-28.json
+│   ├── watchdog_2026-07-30.json
+│   ├── watchdog_2026-07-31.json
 │   └── weather_market_calibration.py
 ├── tests/
 │   ├── test_ab_fold_gate.py
@@ -424,6 +438,7 @@ weather-verdict/
 │   ├── test_tracked.py
 │   ├── test_twc_crossref.py
 │   ├── test_twc_forecast_logger.py
+│   ├── test_twc_gate_score.py
 │   ├── test_twc_independence.py
 │   ├── test_twc_offset.py
 │   ├── test_twc_tracking.py
@@ -454,6 +469,7 @@ weather-verdict/
 │   ├── com.weatherverdict.healthcheck.plist
 │   ├── com.weatherverdict.kalshi.plist
 │   ├── com.weatherverdict.tape.plist
+│   ├── com.weatherverdict.treeview.plist
 │   ├── conditional_bucket_backtest.py
 │   ├── daily-watchdog-cron.sh
 │   ├── daily_healthcheck.py
@@ -489,9 +505,11 @@ weather-verdict/
 │   ├── tape_logger.py
 │   ├── timescale_sweep.py
 │   ├── twc_forecast_logger.py
+│   ├── twc_gate_score.py
 │   ├── twc_independence.py
 │   ├── twc_offset_report.py
 │   ├── two_band_backfill.py
+│   ├── update_treeview.py
 │   ├── verify.py
 │   ├── verify_cli_archive.py
 │   ├── watchdog_core.py
@@ -539,6 +557,7 @@ weather-verdict/
 │   └── twc_offset.py
 ├── .gitignore
 ├── ALL_CODE.txt
+├── CHANGELOG.md
 ├── CLAUDE.md
 ├── CODE_AUDIT.md
 ├── FINDINGS.md
@@ -548,8 +567,10 @@ weather-verdict/
 ├── KIMI_MOBILE_CARRYOVER.md
 ├── Makefile
 ├── PLAN_OWN_FORECAST.md
+├── README.md
 ├── ROADMAP.md
 ├── SESSION_STATE.md
+├── TREEVIEW.md
 ├── Weather Council.command
 ├── _make_handoff_bundle.py
 ├── index.html
