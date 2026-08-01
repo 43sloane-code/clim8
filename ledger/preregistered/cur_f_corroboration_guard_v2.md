@@ -74,3 +74,15 @@ Phase 0 deliverables complete: repo reconciled, Q1/Q2/Q4 answered, K1/K2/K5 sett
 `config/guard_cities.json` written, disclosure recorded. **No serving-path code written.** Awaiting
 operator sign-off on (a) the reconstructed-fixture disclosure, (b) Q3 Jeddah roster, (c) the peak
 windows, before Phase 1 (ObsLog) begins.
+
+## EXECUTED INCIDENT — K6 San Francisco KSFO 2026-07-31 (appended 2026-07-31, PENDING-VERIFICATION)
+| Incident | Settles | Evidence | Guard expectation |
+|---|---|---|---|
+| **K6 SF KSFO 07-31** | **PENDING-VERIFICATION** (NWS CLISFO not yet published at append time) | WU record (hourly obs, METARs, daily-max endpoint) **never exceeded 72°F all day**. v3 `cur_f` printed **74°F ~12:00–14:00 PDT on a frozen `valid_local`**; session-captured run outputs 13:52 & 14:54 PDT show the 74 lead appear (pmf floored at 74, modal 74°F 32%) then vanish when cur_f refreshed down. Pre-guard the label said "UNCORROBORATED" but the served percentages moved — the guard-v2 crux harm. Same class as K2 London 07-11. | UNCORROBORATED: pre-peak and \|74−72\|=2°F meets the ≤2 converging bound BUT liveness fails (single stale read — identical payload re-served) and freshness fails (frozen stamp) → floor/pmf base **stay 72**; 74 = annotation, **no %** |
+
+Context (not a specimen — its read-sequence was not captured): 2026-07-30 had the same shape
+(cur_f 70 lead over banked 69). K6 is certified as KAT `test_k6_sanfrancisco_2026_07_31_...`
+in `tests/test_cur_f_guard.py`; its fixture read-sequence is RECONSTRUCTED per the MATERIAL
+DISCLOSURE above (the live reads were session-captured, not machine-persisted — ObsLog go-live
+is what makes the next K6 replayable). The CLI settlement will be marked verified/rejected here
+once the CLISFO prints.

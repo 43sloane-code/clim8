@@ -1125,9 +1125,11 @@ class Sources:
 
     def wunderground_current_v3(self, icao: str) -> dict | None:
         """Freshest read of the settlement station from the oracle's v3 current-conditions
-        feed: {'cur_f','max24_f','valid_local'}. ~10-min latency vs ~30-45min for the v1
-        history rows, and max24_f is the station's own running 24h register — it sees
-        BETWEEN-obs spikes the half-hourly listing misses (07-04: register 92°F, rows 91).
+        feed: {'cur_f','max24_f','valid_local','secondaries'}. ~10-min latency vs
+        ~30-45min for the v1 history rows, and max24_f is the station's own running
+        24h register — it sees BETWEEN-obs spikes the half-hourly listing misses
+        (07-04: register 92°F, rows 91). `secondaries` carries the 5 frozen liveness
+        fields for the cur_f corroboration guard (guard_v2 prereg, D2).
         Consumed ONLY through _fuse_live_floor (floor-raise-only). None on any failure."""
         geo = WU_GEO.get((icao or "").upper())
         if geo is None:
@@ -1143,8 +1145,15 @@ class Sources:
         m = _wu_temp_f(d.get("temperatureMax24Hour"))
         if t is None:
             return None
+        # The 5 usable secondaries (Phase 0 Q1: all 6 active cities expose all 5) —
+        # the corroboration guard's D2-liveness evidence. Additive; consumers that
+        # predate the guard read only cur_f/max24_f/valid_local.
+        sec = {k: d.get(k) for k in ("temperatureDewPoint", "windSpeed",
+                                     "pressureMeanSeaLevel", "relativeHumidity",
+                                     "windDirection")}
         return {"cur_f": t, "max24_f": m,
-                "valid_local": d.get("validTimeLocal")}
+                "valid_local": d.get("validTimeLocal"),
+                "secondaries": sec}
 
     def twc_forecast_daily(self, lat: float, lon: float, target: dt.date,
                            tz: str, grain: str) -> dict | None:

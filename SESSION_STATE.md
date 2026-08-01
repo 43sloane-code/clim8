@@ -1,12 +1,49 @@
 # Weather-Verdict — Accuracy Program State
 
-_Compacted session state. Last updated 2026-07-27. Standing mandate: constantly
+_Compacted session state. Last updated 2026-07-31. Standing mandate: constantly
 improve day-ahead → intraday bucket-prediction accuracy for the tracked cities to
 match KALSHI settlement (NWS CLI / city-native oracle — the primary contract);
 Polymarket's WU record is a SECONDARY cross-reference only (kalshi_sf_seam.md,
 operator directive 2026-07-25: "Kalshi truth = the FINAL NWS CLI, never WU" — the
 §1/§2 Polymarket-era directive below is preserved as history, superseded for SF).
 Ship only gate-respecting changes; abstain/close when no robust edge._
+
+---
+
+## Session 2026-07-31 — cur_f corroboration guard v2 SHIPPED (frozen prereg executed; K6 go-live)
+
+The incident (specimen **K6**, appended to the prereg PENDING-VERIFICATION): KSFO WU v3 `cur_f`
+printed **74°F ~12:00–14:00 PDT on a frozen valid_local** while the settlement record never
+exceeded **72°F**; the uncorroborated lead floored the monotone-safe pmf at 74 (modal 74°F 32%)
+for ~2h — the label said "UNCORROBORATED" but the served % moved. Same class as K2 London 07-11.
+(07-30 had the same shape, cur_f 70 over banked 69 — context, not a specimen.)
+
+Shipped per the frozen design (`ledger/preregistered/cur_f_corroboration_guard_v2.md`), nothing
+beyond it:
+
+- **`weather_council/guard/`** — `obslog` (Phase 1 ObsLog: v3 read-sequences append-only at
+  `ledger/cur_f_obslog.jsonl` + per-serve shadow decisions `ledger/cur_f_guard_shadow.jsonl`),
+  `corroboration` (Gate 1: CORROBORATED = fresh ∧ (sustained ∨ converging); D2 secondaries
+  liveness, D3 ±2°F pre-peak bound, D4 clamp(1.5×median inter-obs, 10, 45) with <12 → 45min
+  fallback), `banking` (corroborated cur_f banks; uncorroborated lead excluded from the served
+  pmf base), `provenance` (Gate 2 tiers; "banked"/observation-% reserved for RECORDED; D1 no
+  fabricated % — corroborated tier serves the RECORDED-bucket %), `serving`, `reconcile` (§5
+  promotion machinery, Jeffreys 95% lower bound, **MEASURED-PENDING** at go-live). Fail-closed
+  on any state fault.
+- **Wiring**: `intraday_ceiling()` runs the guard live-only around `_fuse_live_floor` (register
+  caps a42ffa2/6533fca untouched; replays byte-identical); `sources.wunderground_current_v3`
+  now also returns the 5 secondaries; `run.py` renders the excluded lead as annotation with
+  **no %** and certifies the guard block in `_ceiling_to_dict`. No `cur_f ≤ daily-max` clamp,
+  no CRPS gate, no new data sources, RECORDED-floor lock % unchanged (out-of-scope honored).
+- **KATs**: `tests/test_cur_f_guard.py` — **9/9 exact-match** (K1 banks 37, K2 27+%/28 annotation,
+  K5 register cap 38, K3/K4 register-lead carried, K6 74-over-72 stays 72, D2 stale-value spoof,
+  D3 2.0-vs-2.1 + post-peak refusal, D4 fallback, fail-closed). Fixture sequences RECONSTRUCTED
+  per the prereg MATERIAL DISCLOSURE; outcomes VERIFIED.
+- **Verification**: full gate 828 tests OK; live `run.py "San Francisco" --lead 0 --intraday`
+  (17:03 PDT) served 72°F pmf with the guard pass-through (cur_f had refreshed to 70 ≤ record
+  72 → RECORDED) and wrote its first ObsLog + shadow rows.
+- FINDINGS §15: corroborated-tier own-% logged MEASURED-PENDING (n=0 at go-live; §5 gate in full
+  before any own-% serves).
 
 ---
 

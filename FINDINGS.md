@@ -609,3 +609,25 @@ per city with a signed sign+magnitude and applied to its DISPLAYED reading only.
   KAT `test_twc_independence.py` (6).
 - **Status now:** every offset cell reads UNMEASURED (n=6–8); the uncertified early read has council
   MAE below TWC in every measurable cell. Correct accruing output. Full gate green.
+
+---
+
+## 15. cur_f corroboration guard v2 — corroborated-tier own-% (MEASURED-PENDING, frozen §5)
+The frozen prereg (`ledger/preregistered/cur_f_corroboration_guard_v2.md`) couples two gates:
+Gate 1 banks a cur_f lead above the recorded hourly only when CORROBORATED = fresh ∧
+(sustained ∨ converging); Gate 2 makes the served % a pure function of provenance
+(RECORDED / CORROBORATED_NOWCAST / UNCORROBORATED_NOWCAST). **The corroborated tier's OWN
+served-% is MEASURED-PENDING** (D1 — no fabricated % at any tier): until promotion it serves
+the RECORDED-bucket %. Promotion to SUPPORTED requires the frozen §5 gate, in full: a MEASURED
+confirmation rate (corroborated leads that the settlement record's final max reaches), n≥30
+reconciled per city, served as the **Jeffreys 95% lower bound**, disjoint fit/verify halves,
+a pooling compatibility test across cities, and a regression tripwire that reverts the tier
+automatically. Machinery: `weather_council/guard/reconcile.py`; reconciliation data accrues
+from ObsLog go-live 2026-07-31 (`ledger/cur_f_obslog.jsonl` + shadow decisions
+`ledger/cur_f_guard_shadow.jsonl`). KAT `test_cur_f_guard.py` (9, exact-match).
+
+**Challenge:** the confirmation rate is not yet measured — n=0 at go-live; any number quoted
+before n≥30/city is fabrication, which is exactly what D1 forbids. The incident KAT fixtures
+(K1/K2/K5, K6) are RECONSTRUCTED read-sequences with VERIFIED outcomes (prereg MATERIAL
+DISCLOSURE): they certify the LOGIC against verified settlements, not live corroboration
+skill. The 2026-07-31 KSFO K6 settlement is PENDING-VERIFICATION (CLI not yet printed).

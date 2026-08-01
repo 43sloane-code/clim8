@@ -2327,6 +2327,25 @@ def _ceiling_lines(c) -> list[str]:
         L.append(f"    ^ NOTE: the top of this running max is an UNCORROBORATED live cur_f lead "
                  f"({_split['led_bucket']}°{u}) — banked floor is {_split['banked_bucket']}°{u} "
                  f"(the record's own max); not observation-grade until an ob/the endpoint confirms it")
+    # cur_f corroboration guard v2 (frozen prereg; 2026-07-31 KSFO K6 go-live). When the guard
+    # EXCLUDED an uncorroborated lead, the pmf above is floored at the recorded base and the
+    # lead renders as ANNOTATION ONLY — no % is ever served on it (Gate 2 / D1). When the lead
+    # CORROBORATED it banks, but the served % stays the RECORDED-bucket % until §5 promotion.
+    _gp = getattr(c, "guard_provenance", None)
+    _gl = getattr(c, "guard_lead_c", None)
+    if _gp == "UNCORROBORATED_NOWCAST" and _gl is not None \
+            and c.banked_running_max_c is not None:
+        _lb = _native_reading_int(_gl, u, c.sub_degree)
+        _bb = _native_reading_int(c.banked_running_max_c, u, c.sub_degree)
+        L.append(f"    ^ GUARD (cur_f corroboration v2): the live cur_f lead {_lb}°{u} is "
+                 f"UNCORROBORATED ({c.guard_note}) — ANNOTATION ONLY, no % served on it; "
+                 f"the pmf above is floored at the recorded {_bb}°{u}, and 'banked'/"
+                 f"observation-grade vocabulary stays reserved for recorded obs")
+    elif _gp == "CORROBORATED_NOWCAST":
+        L.append("    ^ GUARD (cur_f corroboration v2): the live cur_f lead is CORROBORATED "
+                 "(fresh ∧ sustained/converging) and banks above the recorded hourly; the "
+                 "served % is the RECORDED-bucket % — the corroborated tier's own % is §5 "
+                 "MEASURED-PENDING (no fabricated %)")
     L.append(f"    remaining-rise learned from {c.n_rise} strictly-earlier days "
              f"(leak-free, resampled through the settlement quantizer)")
     top = "  ".join(f"{b}°{u} {p*100:.0f}%" for b, p in c.pmf[:4])
@@ -2361,6 +2380,21 @@ def _ceiling_to_dict(c, grade=None) -> dict:
         d["banked_bucket"] = split["banked_bucket"]
         d["led_bucket"] = split["led_bucket"]
         d["cur_f_uncorroborated_lead"] = split["uncorroborated_lead"]
+    # Certify the corroboration guard's decision + provenance (shadow mode, prereg Phase 5):
+    # every serve carries the tier the machine was ALLOWED to serve at.
+    gp = getattr(c, "guard_provenance", None)
+    if gp is not None:
+        d["guard"] = {
+            "provenance": gp, "lead_c": getattr(c, "guard_lead_c", None),
+            "corroborated": getattr(c, "guard_corroborated", None),
+            "fresh": getattr(c, "guard_fresh", None),
+            "sustained": getattr(c, "guard_sustained", None),
+            "converging": getattr(c, "guard_converging", None),
+            "freshness_window_min": getattr(c, "guard_freshness_window_min", None),
+            "freshness_basis": getattr(c, "guard_freshness_basis", None),
+            "promotion_state": "MEASURED-PENDING",
+            "note": getattr(c, "guard_note", None),
+        }
     # Certify the served vocabulary GRADE (2026-07-12): what the machine was ALLOWED to say
     # — auditable against what was said. may_say_locked False + a later "locked" claim in
     # any narration is a vocabulary breach by construction.

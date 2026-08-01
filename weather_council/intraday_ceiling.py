@@ -103,6 +103,22 @@ class IntradayCeiling:
     # NOT-FINAL risk is state-conditional. Risk-LABELING only; never moves modal/pmf.
     day_state: str | None = None
     state_late_risk: float | None = None
+    # cur_f corroboration guard v2 (frozen prereg cur_f_corroboration_guard_v2.md; go-live
+    # 2026-07-31 after the KSFO 74-over-72 incident, specimen K6). The guard wraps the live
+    # fusion: `running_max_c` is the guard's SERVED base (an UNCORROBORATED cur_f lead is
+    # excluded from it), `guard_provenance` is Gate 2's tier (RECORDED /
+    # CORROBORATED_NOWCAST / UNCORROBORATED_NOWCAST), `guard_lead_c` the excluded lead
+    # (annotation only, NO %). None on replays/backtests and non-live runs (the guard is
+    # live-only, like the register consult it wraps).
+    guard_provenance: str | None = None
+    guard_lead_c: float | None = None
+    guard_corroborated: bool | None = None
+    guard_fresh: bool | None = None
+    guard_sustained: bool | None = None
+    guard_converging: bool | None = None
+    guard_freshness_window_min: float | None = None
+    guard_freshness_basis: str | None = None
+    guard_note: str | None = None
 
     @property
     def is_sharpened(self) -> bool:
@@ -158,6 +174,13 @@ def _running_max(obs: list[tuple[int, float]], hour: int) -> float | None:
 def _final_max(obs: list[tuple[int, float]]) -> float | None:
     vals = [c for (_hh, c) in obs]
     return max(vals) if vals else None
+
+
+def _inter_obs_minutes(obs: list[tuple[float, float]]) -> list[float]:
+    """Consecutive inter-observation intervals (minutes) of today's recorded obs —
+    the cadence evidence behind the guard's D4 adaptive freshness window."""
+    hours = sorted({float(hh) for hh, _c in obs})
+    return [(b - a) * 60.0 for a, b in zip(hours, hours[1:]) if b > a]
 
 
 def _day_state(obs, hour, delta=0.3):
@@ -318,14 +341,17 @@ def intraday_ceiling(place: Place, target: dt.date, *,
                      sources: Sources | None = None,
                      today: dt.date | None = None,
                      now_hour: int | None = None,
-                     back_days: int = DEFAULT_BACK_DAYS) -> IntradayCeiling:
+                     back_days: int = DEFAULT_BACK_DAYS,
+                     obslog_path: str | None = None,
+                     guard_now: dt.datetime | None = None) -> IntradayCeiling:
     """Compute the read-only intraday-ceiling sharpening for one city/day.
 
     Only applies to the current city-local day (lead 0) and only to a city whose
     settlement instrument has an hourly archive (London EGLC). HK and any other
     city return kind="unavailable"/"not_basket". `now_hour` overrides the
     evaluation hour (defaults to the latest observed hour today); `today` overrides
-    the city-local date (tests/determinism).
+    the city-local date (tests/determinism). `obslog_path`/`guard_now` override the
+    guard's ObsLog ledger and clock (KATs; live runs take the frozen defaults).
     """
     city = getattr(place, "name", "") or "?"
     tgt_iso = target.isoformat()
@@ -407,6 +433,7 @@ def intraday_ceiling(place: Place, target: dt.date, *,
     feed = "v1"
     live_note = None
     wu_daily_max_n = live_valid = None
+    guard_result = None
     if key in _LIVE_REGISTER and now_hour is None:   # live runs only — replays/backtests stay v1
         try:
             live = sources.wunderground_current_v3(icao)
@@ -430,14 +457,65 @@ def intraday_ceiling(place: Place, target: dt.date, *,
                                                     yrow[0] if yrow else None,
                                                     wu_record_max_f=wu_daily_max_f,
                                                     cap_fallback_f=yday_cap_f)
-                if fused is not None and (running_max is None or fused > running_max):
-                    running_max = fused
                 # The daily-max endpoint IS a settlement ob (it aggregates real between-obs peaks),
                 # so it CORROBORATES the banked floor; a cur_f/register lead above it does not.
                 if wu_daily_max_f is not None:
                     endpoint_c = (wu_daily_max_f - 32.0) * 5.0 / 9.0
                     if banked_running_max is None or endpoint_c > banked_running_max:
                         banked_running_max = endpoint_c
+
+                # CUR_F CORROBORATION GUARD v2 (frozen prereg cur_f_corroboration_guard_v2.md —
+                # the 2026-07-31 KSFO 74-over-72 incident, specimen K6). The guard WRAPS the
+                # fusion above: the cur_f contribution enters the SERVED running-max base and
+                # the banked floor ONLY when CORROBORATED = fresh ∧ (sustained ∨ converging)
+                # over the persisted read-sequence. An uncorroborated lead is served as
+                # ANNOTATION ONLY (no %) — the pre-guard code let it floor the monotone-safe
+                # pmf at the lead for hours. The register path (phantom/attribution caps,
+                # a42ffa2/6533fca) is NOT the guard's object and fuses unchanged.
+                fused_no_cur, _ = _fuse_live_floor(running_max, None, live_max24,
+                                                   yrow[0] if yrow else None,
+                                                   wu_record_max_f=wu_daily_max_f,
+                                                   cap_fallback_f=yday_cap_f)
+                try:
+                    from .guard import evaluate_cur_f_lead
+                    from .guard import obslog as _obslog
+                    from zoneinfo import ZoneInfo as _ZoneInfo
+                    ts_now_utc = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+                    _obslog.append_read(key, tgt_iso, ts_now_utc, cur_f=live_cur,
+                                        max24_f=live_max24, valid_local=live_valid,
+                                        secondaries=live.get("secondaries"),
+                                        path=obslog_path or _obslog.OBSLOG_PATH)
+                    reads = _obslog.load_reads(key, tgt_iso,
+                                               path=obslog_path or _obslog.OBSLOG_PATH)
+                    now_local = guard_now or dt.datetime.now(_ZoneInfo(tz))
+                    guard_result = evaluate_cur_f_lead(
+                        icao=icao, cur_f=live_cur, valid_local=live_valid,
+                        reads=reads, now_local=now_local,
+                        inter_obs_min=_inter_obs_minutes(todays),
+                        recorded_max_c=banked_running_max,
+                        fused_with_cur_c=fused, fused_without_cur_c=fused_no_cur)
+                    fused = guard_result.served_running_max_c
+                    banked_running_max = guard_result.banked_running_max_c
+                    # Shadow mode (prereg Phase 5): the decision + provenance to the log
+                    # on every serve, banked or not. Best-effort — never breaks a serve.
+                    try:
+                        _obslog.append_decision(
+                            key, tgt_iso, ts_now_utc, guard_result.as_dict(),
+                            path=((obslog_path + ".shadow") if obslog_path
+                                  else _obslog.SHADOW_PATH))
+                    except Exception:
+                        pass
+                except Exception as exc:
+                    from .failures import record_soft_failure
+                    record_soft_failure("cur_f_guard", exc)
+                    # Fail-closed: an unassessed cur_f lead never banks nor floors the pmf.
+                    cur_c = (live_cur - 32.0) * 5.0 / 9.0 \
+                        if isinstance(live_cur, (int, float)) else None
+                    if (cur_c is not None and banked_running_max is not None
+                            and cur_c > banked_running_max + 1e-9):
+                        fused = fused_no_cur
+                if fused is not None and (running_max is None or fused > running_max):
+                    running_max = fused
                 feed = "wu+live"
         except Exception as exc:
             from .failures import record_soft_failure
@@ -467,6 +545,16 @@ def intraday_ceiling(place: Place, target: dt.date, *,
         banked_running_max_c=banked_running_max, wu_daily_max_f=wu_daily_max_f,
         wu_daily_max_n=wu_daily_max_n, live_valid_local=live_valid,
         peak_close_hour=peak_close_hour_from_history(history),
+        guard_provenance=(guard_result.provenance if guard_result else None),
+        guard_lead_c=(guard_result.lead_c if guard_result else None),
+        guard_corroborated=(guard_result.corroborated if guard_result else None),
+        guard_fresh=(guard_result.fresh if guard_result else None),
+        guard_sustained=(guard_result.sustained if guard_result else None),
+        guard_converging=(guard_result.converging if guard_result else None),
+        guard_freshness_window_min=(guard_result.freshness_window_min
+                                    if guard_result else None),
+        guard_freshness_basis=(guard_result.freshness_basis if guard_result else None),
+        guard_note=(guard_result.note if guard_result else None),
         source=(f"{station_name} {icao} "
                 + (f"(live Wunderground hourly, whole-°F → settlement °{grain})" if use_wu
                    else "(live IEM ASOS METAR, hourly)")
