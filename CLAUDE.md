@@ -36,6 +36,13 @@ are output.
        5-min plateau at a boundary is UNRESOLVED (20.6 and 21.1 both print "21").
     4. The 00Z ob (~16:56 PDT) 6-hourly group is the final pre-CLI instrument; the CLI
        itself publishes ~1:42 AM PDT (IEM parsed-CLI usually has it within hours).
+  * STANDING (operator directive 2026-08-05): "full stack verdict" is a FROZEN TERM — it
+    always means the complete current stack with EVERY shipped addition applied, no
+    reminder needed: city-local date first → run.py --lead N --intraday [--market] →
+    quote the machine blocks verbatim (BUCKET CALL, CLI-SCALE GUARD, cur_f guard state)
+    → SF adds the §14h ritual above → anything spoken as a trade must first clear THE
+    SEVEN TRADE GATES. Additions merged to main are permanent by construction: this file
+    auto-loads every session, so they are never optional context and never need re-stating.
 - Daily automation runs ITSELF (launchd → tools/accumulate.py): snapshots for CITIES =
   Manila, Singapore, London; TWC/PoP/p2b/lock ledgers; watchdog chain (emit crossover →
   resolve truth config → compare, cities RPLL,WSSS,EGLC); settlement audit; db snapshot.
