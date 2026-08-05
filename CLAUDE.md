@@ -160,6 +160,32 @@ are output.
 7. WU_API_KEY is the free site key — single point of failure; if it dies, that is continuity
    work, not an accuracy lever.
 
+## THE SEVEN TRADE GATES (operator checklist 2026-08-05 — fail ONE, do not run it or backtest it)
+Applied to every proposed trade/backtest before any compute is spent. Each gate names the
+existing mechanism that enforces it — the checklist is the mnemonic, the mechanisms are the law.
+1. COUNTERPARTY — explain why the mispricing exists and who is on the other side of the trade.
+   If you cannot, it is NOT a trade — it is a pattern that has not statistically broken yet.
+   (= HARD RULE 1 driver-first: no named driver, no probe.)
+2. NO LOOK-AHEAD — every input must exist at decision time: timestamps checked, feed revisions
+   handled, never a close before it printed. A look-ahead backtest is not optimistic, it is WRONG.
+   (= leak-free walk-forward, strictly-earlier-days estimation; the Meteostat 91-day-lag fix.)
+3. FROZEN WALK-FORWARD OOS — parameters frozen before scoring, out-of-sample, and it must beat
+   the naive baseline (climatology / market price / buy-and-hold). If it cannot outperform the
+   naive benchmark the model is doing nothing — no affirmation, no trade.
+   (= disjoint-fold sign-stability + baseline comparisons; day-ahead council 40% vs market 43%.)
+4. NET, NOT GROSS — fees, spread, slippage at realistic size. Many edges are real but smaller
+   than the cost of trading them. Gross returns do not matter; net return does.
+   (= executable paper P&L walking the archived CLOB book, never the mid.)
+5. REGIME — know in advance the conditions the edge depends on and what kills it; the kill
+   condition is written ON THE DRIVER before the probe runs. Discovering the regime live means
+   burning capital to learn it. (= the prereg's regime clause + kill-on-the-driver.)
+6. MULTIPLE TESTING — search 50 variants and the significance bar moves; the best result of a
+   big search is usually noise. (= ONE pre-registered attempt per candidate, then dead ledger
+   D01–D30; exhaust historical data before registering any forward clock.)
+7. DECAY — live metric tracking that the edge is still present and within its certified range;
+   retire the model on data, not over a drawdown. (= watchdog duties 1–3, member-bias break
+   watch, certification ledgers with frozen floors.)
+
 ## OPEN CLOCKS (waiting is the work; do not peek-and-claim)
 - SF CLI archive verification: tools/verify_cli_archive.py — **ADOPT 2026-07-28**
   (44/44 exact: 41 IEM AFOS raw-text parsing check + 3 independent api.weather.gov,
